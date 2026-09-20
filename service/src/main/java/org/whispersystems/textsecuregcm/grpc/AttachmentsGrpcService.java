@@ -75,9 +75,8 @@ public class AttachmentsGrpcService extends SimpleAttachmentsGrpc.AttachmentsImp
     this.maxUploadLength = maxUploadLength;
     this.clock = clock;
     this.secureRandom = new SecureRandom();
-    this.attachmentGenerators = Map.of(
-        2, gcsAttachmentGenerator,
-        3, tusAttachmentGenerator);
+    this.attachmentGenerators = tusAttachmentGenerator == null ? Map.of(2, gcsAttachmentGenerator)
+        : Map.of(2, gcsAttachmentGenerator, 3, tusAttachmentGenerator);
   }
 
   @Override
@@ -105,7 +104,7 @@ public class AttachmentsGrpcService extends SimpleAttachmentsGrpc.AttachmentsImp
         .record(request.getUploadLength());
 
     final String key = AttachmentUtil.generateAttachmentKey(secureRandom);
-    final boolean useCdn3 = this.experimentEnrollmentManager.isEnrolled(auth.accountIdentifier(),
+    final boolean useCdn3 = attachmentGenerators.containsKey(3) && this.experimentEnrollmentManager.isEnrolled(auth.accountIdentifier(),
         AttachmentUtil.CDN3_EXPERIMENT_NAME);
     final int cdn = useCdn3 ? 3 : 2;
     final AttachmentGenerator.Descriptor descriptor =
@@ -121,6 +120,10 @@ public class AttachmentsGrpcService extends SimpleAttachmentsGrpc.AttachmentsImp
   @Override
   public GetStickerUploadFormResponse getStickerUploadForm(final GetStickerUploadFormRequest request)
       throws RateLimitExceededException {
+
+    if (stickerPolicyGenerator == null) {
+      throw GrpcExceptions.unavailable("Sticker uploads are unavailable in this runtime");
+    }
 
     stickerPackLimiter.validate(AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier());
 

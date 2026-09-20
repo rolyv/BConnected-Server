@@ -447,9 +447,11 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
   @Override
   public void run(WhisperServerConfiguration config, Environment environment) throws Exception {
+    config.validateRuntimeConfiguration();
+    final boolean gcpPilot = config.isGcpPilot();
     final Clock clock = Clock.systemUTC();
 
-    final AwsCredentialsProvider awsCredentialsProvider = config.getAwsCredentialsConfiguration().build();
+    final AwsCredentialsProvider awsCredentialsProvider = gcpPilot ? null : config.getAwsCredentialsConfiguration().build();
 
     UncaughtExceptionHandler.register();
 
@@ -495,17 +497,17 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     PayPalDonationsTranslator payPalDonationsTranslator =
         new PayPalDonationsTranslator(headerControlledResourceBundleLookup);
 
-    environment.lifecycle().manage(new ManagedAwsCrt());
+    if (!gcpPilot) environment.lifecycle().manage(new ManagedAwsCrt());
 
-    final ExecutorService awsSdkMetricsExecutor = ManagedExecutors.newVirtualThreadPerTaskExecutor(
+    final ExecutorService awsSdkMetricsExecutor = gcpPilot ? null : ManagedExecutors.newVirtualThreadPerTaskExecutor(
         "awsSdkMetrics",
         config.getVirtualThreadConfiguration().maxConcurrentThreadsPerExecutor(),
         environment);
 
-    final DynamoDbAsyncClient dynamoDbAsyncClient = config.getDynamoDbClientConfiguration()
+    final DynamoDbAsyncClient dynamoDbAsyncClient = gcpPilot ? null : config.getDynamoDbClientConfiguration()
         .buildAsyncClient(awsCredentialsProvider, new MicrometerAwsSdkMetricPublisher(awsSdkMetricsExecutor, "dynamoDbAsync"));
 
-    final DynamoDbClient dynamoDbClient = config.getDynamoDbClientConfiguration()
+    final DynamoDbClient dynamoDbClient = gcpPilot ? null : config.getDynamoDbClientConfiguration()
         .buildSyncClient(awsCredentialsProvider, new MicrometerAwsSdkMetricPublisher(awsSdkMetricsExecutor, "dynamoDbSync"));
 
     final FDB fdb;
@@ -566,8 +568,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
       messageDatabasesByEpoch = Map.of();
     }
 
-    final AwsCredentialsProvider cdnCredentialsProvider = config.getCdnConfiguration().credentials().build();
-    final S3AsyncClient asyncCdnS3Client = S3AsyncClient.builder()
+    final AwsCredentialsProvider cdnCredentialsProvider = gcpPilot ? null : config.getCdnConfiguration().credentials().build();
+    final S3AsyncClient asyncCdnS3Client = gcpPilot ? null : S3AsyncClient.builder()
         .credentialsProvider(cdnCredentialsProvider)
         .region(Region.of(config.getCdnConfiguration().region()))
         .endpointOverride(config.getCdnConfiguration().endpointOverride())
@@ -584,8 +586,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     final PostgresPersistence postgres = config.getPostgresConfiguration() == null ? null
         : PostgresPersistence.build(environment, config.getPostgresConfiguration(),
-            config.getDynamoDbTables().getMessages().getExpiration(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, config.getDynamoDbTables().getRegistrationRecovery().getExpiration(), config.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionAsyncExecutor);
-    RedeemedReceiptsManager redeemedReceiptsManager = new RedeemedReceiptsManager(clock,
+            config.getMessageRetention(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, config.getRecoveryRetention(), config.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionAsyncExecutor);
+    RedeemedReceiptsManager redeemedReceiptsManager = gcpPilot ? null : new RedeemedReceiptsManager(clock,
         config.getDynamoDbTables().getRedeemedReceipts().getTableName(),
         dynamoDbClient);
 
@@ -630,7 +632,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         postgres != null ? postgres.signedKemKeys() : new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getKemLastResortKeys().getTableName()));
     PersistentMessageStore messagesDynamoDb = postgres != null ? postgres.messages() : new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         config.getDynamoDbTables().getMessages().getTableName(),
-        config.getDynamoDbTables().getMessages().getExpiration(),
+        config.getMessageRetention(),
         messageDeletionAsyncExecutor);
     RemoteConfigStore remoteConfigs = postgres != null ? postgres.remoteConfigs() : new RemoteConfigs(dynamoDbClient,
         config.getDynamoDbTables().getRemoteConfig().getTableName());
@@ -641,7 +643,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getReportMessageConfiguration().getReportTtl());
     PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres != null ? postgres.recoveryPasswords() : new PhoneNumberRecoveryPasswords(
         config.getDynamoDbTables().getRegistrationRecovery().getTableName(),
-        config.getDynamoDbTables().getRegistrationRecovery().getExpiration(),
+        config.getRecoveryRetention(),
         dynamoDbClient,
         clock);
 
@@ -762,12 +764,12 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getDirectoryV2Configuration().getDirectoryV2ClientConfiguration());
     ExternalServiceCredentialsGenerator storageCredentialsGenerator = SecureStorageController.credentialsGenerator(
         config.getSecureStorageServiceConfiguration());
-    ExternalServiceCredentialsGenerator paymentsCredentialsGenerator = PaymentsController.credentialsGenerator(
+    ExternalServiceCredentialsGenerator paymentsCredentialsGenerator = gcpPilot ? null : PaymentsController.credentialsGenerator(
         config.getPaymentsServiceConfiguration());
     ExternalServiceCredentialsGenerator svr2CredentialsGenerator = SecureValueRecovery2Controller.credentialsGenerator(
         config.getSvr2Configuration());
     ExternalServiceCredentialsGenerator svrbCredentialsGenerator =
-        SecureValueRecoveryBCredentialsGeneratorFactory.svrbCredentialsGenerator(config.getSvrbConfiguration());
+        gcpPilot ? null : SecureValueRecoveryBCredentialsGeneratorFactory.svrbCredentialsGenerator(config.getSvrbConfiguration());
 
     final S3MonitoringSupplier<AsnInfoProvider> asnInfoProviderSupplier = new S3MonitoringSupplier<>(
         recurringJobExecutor,
@@ -791,7 +793,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     RegistrationService registrationServiceClient = config.getRegistrationServiceConfiguration()
         .build(environment, registrationIdentityTokenRefreshExecutor, postgres == null ? null : postgres.dataSource(), clock);
-    KeyTransparencyServiceClient keyTransparencyServiceClient = new KeyTransparencyServiceClient(
+    KeyTransparencyServiceClient keyTransparencyServiceClient = gcpPilot ? null : new KeyTransparencyServiceClient(
         config.getKeyTransparencyServiceConfiguration().host(),
         config.getKeyTransparencyServiceConfiguration().port(),
         config.getKeyTransparencyServiceConfiguration().tlsCertificate(),
@@ -803,7 +805,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         retryExecutor,
         config.getSvr2Configuration(),
         () -> dynamicConfigurationManager.getConfiguration().getSvr2StatusCodesToIgnoreForAccountDeletion());
-    SecureValueRecoveryClient secureValueRecoveryBClient = new SecureValueRecoveryClient(
+    SecureValueRecoveryClient secureValueRecoveryBClient = gcpPilot ? null : new SecureValueRecoveryClient(
         svrbCredentialsGenerator,
         secureValueRecoveryServiceExecutor,
         retryExecutor,
@@ -813,8 +815,15 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         storageServiceExecutor, retryExecutor, config.getSecureStorageServiceConfiguration());
     DisconnectionRequestManager disconnectionRequestManager = new DisconnectionRequestManager(pubsubClient,
         disconnectionRequestListenerExecutor, retryExecutor);
-    ProfilesManager profilesManager = new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
-        config.getCdnConfiguration().bucket());
+    final org.whispersystems.textsecuregcm.avatars.GcsAvatarStorage gcsAvatars = gcpPilot
+        ? config.getGcpAvatars().build(messageDeletionAsyncExecutor, clock) : null;
+    if (gcsAvatars != null) environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
+      @Override public void stop() throws Exception { gcsAvatars.close(); }
+    });
+    ProfilesManager profilesManager = gcpPilot
+        ? new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, gcsAvatars)
+        : new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
+            config.getCdnConfiguration().bucket());
     MessagesCache messagesCache = new MessagesCache(messagesCluster, messageDeliveryScheduler,
         messageDeletionAsyncExecutor, retryExecutor, clock);
     final FoundationDbMessageStore foundationDbMessageStore = postgres != null ? null : new FoundationDbMessageStore(messageDatabasesByEpoch,
@@ -864,20 +873,20 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         new PushNotificationManager(accountsManager, apnSender, fcmSender, pushNotificationScheduler);
     RateLimiters rateLimiters = RateLimiters.create(dynamicConfigurationManager, rateLimitersCluster, retryExecutor);
     ProvisioningManager provisioningManager = new ProvisioningManager(pubsubClient);
-    IssuedReceiptsManager issuedReceiptsManager = new IssuedReceiptsManager(
+    IssuedReceiptsManager issuedReceiptsManager = gcpPilot ? null : new IssuedReceiptsManager(
         config.getDynamoDbTables().getIssuedReceipts().getTableName(),
         dynamoDbClient,
         config.getDynamoDbTables().getIssuedReceipts().getGenerator(),
         config.getDynamoDbTables().getIssuedReceipts().getMaxReceiptsPerSubscriptionPayment());
-    OneTimeDonationsManager oneTimeDonationsManager = new OneTimeDonationsManager(
+    OneTimeDonationsManager oneTimeDonationsManager = gcpPilot ? null : new OneTimeDonationsManager(
         config.getDynamoDbTables().getOnetimeDonations().getTableName(), config.getDynamoDbTables().getOnetimeDonations().getExpiration(), dynamoDbClient);
-    DonationPermits donationPermits = new DonationPermits(
+    DonationPermits donationPermits = gcpPilot ? null : new DonationPermits(
         config.getDynamoDbTables().getDonationPermits().getTableName(), config.getDynamoDbTables().getDonationPermits().getExpiration(), dynamoDbClient);
-    Subscriptions subscriptions = new Subscriptions(
+    Subscriptions subscriptions = gcpPilot ? null : new Subscriptions(
         config.getDynamoDbTables().getSubscriptions().getTableName(), dynamoDbClient);
     MessageDeliveryLoopMonitor messageDeliveryLoopMonitor =
         config.logMessageDeliveryLoops() ? new RedisMessageDeliveryLoopMonitor(rateLimitersCluster) : new NoopMessageDeliveryLoopMonitor();
-    CallQualitySurveyManager callQualitySurveyManager = new CallQualitySurveyManager(asnInfoProviderSupplier,
+    CallQualitySurveyManager callQualitySurveyManager = gcpPilot ? null : new CallQualitySurveyManager(asnInfoProviderSupplier,
         config.getCallQualitySurveyConfiguration().pubSubPublisher().build(),
         Clock.systemUTC(),
         callQualitySurveyPubSubExecutor);
@@ -894,7 +903,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     final MessageSender messageSender = new MessageSender(messagesManager, pushNotificationManager, dynamicConfigurationManager);
     final ReceiptSender receiptSender = new ReceiptSender(accountsManager, messageSender, receiptSenderExecutor);
-    final CloudflareTurnCredentialsManager cloudflareTurnCredentialsManager = new CloudflareTurnCredentialsManager(
+    final CloudflareTurnCredentialsManager cloudflareTurnCredentialsManager = gcpPilot ? null : new CloudflareTurnCredentialsManager(
         config.getTurnConfiguration().cloudflare().apiToken().value(),
         config.getTurnConfiguration().cloudflare().endpoint(),
         config.getTurnConfiguration().cloudflare().requestedCredentialTtl(),
@@ -919,31 +928,31 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     PushChallengeManager pushChallengeManager = new PushChallengeManager(pushNotificationManager,
         pushChallengeDynamoDb);
 
-    HttpClient currencyClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_2).connectTimeout(Duration.ofSeconds(10)).build();
-    FixerClient fixerClient = config.getPaymentsServiceConfiguration().externalClients()
+    HttpClient currencyClient = gcpPilot ? null : HttpClient.newBuilder().version(HttpClient.Version.HTTP_2).connectTimeout(Duration.ofSeconds(10)).build();
+    FixerClient fixerClient = gcpPilot ? null : config.getPaymentsServiceConfiguration().externalClients()
         .buildFixerClient(currencyClient);
-    CoinGeckoClient coinGeckoClient = config.getPaymentsServiceConfiguration().externalClients()
+    CoinGeckoClient coinGeckoClient = gcpPilot ? null : config.getPaymentsServiceConfiguration().externalClients()
         .buildCoinGeckoClient(currencyClient);
-    CurrencyConversionManager currencyManager = new CurrencyConversionManager(fixerClient, coinGeckoClient,
+    CurrencyConversionManager currencyManager = gcpPilot ? null : new CurrencyConversionManager(fixerClient, coinGeckoClient,
         cacheCluster, config.getPaymentsServiceConfiguration().paymentCurrencies(), recurringJobExecutor, Clock.systemUTC());
     VirtualThreadPinEventMonitor virtualThreadPinEventMonitor = new VirtualThreadPinEventMonitor(
         virtualThreadEventLoggerExecutor,
         config.getVirtualThreadConfiguration().pinEventThreshold());
 
-    StripeManager stripeManager = new StripeManager(config.getStripe().apiKey().value(), subscriptionProcessorExecutor,
+    StripeManager stripeManager = gcpPilot ? null : new StripeManager(config.getStripe().apiKey().value(), subscriptionProcessorExecutor,
         config.getStripe().idempotencyKeyGenerator().value(), config.getStripe().boostDescription(), config.getStripe().supportedCurrenciesByPaymentMethod());
-    BraintreeManager braintreeManager = new BraintreeManager(config.getBraintree().merchantId(),
+    BraintreeManager braintreeManager = gcpPilot ? null : new BraintreeManager(config.getBraintree().merchantId(),
         config.getBraintree().publicKey().value(), config.getBraintree().privateKey().value(),
         config.getBraintree().environment(),
         config.getBraintree().supportedCurrenciesByPaymentMethod(), config.getBraintree().merchantAccounts(),
         config.getBraintree().graphqlUrl(), currencyManager, config.getBraintree().pubSubPublisher().build(),
         config.getBraintree().circuitBreakerConfigurationName(), subscriptionProcessorExecutor);
-    GooglePlayBillingManager googlePlayBillingManager = new GooglePlayBillingManager(
+    GooglePlayBillingManager googlePlayBillingManager = gcpPilot ? null : new GooglePlayBillingManager(
         new ByteArrayInputStream(config.getGooglePlayBilling().credentialsJson().getBytes(StandardCharsets.UTF_8)),
         config.getGooglePlayBilling().packageName(),
         config.getGooglePlayBilling().applicationName(),
         config.getGooglePlayBilling().productIdToLevel());
-    AppleAppStoreManager appleAppStoreManager = new AppleAppStoreManager(
+    AppleAppStoreManager appleAppStoreManager = gcpPilot ? null : new AppleAppStoreManager(
         new AppleAppStoreClient(
             config.getAppleAppStore().env(),
             config.getAppleAppStore().bundleId(),
@@ -964,51 +973,54 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     environment.lifecycle().manage(provisioningManager);
     environment.lifecycle().manage(disconnectionRequestManager);
     environment.lifecycle().manage(redisMessageAvailabilityManager);
-    environment.lifecycle().manage(currencyManager);
+    if (!gcpPilot) environment.lifecycle().manage(currencyManager);
     environment.lifecycle().manage(registrationServiceClient);
-    environment.lifecycle().manage(keyTransparencyServiceClient);
+    if (!gcpPilot) environment.lifecycle().manage(keyTransparencyServiceClient);
     environment.lifecycle().manage(clientReleaseManager);
     environment.lifecycle().manage(virtualThreadPinEventMonitor);
     environment.lifecycle().manage(accountsManager);
 
-    final GcsAttachmentGenerator gcsAttachmentGenerator = new GcsAttachmentGenerator(
-        config.getGcpAttachmentsConfiguration().domain(),
-        config.getGcpAttachmentsConfiguration().email(),
-        config.getGcpAttachmentsConfiguration().pathPrefix(),
-        config.getGcpAttachmentsConfiguration().rsaSigningKey().value());
+    final GcsAttachmentGenerator gcsAttachmentGenerator = config.getGcpAttachmentsConfiguration().useIamSigning()
+        ? new GcsAttachmentGenerator(config.getGcpAttachmentsConfiguration().domain(),
+            config.getGcpAttachmentsConfiguration().pathPrefix(),
+            org.whispersystems.textsecuregcm.gcp.IamBlobSigner.create(config.getGcpAttachmentsConfiguration().email()))
+        : new GcsAttachmentGenerator(config.getGcpAttachmentsConfiguration().domain(),
+            config.getGcpAttachmentsConfiguration().email(), config.getGcpAttachmentsConfiguration().pathPrefix(),
+            config.getGcpAttachmentsConfiguration().rsaSigningKey().value());
 
-    final PostPolicyGenerator profileCdnPolicyGenerator = new PostPolicyGenerator(config.getCdnConfiguration().region(),
-        config.getCdnConfiguration().bucket(),
-        config.getCdnConfiguration().credentials().accessKeyId().value(),
-        config.getCdnConfiguration().credentials().secretAccessKey().value());
+    final org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator profileCdnPolicyGenerator = gcpPilot
+        ? gcsAvatars : new org.whispersystems.textsecuregcm.avatars.S3AvatarUploadPolicyGenerator(
+            new PostPolicyGenerator(config.getCdnConfiguration().region(), config.getCdnConfiguration().bucket(),
+                config.getCdnConfiguration().credentials().accessKeyId().value(),
+                config.getCdnConfiguration().credentials().secretAccessKey().value()));
 
-    final PostPolicyGenerator stickerPolicyGenerator = new PostPolicyGenerator(config.getCdnConfiguration().region(),
+    final PostPolicyGenerator stickerPolicyGenerator = gcpPilot ? null : new PostPolicyGenerator(config.getCdnConfiguration().region(),
         config.getCdnConfiguration().bucket(),
         config.getCdnConfiguration().credentials().accessKeyId().value(),
         config.getCdnConfiguration().credentials().secretAccessKey().value());
 
     ServerSecretParams groupZkSecretParams = new ServerSecretParams(config.getGroupsZkConfig().serverSecret().value());
-    GenericServerSecretParams callingPreV101GenericZkSecretParams = new GenericServerSecretParams(config.getCallingZkConfigPreV101().serverSecret().value());
-    GenericServerSecretParams callingGenericZkSecretParams = new GenericServerSecretParams(config.getCallingZkConfig().serverSecret().value());
+    GenericServerSecretParams callingPreV101GenericZkSecretParams = gcpPilot ? null : new GenericServerSecretParams(config.getCallingZkConfigPreV101().serverSecret().value());
+    GenericServerSecretParams callingGenericZkSecretParams = gcpPilot ? null : new GenericServerSecretParams(config.getCallingZkConfig().serverSecret().value());
     GenericServerSecretParams chatGenericZkSecretParams = new GenericServerSecretParams(config.getChatZkConfig().serverSecret().value());
     ServerZkProfileOperations zkProfileOperations = new ServerZkProfileOperations(groupZkSecretParams);
     ServerZkAuthOperations zkAuthOperations = new ServerZkAuthOperations(groupZkSecretParams);
     // ZK receipts are not actually shared with ZK groups, but use the same extensible parameters object for legacy reasons
     ServerZkReceiptOperations zkReceiptOperations = new ServerZkReceiptOperations(groupZkSecretParams);
 
-    TusAttachmentGenerator tusAttachmentGenerator = new TusAttachmentGenerator(config.getTus());
-    Cdn3BackupCredentialGenerator cdn3BackupCredentialGenerator = new Cdn3BackupCredentialGenerator(config.getTus());
-    BackupAuthManager backupAuthManager = new BackupAuthManager(experimentEnrollmentManager, rateLimiters,
+    TusAttachmentGenerator tusAttachmentGenerator = gcpPilot ? null : new TusAttachmentGenerator(config.getTus());
+    Cdn3BackupCredentialGenerator cdn3BackupCredentialGenerator = gcpPilot ? null : new Cdn3BackupCredentialGenerator(config.getTus());
+    BackupAuthManager backupAuthManager = gcpPilot ? null : new BackupAuthManager(experimentEnrollmentManager, rateLimiters,
         accountsManager, zkReceiptOperations, redeemedReceiptsManager, chatGenericZkSecretParams, clock);
-    BackupsDb backupsDb = new BackupsDb(
+    BackupsDb backupsDb = gcpPilot ? null : new BackupsDb(
         dynamoDbAsyncClient,
         config.getDynamoDbTables().getBackups().getTableName(),
         clock);
-    final Cdn3RemoteStorageManager cdn3RemoteStorageManager = new Cdn3RemoteStorageManager(
+    final Cdn3RemoteStorageManager cdn3RemoteStorageManager = gcpPilot ? null : new Cdn3RemoteStorageManager(
         remoteStorageHttpExecutor,
         retryExecutor,
         config.getCdn3StorageManagerConfiguration());
-    BackupManager backupManager = new BackupManager(
+    BackupManager backupManager = gcpPilot ? null : new BackupManager(
         backupsDb,
         chatGenericZkSecretParams,
         rateLimiters,
@@ -1019,30 +1031,30 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         secureValueRecoveryBClient,
         clock,
         config.getBackupConfiguration());
-    final BackupMetrics backupMetrics = new BackupMetrics();
+    final BackupMetrics backupMetrics = gcpPilot ? null : new BackupMetrics();
 
-    final AppleDeviceCheckStore appleDeviceChecks = postgres != null ? postgres.appleDeviceChecks() : new AppleDeviceChecks(
+    final AppleDeviceCheckStore appleDeviceChecks = gcpPilot ? null : postgres != null ? postgres.appleDeviceChecks() : new AppleDeviceChecks(
         dynamoDbClient,
         DeviceCheckManager.createObjectConverter(),
         config.getDynamoDbTables().getAppleDeviceChecks().getTableName(),
         config.getDynamoDbTables().getAppleDeviceCheckPublicKeys().getTableName());
-    final DeviceCheckManager deviceCheckManager = new DeviceCheckManager(new AppleDeviceCheckTrustAnchor());
-    deviceCheckManager.getAttestationDataValidator().setProduction(config.getAppleDeviceCheck().production());
-    final AppleDeviceCheckManager appleDeviceCheckManager = new AppleDeviceCheckManager(
+    final DeviceCheckManager deviceCheckManager = gcpPilot ? null : new DeviceCheckManager(new AppleDeviceCheckTrustAnchor());
+    if (!gcpPilot) deviceCheckManager.getAttestationDataValidator().setProduction(config.getAppleDeviceCheck().production());
+    final AppleDeviceCheckManager appleDeviceCheckManager = gcpPilot ? null : new AppleDeviceCheckManager(
         appleDeviceChecks,
         cacheCluster,
         deviceCheckManager,
         config.getAppleDeviceCheck().teamId(),
         config.getAppleDeviceCheck().bundleId());
 
-    final DonationPermitsManager donationPermitsManager = new DonationPermitsManager(donationPermits, groupZkSecretParams,
+    final DonationPermitsManager donationPermitsManager = gcpPilot ? null : new DonationPermitsManager(donationPermits, groupZkSecretParams,
         clock);
 
-    final SubscriptionManager subscriptionManager = new SubscriptionManager(subscriptions,
+    final SubscriptionManager subscriptionManager = gcpPilot ? null : new SubscriptionManager(subscriptions,
         List.of(stripeManager, braintreeManager, googlePlayBillingManager, appleAppStoreManager),
         zkReceiptOperations, issuedReceiptsManager);
 
-    final LoginPurchaseManager loginPurchaseManager = new LoginPurchaseManager(
+    final LoginPurchaseManager loginPurchaseManager = gcpPilot ? null : new LoginPurchaseManager(
         Map.of(
             PaymentProvider.APPLE_APP_STORE, appleAppStoreManager,
             PaymentProvider.GOOGLE_PLAY_BILLING, googlePlayBillingManager),
@@ -1096,6 +1108,10 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     final Function<String, CaptchaClient> captchaClientSupplier = spamFilter
         .map(SpamFilter::getCaptchaClientSupplier)
         .orElseGet(() -> {
+          if (gcpPilot) {
+            log.warn("No CAPTCHA provider installed; CAPTCHA challenges are unavailable in GCP_PILOT");
+            return ignored -> CaptchaClient.unavailable();
+          }
           log.warn("No captcha clients found; using default (no-op) client as default");
           return ignored -> CaptchaClient.noop();
         });
@@ -1157,26 +1173,27 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     final List<ServerServiceDefinition> authenticatedServices = Stream.of(
             new AccountsGrpcService(accountsManager, rateLimiters, usernameHashZkProofVerifier,
                 phoneNumberRecoveryPasswordsManager, Clock.systemUTC(), changeNumberManager),
-            new CallingGrpcService(cloudflareTurnCredentialsManager, rateLimiters),
-            new CredentialsGrpcService(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, rateLimiters, Clock.systemUTC(), ExternalServiceDefinitions.createExternalServiceList(config, Clock.systemUTC())),
+            gcpPilot ? null : new CallingGrpcService(cloudflareTurnCredentialsManager, rateLimiters),
+            new CredentialsGrpcService(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, rateLimiters, Clock.systemUTC(), ExternalServiceDefinitions.createExternalServiceList(config, Clock.systemUTC()), !gcpPilot),
             new KeysGrpcService(accountsManager, keysManager, rateLimiters),
             new ProfileGrpcService(clock, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager, config.getBadges(), profileCdnPolicyGenerator, chatGenericZkSecretParams, profileBadgeConverter, rateLimiters),
             new MessagesGrpcService(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender, messageByteLimitCardinalityEstimator, spamChecker, messageDispatcher, Clock.systemUTC()),
-            new BackupsGrpcService(accountsManager, backupAuthManager, backupMetrics),
+            gcpPilot ? null : new BackupsGrpcService(accountsManager, backupAuthManager, backupMetrics),
             new DevicesGrpcService(accountsManager),
             new AttachmentsGrpcService(experimentEnrollmentManager, rateLimiters, gcsAttachmentGenerator,
                 tusAttachmentGenerator, stickerPolicyGenerator,
                 config.getAttachments().maxAttachmentUploadSizeInBytes(), Clock.systemUTC()),
-            new PaymentsGrpcService(currencyManager),
+            gcpPilot ? null : new PaymentsGrpcService(currencyManager),
             new ChallengeGrpcService(accountsManager, rateLimitChallengeManager, challengeConstraintChecker),
-            new DonationsGrpcService(clock, zkReceiptOperations, redeemedReceiptsManager, accountsManager, config.getBadges(), ReceiptCredentialPresentation::new, donationPermitsManager, rateLimiters),
-            new ProductConfigurationGrpcService(config.getSubscription(), config.getOneTimeDonations(),
+            gcpPilot ? null : new DonationsGrpcService(clock, zkReceiptOperations, redeemedReceiptsManager, accountsManager, config.getBadges(), ReceiptCredentialPresentation::new, donationPermitsManager, rateLimiters),
+            gcpPilot ? null : new ProductConfigurationGrpcService(config.getSubscription(), config.getOneTimeDonations(),
                 config.getLoginPurchase(), List.of(stripeManager, braintreeManager),
                 config.getBackupConfiguration().maxTotalMediaSize()),
             new RemoteConfigurationGrpcService(remoteConfigsManager, profileBadgeConverter,
                 config.getBadges().getBadges().stream()
                     .map(BadgeConfiguration::getId)
                     .toList()))
+        .filter(java.util.Objects::nonNull)
         .map(bindableService -> ServerInterceptors.intercept(bindableService,
             // Note: interceptors run in the reverse order they are added; the remote deprecation filter
             // depends on the user-agent context so it has to come first here!
@@ -1191,19 +1208,20 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         .toList();
     final List<ServerServiceDefinition> unauthenticatedServices = Stream.of(
             new AccountsAnonymousGrpcService(accountsManager, rateLimiters, groupSendTokenUtil),
-            new CallQualitySurveyGrpcService(callQualitySurveyManager, rateLimiters),
+            gcpPilot ? null : new CallQualitySurveyGrpcService(callQualitySurveyManager, rateLimiters),
             new KeysAnonymousGrpcService(accountsManager, keysManager, groupZkSecretParams, Clock.systemUTC()),
-            new KeyTransparencyGrpcService(rateLimiters, keyTransparencyServiceClient),
-            new LoginPurchaseGrpcService(loginPurchaseManager, dynamicConfigurationManager),
+            gcpPilot ? null : new KeyTransparencyGrpcService(rateLimiters, keyTransparencyServiceClient),
+            gcpPilot ? null : new LoginPurchaseGrpcService(loginPurchaseManager, dynamicConfigurationManager),
             new ProfileAnonymousGrpcService(accountsManager, profilesManager, profileBadgeConverter, profileCdnPolicyGenerator, chatGenericZkSecretParams, groupZkSecretParams, rateLimiters, clock),
             new MessagesAnonymousGrpcService(accountsManager, rateLimiters, messageSender, groupSendTokenUtil, messageByteLimitCardinalityEstimator, spamChecker, Clock.systemUTC()),
-            new BackupsAnonymousGrpcService(backupManager, backupMetrics, config.getAttachments().maxAttachmentUploadSizeInBytes(), config.getAttachments().maxMessageBackupUploadSizeInBytes()),
+            gcpPilot ? null : new BackupsAnonymousGrpcService(backupManager, backupMetrics, config.getAttachments().maxAttachmentUploadSizeInBytes(), config.getAttachments().maxMessageBackupUploadSizeInBytes()),
             new CredentialsAnonymousGrpcService(accountsManager, ExternalServiceDefinitions.SVR.generatorFactory().apply(config, Clock.systemUTC())),
-            new SubscriptionsGrpcService(clock, config.getSubscription(), subscriptionManager, donationPermitsManager,
+            gcpPilot ? null : new SubscriptionsGrpcService(clock, config.getSubscription(), subscriptionManager, donationPermitsManager,
                 stripeManager, braintreeManager, googlePlayBillingManager, appleAppStoreManager, bankMandateTranslator),
-            new OneTimeDonationsGrpcService(config.getOneTimeDonations(), stripeManager, braintreeManager,
+            gcpPilot ? null : new OneTimeDonationsGrpcService(config.getOneTimeDonations(), stripeManager, braintreeManager,
                 payPalDonationsTranslator, oneTimeDonationsManager, issuedReceiptsManager,
                 zkReceiptOperations, clock, rateLimiters, donationPermitsManager))
+        .filter(java.util.Objects::nonNull)
         .map(bindableService -> ServerInterceptors.intercept(bindableService,
             // Note: interceptors run in the reverse order they are added; the remote deprecation filter
             // depends on the user-agent context so it has to come first here!
@@ -1315,48 +1333,49 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         new AccountControllerV2(accountsManager, changeNumberManager),
         new AttachmentControllerV4(rateLimiters, gcsAttachmentGenerator, tusAttachmentGenerator,
             experimentEnrollmentManager, config.getAttachments().maxAttachmentUploadSizeInBytes()),
-        new ArchiveController(accountsManager, backupAuthManager, backupManager, backupMetrics, config.getAttachments().maxAttachmentUploadSizeInBytes(), config.getAttachments().maxMessageBackupUploadSizeInBytes()),
-        new CallRoutingControllerV2(rateLimiters, cloudflareTurnCredentialsManager),
-        new CallLinkController(rateLimiters, callingGenericZkSecretParams, callingPreV101GenericZkSecretParams),
-        new CallQualitySurveyController(callQualitySurveyManager),
-        new CertificateController(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, callingPreV101GenericZkSecretParams, clock),
+        gcpPilot ? null : new ArchiveController(accountsManager, backupAuthManager, backupManager, backupMetrics, config.getAttachments().maxAttachmentUploadSizeInBytes(), config.getAttachments().maxMessageBackupUploadSizeInBytes()),
+        gcpPilot ? null : new CallRoutingControllerV2(rateLimiters, cloudflareTurnCredentialsManager),
+        gcpPilot ? null : new CallLinkController(rateLimiters, callingGenericZkSecretParams, callingPreV101GenericZkSecretParams),
+        gcpPilot ? null : new CallQualitySurveyController(callQualitySurveyManager),
+        new CertificateController(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, callingPreV101GenericZkSecretParams, clock, !gcpPilot),
         new ChallengeController(accountsManager, rateLimitChallengeManager, challengeConstraintChecker),
         new DeviceController(accountsManager, rateLimiters, persistentTimer),
-        new DeviceCheckController(clock, accountsManager, backupAuthManager, appleDeviceCheckManager, rateLimiters,
+        gcpPilot ? null : new DeviceCheckController(clock, accountsManager, backupAuthManager, appleDeviceCheckManager, rateLimiters,
             config.getDeviceCheck().backupRedemptionDuration()),
         new DirectoryV2Controller(directoryV2CredentialsGenerator),
-        new DonationController(clock, zkReceiptOperations, redeemedReceiptsManager, accountsManager, config.getBadges(),
+        gcpPilot ? null : new DonationController(clock, zkReceiptOperations, redeemedReceiptsManager, accountsManager, config.getBadges(),
             ReceiptCredentialPresentation::new, donationPermitsManager, rateLimiters),
         new KeysController(rateLimiters, keysManager, accountsManager, groupZkSecretParams, Clock.systemUTC()),
-        new KeyTransparencyController(keyTransparencyServiceClient),
+        gcpPilot ? null : new KeyTransparencyController(keyTransparencyServiceClient),
         new MessageController(rateLimiters, messageByteLimitCardinalityEstimator, messageSender, accountsManager,
             phoneNumberIdentifiers, reportMessageManager, groupZkSecretParams, spamChecker, Clock.systemUTC()),
-        new PaymentsController(currencyManager, paymentsCredentialsGenerator),
+        gcpPilot ? null : new PaymentsController(currencyManager, paymentsCredentialsGenerator),
         new ProfileController(clock, rateLimiters, accountsManager, profilesManager, asnInfoProviderSupplier,
             dynamicConfigurationManager, profileBadgeConverter, config.getBadges(), profileCdnPolicyGenerator,
             groupZkSecretParams, zkProfileOperations, batchIdentityCheckExecutor),
         new ProvisioningController(rateLimiters, provisioningManager),
-        new RegistrationController(accountsManager, phoneVerificationTokenManager, registrationLockVerificationManager,
+        gcpPilot ? null : new RegistrationController(accountsManager, phoneVerificationTokenManager, registrationLockVerificationManager,
             rateLimiters, registrationFraudChecker, ReceiptCredentialPresentation::new, zkReceiptOperations, clock, dynamicConfigurationManager),
         new RemoteConfigController(remoteConfigsManager),
         new SecureStorageController(storageCredentialsGenerator),
         new SecureValueRecovery2Controller(svr2CredentialsGenerator, accountsManager),
-        new StickerController(rateLimiters, stickerPolicyGenerator, Clock.systemUTC()),
-        new VerificationController(registrationServiceClient, new VerificationSessionManager(verificationSessions),
+        gcpPilot ? null : new StickerController(rateLimiters, stickerPolicyGenerator, Clock.systemUTC()),
+        gcpPilot ? null : new VerificationController(registrationServiceClient, new VerificationSessionManager(verificationSessions),
             pushNotificationManager, registrationCaptchaManager, phoneNumberRecoveryPasswordsManager,
             phoneNumberIdentifiers, rateLimiters, accountsManager, carrierDataProvider, registrationFraudChecker,
             dynamicConfigurationManager, experimentEnrollmentManager, clock),
-        new SubscriptionController(clock, config.getSubscription(), config.getOneTimeDonations(),
+        gcpPilot ? null : new SubscriptionController(clock, config.getSubscription(), config.getOneTimeDonations(),
             config.getLoginPurchase(), subscriptionManager, stripeManager, braintreeManager, googlePlayBillingManager,
             appleAppStoreManager,
             profileBadgeConverter, bankMandateTranslator, donationPermitsManager,
             config.getBackupConfiguration().maxTotalMediaSize()),
-        new OneTimeDonationController(clock, config.getOneTimeDonations(), stripeManager, braintreeManager,
+        gcpPilot ? null : new OneTimeDonationController(clock, config.getOneTimeDonations(), stripeManager, braintreeManager,
             payPalDonationsTranslator, zkReceiptOperations, issuedReceiptsManager, oneTimeDonationsManager,
             donationPermitsManager),
-        new LoginPurchaseController(loginPurchaseManager, dynamicConfigurationManager)
+        gcpPilot ? null : new LoginPurchaseController(loginPurchaseManager, dynamicConfigurationManager)
     );
 
+    commonControllers.removeIf(java.util.Objects::isNull);
     for (Object controller : commonControllers) {
       environment.jersey().register(controller);
       webSocketEnvironment.jersey().register(controller);

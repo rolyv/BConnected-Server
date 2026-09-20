@@ -52,6 +52,7 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
   private final Clock clock;
 
   private final Map<ExternalServiceType, ExternalServiceCredentialsGenerator> credentialsGeneratorByType;
+  private final boolean callsEnabled;
 
   public CredentialsGrpcService(final AccountsManager accountsManager,
       final CertificateGenerator certificateGenerator,
@@ -61,6 +62,16 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
       final Clock clock,
       final Map<ExternalServiceType, ExternalServiceCredentialsGenerator> credentialsGeneratorByType) {
 
+    this(accountsManager, certificateGenerator, serverZkAuthOperations, serverSecretParams, rateLimiters, clock,
+        credentialsGeneratorByType, true);
+  }
+
+  public CredentialsGrpcService(final AccountsManager accountsManager, final CertificateGenerator certificateGenerator,
+      final ServerZkAuthOperations serverZkAuthOperations, final GenericServerSecretParams serverSecretParams,
+      final RateLimiters rateLimiters, final Clock clock,
+      final Map<ExternalServiceType, ExternalServiceCredentialsGenerator> credentialsGeneratorByType,
+      final boolean callsEnabled) {
+
     this.accountsManager = accountsManager;
     this.certificateGenerator = certificateGenerator;
     this.serverZkAuthOperations = serverZkAuthOperations;
@@ -68,6 +79,7 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
     this.rateLimiters = rateLimiters;
     this.clock = clock;
     this.credentialsGeneratorByType = credentialsGeneratorByType;
+    this.callsEnabled = callsEnabled;
   }
 
   @Override
@@ -145,7 +157,7 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
               authCredentialWithPniResponse.serialize()))
           .build());
 
-      responseBuilder.addCallLinkAuthCredentials(ZkCredential.newBuilder()
+      if (callsEnabled) responseBuilder.addCallLinkAuthCredentials(ZkCredential.newBuilder()
           .setRedemptionTime(redemption.getEpochSecond())
           .setCredential(ByteString.copyFrom(
               CallLinkAuthCredentialResponse.issueCredential(aci, redemption, serverSecretParams).serialize()))
@@ -158,6 +170,8 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
   @Override
   public GetCreateCallLinkCredentialResponse getCreateCallLinkCredential(final GetCreateCallLinkCredentialRequest request)
       throws RateLimitExceededException {
+
+    if (!callsEnabled) throw GrpcExceptions.unavailable("Calling is unavailable in this runtime");
 
     final UUID accountIdentifier = AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier();
     rateLimiters.getCreateCallLinkLimiter().validate(accountIdentifier);

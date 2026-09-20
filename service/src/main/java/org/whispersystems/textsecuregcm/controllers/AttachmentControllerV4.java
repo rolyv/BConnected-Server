@@ -75,10 +75,8 @@ public class AttachmentControllerV4 {
     this.experimentEnrollmentManager = experimentEnrollmentManager;
     this.maxUploadLength = maxUploadLength;
     this.secureRandom = new SecureRandom();
-    this.attachmentGenerators = Map.of(
-        2, gcsAttachmentGenerator,
-        3, tusAttachmentGenerator
-    );
+    this.attachmentGenerators = tusAttachmentGenerator == null ? Map.of(2, gcsAttachmentGenerator)
+        : Map.of(2, gcsAttachmentGenerator, 3, tusAttachmentGenerator);
   }
 
   @GET
@@ -130,7 +128,8 @@ public class AttachmentControllerV4 {
         .record(uploadLength);
 
     final String key = AttachmentUtil.generateAttachmentKey(secureRandom);
-    final boolean useCdn3 = this.experimentEnrollmentManager.isEnrolled(auth.accountIdentifier(), AttachmentUtil.CDN3_EXPERIMENT_NAME);
+    final boolean useCdn3 = attachmentGenerators.containsKey(3)
+        && this.experimentEnrollmentManager.isEnrolled(auth.accountIdentifier(), AttachmentUtil.CDN3_EXPERIMENT_NAME);
     int cdn = useCdn3 ? 3 : 2;
     final AttachmentGenerator.Descriptor descriptor = this.attachmentGenerators.get(cdn).generateAttachment(key, uploadLength);
     return new AttachmentDescriptorV3(cdn, key, descriptor.headers(), descriptor.signedUploadLocation());

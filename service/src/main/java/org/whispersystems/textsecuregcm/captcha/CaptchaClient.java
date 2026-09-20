@@ -64,4 +64,16 @@ public interface CaptchaClient {
       }
     };
   }
+
+  /** Explicitly unavailable verification; unlike the legacy no-op, this never accepts a solution. */
+  static CaptchaClient unavailable() {
+    return new CaptchaClient() {
+      @Override public String scheme() { return "unavailable"; }
+      @Override public Set<String> validSiteKeys(final Action action) { return Set.of(); }
+      @Override public AssessmentResult verify(final Optional<UUID> maybeAci, final String siteKey,
+          final Action action, final String token, final String ip, @Nullable final String userAgent) throws IOException {
+        throw new IOException("CAPTCHA verification is not configured for this runtime");
+      }
+    };
+  }
 }

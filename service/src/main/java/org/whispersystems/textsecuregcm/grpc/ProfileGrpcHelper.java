@@ -29,6 +29,8 @@ import org.signal.libsignal.zkgroup.profiles.ProfileKeyCommitment;
 import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialRequest;
 import org.signal.libsignal.zkgroup.profiles.ServerZkProfileOperations;
 import org.whispersystems.textsecuregcm.auth.UnidentifiedAccessChecksum;
+import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
+import org.whispersystems.textsecuregcm.avatars.S3AvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.badges.ProfileBadgeConverter;
 import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 import org.whispersystems.textsecuregcm.storage.Account;
@@ -42,10 +44,6 @@ public class ProfileGrpcHelper {
 
   private static final byte[] ETAG_DOMAIN = "ProfileETag/v1".getBytes(StandardCharsets.UTF_8);
   private static final int ETAG_LENGTH = 10;
-  private static final S3UploadForm PROTOTYPE_AVATAR_UPLOAD_FORM = S3UploadForm.newBuilder()
-      .setAcl(PostPolicyGenerator.ACL)
-      .setAlgorithm(PostPolicyGenerator.ALGORITHM)
-      .build();
 
   static Optional<LegacyProfileResult> getProfileV1(final Account account,
       final ProfilesManager profilesManager,
@@ -164,10 +162,17 @@ public class ProfileGrpcHelper {
 
   public static S3UploadForm generateAvatarUploadForm(final String objectName, final int uploadLength,
       final PostPolicyGenerator policyGenerator, final Clock clock) {
-    final PostPolicyGenerator.SignedPostPolicy policy =
+    return generateAvatarUploadForm(objectName, uploadLength, new S3AvatarUploadPolicyGenerator(policyGenerator), clock);
+  }
+
+  public static S3UploadForm generateAvatarUploadForm(final String objectName, final int uploadLength,
+      final AvatarUploadPolicyGenerator policyGenerator, final Clock clock) {
+    final AvatarUploadPolicyGenerator.UploadPolicy policy =
         policyGenerator.createFor(objectName, uploadLength, clock.instant());
 
-    return PROTOTYPE_AVATAR_UPLOAD_FORM.toBuilder()
+    return S3UploadForm.newBuilder()
+        .setAcl(policy.acl())
+        .setAlgorithm(policy.algorithm())
         .setKey(objectName)
         .setCredential(policy.credential())
         .setDate(policy.formattedTimestamp())

@@ -5,12 +5,16 @@
 package org.whispersystems.textsecuregcm;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.dropwizard.core.Configuration;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.AssertTrue;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import org.whispersystems.textsecuregcm.attachments.TusConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ApnConfiguration;
 import org.whispersystems.textsecuregcm.configuration.AppleAppStoreConfiguration;
@@ -69,10 +73,67 @@ import org.whispersystems.textsecuregcm.configuration.UnidentifiedDeliveryConfig
 import org.whispersystems.textsecuregcm.configuration.VirtualThreadConfiguration;
 import org.whispersystems.textsecuregcm.configuration.WebAuthnConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ZkConfig;
+import org.whispersystems.textsecuregcm.configuration.RuntimeMode;
+import org.whispersystems.textsecuregcm.configuration.GcsAvatarConfiguration;
+import org.whispersystems.textsecuregcm.configuration.MonitoredFileObjectConfiguration;
+import org.whispersystems.textsecuregcm.configuration.TelnyxRegistrationServiceConfiguration;
 import org.whispersystems.websocket.configuration.WebSocketConfiguration;
 
 // @noinspection MismatchedQueryAndUpdateOfCollection, WeakerAccess
 public class WhisperServerConfiguration extends Configuration {
+
+  @NotNull @JsonProperty
+  private RuntimeMode runtimeMode = RuntimeMode.LEGACY;
+
+  @Valid @JsonProperty
+  private GcsAvatarConfiguration gcpAvatars;
+
+  public RuntimeMode getRuntimeMode() { return runtimeMode; }
+  public boolean isGcpPilot() { return runtimeMode == RuntimeMode.GCP_PILOT; }
+  public GcsAvatarConfiguration getGcpAvatars() { return gcpAvatars; }
+
+  public Duration getMessageRetention() {
+    return postgres != null && postgres.messageRetention() != null ? postgres.messageRetention()
+        : dynamoDbTables.getMessages().getExpiration();
+  }
+
+  public Duration getRecoveryRetention() {
+    return postgres != null && postgres.recoveryRetention() != null ? postgres.recoveryRetention()
+        : dynamoDbTables.getRegistrationRecovery().getExpiration();
+  }
+
+  @AssertTrue(message = "Runtime mode dependencies are missing or incompatible")
+  @JsonIgnore
+  public boolean isRuntimeConfigurationValid() { return runtimeConfigurationErrors().isEmpty(); }
+
+  public void validateRuntimeConfiguration() {
+    final List<String> errors = runtimeConfigurationErrors();
+    if (!errors.isEmpty()) throw new IllegalArgumentException(String.join("; ", errors));
+  }
+
+  private List<String> runtimeConfigurationErrors() {
+    final List<String> errors = new ArrayList<>();
+    if (runtimeMode == null) errors.add("runtimeMode is required");
+    if (isGcpPilot()) {
+      if (postgres == null || postgres.messageRetention() == null || postgres.recoveryRetention() == null)
+        errors.add("GCP_PILOT requires PostgreSQL with explicit messageRetention and recoveryRetention");
+      if (!(dynamicConfig instanceof MonitoredFileObjectConfiguration) || !(asnTable instanceof MonitoredFileObjectConfiguration))
+        errors.add("GCP_PILOT requires type:file dynamicConfig and asnTable sources");
+      if (!(registrationService instanceof TelnyxRegistrationServiceConfiguration))
+        errors.add("GCP_PILOT requires type:telnyx registrationService");
+      if (gcpAvatars == null) errors.add("GCP_PILOT requires gcpAvatars");
+      if (gcpAttachments == null || !gcpAttachments.useIamSigning() || !gcpAttachments.isSigningConfigurationValid())
+        errors.add("GCP_PILOT requires IAM signing for attachments");
+    } else {
+      final Object[] legacy = {stripe, braintree, googlePlayBilling, appleAppStore, appleDeviceCheck, deviceCheck,
+          dynamoDbClient, dynamoDbTables, cdn, cdn3StorageManager, svrb, paymentsService, subscription, oneTimeDonations,
+          loginPurchase, pagedSingleUseKEMPreKeyStore, turn, tus, callQualitySurvey, foundationDbMessages,
+          callingZkConfig, callingZkConfigPreV101, keyTransparencyService};
+      if (java.util.Arrays.stream(legacy).anyMatch(java.util.Objects::isNull))
+        errors.add("LEGACY runtime requires billing, backup, calling, CDN, DynamoDB, FoundationDB and Key Transparency configuration");
+    }
+    return errors;
+  }
 
   @Valid
   @JsonProperty
@@ -92,42 +153,34 @@ public class WhisperServerConfiguration extends Configuration {
   @JsonProperty
   AwsCredentialsProviderFactory awsCredentialsProvider = new DefaultAwsCredentialsFactory();
 
-  @NotNull
   @Valid
   @JsonProperty
   private StripeConfiguration stripe;
 
-  @NotNull
   @Valid
   @JsonProperty
   private BraintreeConfiguration braintree;
 
-  @NotNull
   @Valid
   @JsonProperty
   private GooglePlayBillingConfiguration googlePlayBilling;
 
-  @NotNull
   @Valid
   @JsonProperty
   private AppleAppStoreConfiguration appleAppStore;
 
-  @NotNull
   @Valid
   @JsonProperty
   private AppleDeviceCheckConfiguration appleDeviceCheck;
 
-  @NotNull
   @Valid
   @JsonProperty
   private DeviceCheckConfiguration deviceCheck;
 
-  @NotNull
   @Valid
   @JsonProperty
   private DynamoDbClientFactory dynamoDbClient;
 
-  @NotNull
   @Valid
   @JsonProperty
   private DynamoDbTables dynamoDbTables;
@@ -147,12 +200,10 @@ public class WhisperServerConfiguration extends Configuration {
   @JsonProperty
   private BackupConfiguration backup = new BackupConfiguration();
 
-  @NotNull
   @Valid
   @JsonProperty
   private CdnConfiguration cdn;
 
-  @NotNull
   @Valid
   @JsonProperty
   private Cdn3StorageManagerConfiguration cdn3StorageManager;
@@ -182,7 +233,6 @@ public class WhisperServerConfiguration extends Configuration {
   @JsonProperty
   private SecureValueRecoveryConfiguration svr2;
 
-  @NotNull
   @Valid
   @JsonProperty
   private SecureValueRecoveryConfiguration svrb;
@@ -233,17 +283,14 @@ public class WhisperServerConfiguration extends Configuration {
   private SecureStorageServiceConfiguration storageService;
 
   @Valid
-  @NotNull
   @JsonProperty
   private PaymentsServiceConfiguration paymentsService;
 
   @Valid
-  @NotNull
   @JsonProperty
   private GenericZkConfig callingZkConfigPreV101;
 
   @Valid
-  @NotNull
   @JsonProperty
   private GenericZkConfig callingZkConfig;
 
@@ -274,22 +321,18 @@ public class WhisperServerConfiguration extends Configuration {
 
   @Valid
   @JsonProperty
-  @NotNull
   private SubscriptionConfiguration subscription;
 
   @Valid
   @JsonProperty
-  @NotNull
   private OneTimeDonationConfiguration oneTimeDonations;
 
   @Valid
   @JsonProperty
-  @NotNull
   private LoginPurchaseConfiguration loginPurchase;
 
   @Valid
   @JsonProperty
-  @NotNull
   private PagedSingleUseKEMPreKeyStoreConfiguration pagedSingleUseKEMPreKeyStore;
 
   @Valid
@@ -307,12 +350,10 @@ public class WhisperServerConfiguration extends Configuration {
   private RegistrationServiceClientFactory registrationService;
 
   @Valid
-  @NotNull
   @JsonProperty
   private TurnConfiguration turn;
 
   @Valid
-  @NotNull
   @JsonProperty
   private TusConfiguration tus;
 
@@ -342,7 +383,6 @@ public class WhisperServerConfiguration extends Configuration {
   private ExternalRequestFilterConfiguration externalRequestFilter;
 
   @Valid
-  @NotNull
   @JsonProperty
   private KeyTransparencyServiceConfiguration keyTransparencyService;
 
@@ -380,7 +420,6 @@ public class WhisperServerConfiguration extends Configuration {
   private S3ObjectMonitorFactory asnTable;
 
   @Valid
-  @NotNull
   @JsonProperty
   private CallQualitySurveyConfiguration callQualitySurvey;
 
@@ -390,7 +429,6 @@ public class WhisperServerConfiguration extends Configuration {
   private ChangeNumberConfiguration changeNumber = new ChangeNumberConfiguration(Duration.ofHours(1));
 
   @Valid
-  @NotNull
   @JsonProperty
   private FoundationDbMessagesConfiguration foundationDbMessages;
 

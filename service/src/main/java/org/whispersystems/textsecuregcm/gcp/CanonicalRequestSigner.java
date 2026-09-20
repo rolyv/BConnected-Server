@@ -5,6 +5,7 @@
 
 package org.whispersystems.textsecuregcm.gcp;
 
+import com.google.auth.ServiceAccountSigner;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
@@ -18,6 +19,8 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.Objects;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.annotation.Nonnull;
@@ -25,13 +28,20 @@ import javax.annotation.Nonnull;
 public class CanonicalRequestSigner {
 
   @Nonnull
-  private final PrivateKey rsaSigningKey;
+  private final Function<byte[], byte[]> signer;
 
   private static final Pattern PRIVATE_KEY_PATTERN =
       Pattern.compile("^-+BEGIN PRIVATE KEY-+\\s*(.+)\\n-+END PRIVATE KEY-+\\s*$", Pattern.DOTALL);
 
   public CanonicalRequestSigner(@Nonnull String rsaSigningKey) throws IOException, InvalidKeyException, InvalidKeySpecException {
-    this.rsaSigningKey = initializeRsaSigningKey(rsaSigningKey);
+    final PrivateKey key = initializeRsaSigningKey(rsaSigningKey);
+    this.signer = value -> signWithKey(key, value);
+  }
+
+  /** Signs the same canonical bytes using IAM, without loading an exported RSA key. */
+  public CanonicalRequestSigner(@Nonnull ServiceAccountSigner signer) {
+    Objects.requireNonNull(signer);
+    this.signer = signer::sign;
   }
 
   public String sign(@Nonnull CanonicalRequest canonicalRequest) {
@@ -58,16 +68,20 @@ public class CanonicalRequestSigner {
   }
 
   private String sign(@Nonnull String stringToSign) {
+    return HexFormat.of().formatHex(signer.apply(stringToSign.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  private static byte[] signWithKey(final PrivateKey rsaSigningKey, final byte[] value) {
     final byte[] signature;
     try {
       final Signature sha256rsa = Signature.getInstance("SHA256WITHRSA");
       sha256rsa.initSign(rsaSigningKey);
-      sha256rsa.update(stringToSign.getBytes(StandardCharsets.UTF_8));
+      sha256rsa.update(value);
       signature = sha256rsa.sign();
     } catch (NoSuchAlgorithmException | InvalidKeyException | SignatureException e) {
       throw new AssertionError(e);
     }
-    return HexFormat.of().formatHex(signature);
+    return signature;
   }
 
   private static PrivateKey initializeRsaSigningKey(String rsaSigningKey) throws IOException, InvalidKeyException, InvalidKeySpecException {

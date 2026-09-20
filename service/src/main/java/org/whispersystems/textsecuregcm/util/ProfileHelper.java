@@ -34,7 +34,7 @@ import org.whispersystems.textsecuregcm.storage.VersionedProfile;
 import org.whispersystems.textsecuregcm.storage.VersionedProfileV1;
 
 public class ProfileHelper {
-  public static int MAX_PROFILE_AVATAR_SIZE_BYTES = 10 * 1024 * 1024;
+  public static final int MAX_PROFILE_AVATAR_SIZE_BYTES = 10 * 1024 * 1024;
   @VisibleForTesting
   public static final Duration EXPIRING_PROFILE_KEY_CREDENTIAL_EXPIRATION = Duration.ofDays(7);
 

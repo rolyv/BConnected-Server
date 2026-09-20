@@ -624,6 +624,18 @@
     </dependency>
 
     <dependency>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>google-cloud-storage</artifactId>
+      <exclusions>
+        <!-- Use the project's existing StAX version instead of the Storage SDK's older transitive version. -->
+        <exclusion>
+          <groupId>org.codehaus.woodstox</groupId>
+          <artifactId>stax2-api</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
+    <dependency>
       <groupId>org.bouncycastle</groupId>
       <artifactId>bcprov-jdk18on</artifactId>
       <scope>compile</scope>

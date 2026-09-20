@@ -66,6 +66,8 @@ import org.signal.libsignal.zkgroup.profiles.ProfileKeyCommitment;
 import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialRequest;
 import org.signal.libsignal.zkgroup.profiles.ServerZkProfileOperations;
 import org.whispersystems.textsecuregcm.asn.AsnInfoProvider;
+import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
+import org.whispersystems.textsecuregcm.avatars.S3AvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.auth.Anonymous;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
 import org.whispersystems.textsecuregcm.auth.GroupSendTokenHeader;
@@ -116,7 +118,7 @@ public class ProfileController {
   private final ProfileBadgeConverter profileBadgeConverter;
   private final Map<String, BadgeConfiguration> badgeConfigurationMap;
 
-  private final PostPolicyGenerator policyGenerator;
+  private final AvatarUploadPolicyGenerator policyGenerator;
   private final ServerSecretParams serverSecretParams;
   private final ServerZkProfileOperations zkProfileOperations;
 
@@ -137,6 +139,25 @@ public class ProfileController {
       final ProfileBadgeConverter profileBadgeConverter,
       final BadgesConfiguration badgesConfiguration,
       final PostPolicyGenerator policyGenerator,
+      final ServerSecretParams serverSecretParams,
+      final ServerZkProfileOperations zkProfileOperations,
+      final Executor batchIdentityCheckExecutor) {
+    this(clock, rateLimiters, accountsManager, profilesManager, asnInfoProviderSupplier,
+        dynamicConfigurationManager, profileBadgeConverter, badgesConfiguration,
+        new S3AvatarUploadPolicyGenerator(policyGenerator), serverSecretParams, zkProfileOperations,
+        batchIdentityCheckExecutor);
+  }
+
+  public ProfileController(
+      final Clock clock,
+      final RateLimiters rateLimiters,
+      final AccountsManager accountsManager,
+      final ProfilesManager profilesManager,
+      final Supplier<AsnInfoProvider> asnInfoProviderSupplier,
+      final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager,
+      final ProfileBadgeConverter profileBadgeConverter,
+      final BadgesConfiguration badgesConfiguration,
+      final AvatarUploadPolicyGenerator policyGenerator,
       final ServerSecretParams serverSecretParams,
       final ServerZkProfileOperations zkProfileOperations,
       final Executor batchIdentityCheckExecutor) {
@@ -570,12 +591,8 @@ public class ProfileController {
   }
 
   private ProfileAvatarUploadAttributes generateAvatarUploadForm(final String objectName) {
-    final PostPolicyGenerator.SignedPostPolicy signedPostPolicy =
-        policyGenerator.createFor(objectName, ProfileHelper.MAX_PROFILE_AVATAR_SIZE_BYTES, clock.instant());
-
-    return new ProfileAvatarUploadAttributes(objectName, signedPostPolicy.credential(),
-        PostPolicyGenerator.ACL, PostPolicyGenerator.ALGORITHM,
-        signedPostPolicy.formattedTimestamp(), signedPostPolicy.encodedPolicy(), signedPostPolicy.signature());
+    return policyGenerator.createFor(objectName, ProfileHelper.MAX_PROFILE_AVATAR_SIZE_BYTES, clock.instant())
+        .attributes(objectName);
   }
 
   private static Map<String, Boolean> getAccountCapabilities(final Account account) {

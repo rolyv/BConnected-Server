@@ -72,6 +72,7 @@ public enum ExternalServiceDefinitions {
       final WhisperServerConfiguration chatConfiguration,
       final Clock clock) {
     return Arrays.stream(values())
+        .filter(service -> !chatConfiguration.isGcpPilot() || service != PAYMENTS)
         .map(esd -> Pair.of(esd.externalService, esd.generatorFactory().apply(chatConfiguration, clock)))
         .collect(Collectors.toMap(Pair::getKey, Pair::getValue));
   }

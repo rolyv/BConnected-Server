@@ -209,6 +209,24 @@ class AttachmentControllerV4Test {
     assertValidCdn2Response(descriptor);
   }
 
+  @Test
+  void gcpPilotUsesConfiguredCdnWhenRemoteFlagRequestsUnavailableCdn() throws Exception {
+    final GcsAttachmentGenerator generator = mock(GcsAttachmentGenerator.class);
+    when(generator.generateAttachment(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(42L)))
+        .thenReturn(new org.whispersystems.textsecuregcm.attachments.AttachmentGenerator.Descriptor(
+            Map.of("x-goog-resumable", "start"), "https://storage.googleapis.com/pilot/test"));
+    final AttachmentControllerV4 controller = new AttachmentControllerV4(RATE_LIMITERS, generator, null,
+        EXPERIMENT_MANAGER, MAX_UPLOAD_LENGTH);
+    final AttachmentDescriptorV3 result = controller.getAttachmentUploadForm(
+        new AuthenticatedDevice(AuthHelper.VALID_UUID, (byte) 1, java.time.Instant.now()),
+        java.util.Optional.of(42L), null);
+    assertThat(result.cdn()).isEqualTo(2);
+    assertThat(result.signedUploadLocation()).isEqualTo("https://storage.googleapis.com/pilot/test");
+    verify(generator).generateAttachment(result.key(), 42L);
+    verify(COUNT_RATE_LIMITER).validate(AuthHelper.VALID_UUID);
+    verify(BYTE_RATE_LIMITER).validate(AuthHelper.VALID_UUID, 42L);
+  }
+
   private static void assertValidCdn2Response(final AttachmentDescriptorV3 descriptor) throws MalformedURLException {
     assertThat(descriptor.key()).isNotBlank();
     assertThat(descriptor.cdn()).isEqualTo(2);

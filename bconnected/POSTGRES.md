@@ -2,7 +2,7 @@
 
 This fork implements native PostgreSQL storage for the pilot's account, key, message, profile, registration-support, reporting, challenge, Apple DeviceCheck and client-release paths. Selecting the optional `postgres` configuration uses those implementations in the server and worker dependency factories. Omitting it preserves the legacy backend.
 
-**The Signal messaging server is not deployed.** PostgreSQL selection does not yet remove every DynamoDB/S3 client or the other upstream startup dependencies. Local storage tests and schema provisioning do not demonstrate working phone registration or encrypted messaging between devices.
+**The Signal messaging server is not deployed and full server startup is not verified.** The explicit `GCP_PILOT` mode removes inherited AWS initialization from the selected server and supported worker paths for a GCP-only deployment. PostgreSQL selection alone remains distinct from that mode. Local storage tests and schema provisioning do not demonstrate working phone registration or encrypted messaging between devices.
 
 ## Accounts and their transaction boundary
 
@@ -28,9 +28,9 @@ The broader re-registration flow also clears one-time keys, messages and profile
 
 `SingleUseECPreKeysPostgres` and `SingleUseKEMPreKeysPostgres` preserve the original public-key encodings and KEM signatures. Their transactions coordinate bulk replacement, consumption and account/device deletion across store instances. Invalid writes roll back complete batches; malformed stored keys fail without consuming them. KEM exhaustion falls back to the repeated-use signed KEM store through `KeysManager`. The native one-time KEM path creates no S3 client and skips orphan-page pruning.
 
-`ProfilesPostgres` commits both encrypted profile formats together, preserving commitments and optimistic data-hash checks. `ProfileAvatarsPostgres` stores ownership/expiry metadata; avatar bytes still require the separate object-storage integration.
+`ProfilesPostgres` commits both encrypted profile formats together, preserving commitments and optimistic data-hash checks. `ProfileAvatarsPostgres` stores ownership/expiry metadata. The separate GCS avatar implementation provides IAM-signed upload policies, deletion and generation-pinned object refresh; private download delivery and a complete client flow still need validation.
 
-`VerificationSessionsPostgres`, `PhoneNumberIdentifiersPostgres` and `ChangeNumberWaitingPeriodsPostgres` cover verification state, stable phone-to-PNI mappings and registration/number-change bookkeeping. Equivalent phone forms are locked in a deterministic order without overwriting established mappings. The external registration service and SMS provider are separate work.
+`VerificationSessionsPostgres`, `PhoneNumberIdentifiersPostgres` and `ChangeNumberWaitingPeriodsPostgres` cover verification state, stable phone-to-PNI mappings and registration/number-change bookkeeping. Equivalent phone forms are locked in a deterministic order without overwriting established mappings. The [Telnyx adapter](TELNYX.md) adds durable provider sessions and quotas; deploying registration and binding it to approved membership remain separate work.
 
 `ReportMessagePostgres` and `PushChallengePostgres` preserve the upstream consumption and expiry rules. `AppleDeviceChecksPostgres` shares the existing certificate/CBOR codec and preserves global public-key ownership, equal-or-increasing assertion counters and atomic rollback when a public key belongs to another account. This is an attestation storage port, not configuration of Apple credentials or a deployed attestation test.
 
@@ -40,7 +40,15 @@ The broader re-registration flow also clears one-time keys, messages and profile
 
 In PostgreSQL mode, the server and worker factories skip FoundationDB initialization. Message-manager experiments cannot select an absent FoundationDB store, and FoundationDB-only maintenance operations fail explicitly. Redis remains required for the message cache, availability notifications and coordination; durable PostgreSQL queues do not replace those responsibilities.
 
-The `type: file` monitored-object implementation can load dynamic configuration without S3. Configure its `path`, optional `maxSize` and optional `refreshInterval`, and provide the file in the deployed process. The default maximum is 16 MiB and the refresh interval is five minutes. This removes S3 reads for selected monitored objects; it does not remove all AWS-backed bootstrap components.
+`runtimeMode: GCP_PILOT` additionally skips inherited AWS credential resolution, DynamoDB/S3 clients and AWS CRT in `WhisperServerService` and supported `CommandDependencies` workers. Its required configuration includes PostgreSQL with explicit message/recovery retention, Telnyx, GCS avatars, IAM-signed GCS attachments, and `type: file` dynamic/ASN monitors. Conditional validation permits excluded products' configuration to be absent. The default `LEGACY` mode retains upstream initialization and validation for compatibility.
+
+The pilot excludes billing, receipts, donations/subscriptions, backups/App Attest benefits, calls, sticker uploads, key-transparency clients/routes, push experiments and DynamoDB-only workers. Calls and payments credentials are not issued; remote experiments cannot re-enable an absent CDN3 attachment backend. Unsupported shared-factory workers fail before constructing their dependencies. The separately registered `copy-to-s3` utility is an explicit legacy CLI exception: it has no application configuration and can construct an AWS client when deliberately invoked. It is outside the GCP deployment and the selected server/guarded-worker startup guarantee.
+
+`RegistrationController` and `VerificationController` are absent from the pilot's common HTTP/WebSocket route list. This closes phone and numberless signup, SMS session/code requests and ACI recovery until real anti-abuse protection and admission binding exist. The no-plugin CAPTCHA fallback is unavailable in pilot mode rather than always valid. Retained authenticated account-management and device-linking paths keep their authentication enforcement.
+
+The `type: file` monitor takes `path`, optional `maxSize` and optional `refreshInterval`; defaults are 16 MiB and five minutes. Dynamic configuration must pass its real validator before startup can complete: `{}` lacks the required CAPTCHA score floor. Keep CAPTCHA failure closed. ASN input is a gzipped headerless five-column TSV. Deliver actual readable files, and explicitly allow only desired gRPC methods.
+
+This composition is implemented in source; the remaining APNs/FCM, Redis, storage/SVR, core secrets and listener requirements still prevent describing it as a tested runnable deployment.
 
 ## Schema and cloud connection
 
@@ -62,6 +70,8 @@ These define **23 application tables**, excluding the migration ledger. Migratio
 
 The 2026-09-20 [cloud evidence](https://github.com/rolyv/BConnected/blob/codex/bconnected-pilot/infra/signal-deployment.json) records all eleven migrations applied, all 23 application tables empty, and 89 table grants: SELECT/INSERT/UPDATE/DELETE on 22 tables and SELECT only on `client_releases`. Private Cloud Run execution `bconnected-signal-db-check-r2b4w` passed IAM login and the 23-table probe at `2026-09-20T22:38:12.531408Z`; its synthetic writes were rolled back. Schema isolation and denial of runtime schema creation passed. The probe did not run the Java server or deploy messaging.
 
+The subsequent private Java 26/Hikari/JDBC probe `bconnected-signal-java-db-check-hxkh8` passed IAM login, isolation checks and a rolled-back transaction at `2026-09-20T22:52:52.390741Z`. This validates the Java connection mechanism, not the whole Signal process or every store through live requests.
+
 The pilot database target is Cloud SQL PostgreSQL 17 at `roly-dev:us-east1:bconnected-postgres`, database `bconnected`. The messaging IAM database username is `bconnected-signal@roly-dev.iam`, separate from the community API identity. Grant schema usage and the table privileges above; the runtime does not need schema-creation or community-schema privileges. Cloud SQL IAM grants are restricted to this instance, and runtime authentication uses no stored database password.
 
 Run Cloud SQL Auth Proxy v2 beside the server with the messaging service account's credentials and a trusted loopback listener:
@@ -71,14 +81,18 @@ cloud-sql-proxy --auto-iam-authn --address=127.0.0.1 --port=5432 \
   roly-dev:us-east1:bconnected-postgres
 ```
 
-Add this top-level YAML block after applying the schema and grants:
+Add this top-level YAML block after applying the schema and grants. Retention values below are examples that must match the pilot's selected policy; `GCP_PILOT` requires them explicitly:
 
 ```yaml
 postgres:
   jdbcUrl: "jdbc:postgresql://127.0.0.1:5432/bconnected?sslmode=disable"
   username: "bconnected-signal@roly-dev.iam"
   maximumPoolSize: 5
+  messageRetention: P7D
+  recoveryRetention: P1D
 ```
+
+Set `runtimeMode: GCP_PILOT` separately and supply its other required core settings. This database block is not a complete runnable server configuration.
 
 The proxy's IAM identity must match the database user. It secures the Cloud SQL connection and supplies short-lived authentication credentials; `sslmode=disable` applies only to the local application-to-proxy connection. Do not use that URL pattern for a direct remote database connection. See [Google's automatic IAM login procedure](https://docs.cloud.google.com/sql/docs/postgres/iam-logins).
 
@@ -110,6 +124,8 @@ The final local focused checkpoint on 2026-09-20 passed **88 tests with zero fai
 
 Earlier checkpoints passed 43 account/lock tests (22 account, eight signed-key/recovery, eight PostgreSQL lock and five legacy lock tests) and 377 affected API/manager regressions, including 162 `AccountsManagerTest` tests. These results overlap the later run and must not be added into a distinct-test total. Coverage includes competing identities, optimistic updates, key/token rollback, re-registration, number changes, deletion, username expiration, scan boundaries, distributed/nested locks, challenge consumption, DeviceCheck key ownership/counters and runtime backend guards.
 
+The later GCP composition/signing/avatar checkpoint passed **478 tests with zero failures, errors or skips** at `2026-09-20T19:07:30-04:00`, recorded in the root checkout's `.local/gcp-runtime-tests.log`. It covers runtime validation/worker guards, unavailable CAPTCHA, signing/avatar contracts and affected profile, attachment, certificate, credential and registration regressions. Disabled calling/sticker methods on retained gRPC services return structured `UNAVAILABLE` under the existing error-conformance contract; excluded whole services/controllers are absent. This checkpoint overlaps earlier suites. It compiled the source changes but did not boot the full server or validate live object transfers.
+
 The earlier storage suites are `PostgresPersistenceTest`, `SingleUseECPreKeysPostgresTest`, `SingleUseKEMPreKeysPostgresTest`, `ProfilesPostgresTest` and `RegistrationPostgresTest`; run them by replacing the `-Dtest` list above. They cover envelope queues, one-time key concurrency, encrypted profiles and registration bookkeeping. Stop the fixture only after all selected suites finish:
 
 ```sh
@@ -118,10 +134,12 @@ docker stop bconnected-postgres-test
 
 ## Remaining release work
 
-The selected core account path no longer requires DynamoDB transactions, and reporting, push challenges, DeviceCheck and client-release reads are ported. Startup still constructs AWS-backed supporting services for optional billing/backups/experiments/schedulers and S3-oriented avatar paths. Disabling a product feature does not automatically remove its bootstrap dependencies. Configure a complete server/worker composition and prove its enabled paths start without AWS calls.
+The selected core account path no longer requires DynamoDB transactions, and the explicit pilot mode skips inherited AWS initialization and unsupported products. Prove this composition with a bounded private Linux startup and guarded-worker run with no AWS credentials or AWS egress. Confirm route absence, authentication/rate-limit enforcement, native libsignal loading, Redis-to-PostgreSQL persistence and clean shutdown. The legacy mode and explicit legacy CLI tools remain available; they are not the GCP deployment.
 
-Upstream already supplies GCS attachment uploads through `GcsAttachmentGenerator`; the owned bucket, signing identity, upload/download endpoints and CDN still need provisioning and client validation. Avatar bytes, upload policies and deletion require separate GCP storage work despite native SQL metadata. Provision Redis, supply the local monitored files and deploy the separate encrypted group-storage service. FoundationDB is excluded in the selected PostgreSQL mode; it is no longer an unconditional initialization blocker there.
+GCS attachments now support keyless IAM signing, and the GCS avatar implementation replaces the selected S3 object path. Owned buckets, upload/download endpoints, signer permissions and client transfer behavior still need operational validation. Private downloads are a distinct missing capability; signed uploads do not prove download access. Provision Redis Cluster/pubsub, supply validated monitored files and owned group/chat ZK parameters, sender certificates, device-link and WebAuthn secrets. Configure the retained secure-storage and SVR2 services with matching keys/trust roots: account deletion calls their cleanup paths and must not silently ignore failures. Key transparency is unavailable in this pilot composition rather than backed by fabricated proofs.
+
+APNs requires the owned Apple signing key, key ID, matching push-enabled bundle/profile and delivery test. FCM remains a constructor-time credential dependency even for the iPhone-first build and must be explicitly resolved. Deploy the separate encrypted group-storage service; disabling cloud backups does not replace group storage.
 
 No Signal data backfill or dual-write migration exists. An existing deployment would need coordinated writers/readers, data transfer and verification before switching; switching back after PostgreSQL receives writes requires reconciliation.
 
-Before opening the pilot, deploy an owned service composition, configure SMS and APNs, bind approved alumni to Signal identities, and connect the forked iPhone/libsignal networking to owned endpoints. The [Telnyx registration adapter](TELNYX.md) and PostgreSQL session coordinator passed 99 tests and a live local SMS/code-check probe. Provider credentials/profile and the user-approved $10 daily cap are configured; the Signal service is not deployed. Validate two real clients exchanging encrypted DMs/group messages, offline redelivery, acknowledgements, suspension and re-registration. The 10,000-member configuration target does not establish 8,000-member capacity.
+Before opening registration, deploy an owned service composition, configure SMS and APNs, implement real anti-abuse protection and bind approved alumni to Signal identities. Connect the forked iPhone/libsignal networking to owned endpoints. The [Telnyx registration adapter](TELNYX.md) and PostgreSQL session coordinator passed 99 tests and a live local SMS/code-check probe. Provider credentials/profile and the user-approved $10 daily cap are configured; registration routes remain closed in pilot mode and the Signal service is not deployed. Validate two real clients exchanging encrypted DMs/group messages, offline redelivery, acknowledgements, suspension and re-registration. The 10,000-member configuration target does not establish 8,000-member capacity.

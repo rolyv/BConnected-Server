@@ -5,6 +5,7 @@
 
 package org.whispersystems.textsecuregcm.attachments;
 
+import com.google.auth.ServiceAccountSigner;
 import org.whispersystems.textsecuregcm.gcp.CanonicalRequest;
 import org.whispersystems.textsecuregcm.gcp.CanonicalRequestGenerator;
 import org.whispersystems.textsecuregcm.gcp.CanonicalRequestSigner;
@@ -28,6 +29,12 @@ public class GcsAttachmentGenerator implements AttachmentGenerator {
       throws IOException, InvalidKeyException, InvalidKeySpecException {
     this.canonicalRequestGenerator = new CanonicalRequestGenerator(domain, email, pathPrefix);
     this.canonicalRequestSigner = new CanonicalRequestSigner(rsaSigningKey);
+  }
+
+  public GcsAttachmentGenerator(@Nonnull String domain, @Nonnull String pathPrefix,
+      @Nonnull ServiceAccountSigner signer) {
+    this.canonicalRequestGenerator = new CanonicalRequestGenerator(domain, signer.getAccount(), pathPrefix);
+    this.canonicalRequestSigner = new CanonicalRequestSigner(signer);
   }
 
   @Override

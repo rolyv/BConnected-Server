@@ -45,6 +45,7 @@ import org.whispersystems.textsecuregcm.storage.AccountsManager;
 @Path("/v1/certificate")
 @Tag(name = "Certificate")
 public class CertificateController {
+  private final boolean callsEnabled;
 
   private final AccountsManager accountsManager;
   private final CertificateGenerator certificateGenerator;
@@ -66,12 +67,21 @@ public class CertificateController {
       @Nonnull GenericServerSecretParams genericServerSecretParamsPreV101,
       @Nonnull Clock clock) {
 
+    this(accountsManager, certificateGenerator, serverZkAuthOperations, genericServerSecretParams,
+        genericServerSecretParamsPreV101, clock, true);
+  }
+
+  public CertificateController(final AccountsManager accountsManager, final CertificateGenerator certificateGenerator,
+      final ServerZkAuthOperations serverZkAuthOperations, final GenericServerSecretParams genericServerSecretParams,
+      final GenericServerSecretParams genericServerSecretParamsPreV101, final Clock clock, final boolean callsEnabled) {
+
     this.accountsManager = accountsManager;
     this.certificateGenerator = Objects.requireNonNull(certificateGenerator);
     this.serverZkAuthOperations = Objects.requireNonNull(serverZkAuthOperations);
     this.genericServerSecretParams = genericServerSecretParams;
     this.genericServerSecretParamsPreV101 = genericServerSecretParamsPreV101;
     this.clock = Objects.requireNonNull(clock);
+    this.callsEnabled = callsEnabled;
   }
 
   @GET
@@ -132,7 +142,7 @@ public class CertificateController {
           authCredentialWithPni.serialize(),
           (int) redemption.getEpochSecond()));
 
-      callLinkAuthCredentials.add(new GroupCredentials.CallLinkAuthCredential(
+      if (callsEnabled) callLinkAuthCredentials.add(new GroupCredentials.CallLinkAuthCredential(
           CallLinkAuthCredentialResponse.issueCredential(aci, redemption, v101 ? genericServerSecretParams : genericServerSecretParamsPreV101).serialize(),
           redemption.getEpochSecond()));
     }

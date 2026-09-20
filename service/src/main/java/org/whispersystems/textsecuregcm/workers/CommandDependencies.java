@@ -148,6 +148,9 @@ public record CommandDependencies(
       final Environment environment,
       final WhisperServerConfiguration configuration)
       throws IOException, GeneralSecurityException, InvalidInputException {
+    configuration.getRuntimeMode().requireWorker(name);
+    configuration.validateRuntimeConfiguration();
+    final boolean gcpPilot = configuration.isGcpPilot();
     Clock clock = Clock.systemUTC();
 
     MetricsUtil.configureLogging(configuration, environment);
@@ -210,7 +213,7 @@ public record CommandDependencies(
       messageDatabasesByEpoch = Map.of();
     }
 
-    final AwsCredentialsProvider awsCredentialsProvider = configuration.getAwsCredentialsConfiguration().build();
+    final AwsCredentialsProvider awsCredentialsProvider = gcpPilot ? null : configuration.getAwsCredentialsConfiguration().build();
 
     ScheduledExecutorService dynamicConfigurationExecutor = ScheduledExecutorServiceBuilder.of(environment, "dynamicConfiguration")
         .threads(1).build();
@@ -268,21 +271,21 @@ public record CommandDependencies(
     ExternalServiceCredentialsGenerator secureValueRecovery2CredentialsGenerator = SecureValueRecovery2Controller.credentialsGenerator(
         configuration.getSvr2Configuration());
     ExternalServiceCredentialsGenerator secureValueRecoveryBCredentialsGenerator =
-        SecureValueRecoveryBCredentialsGeneratorFactory.svrbCredentialsGenerator(configuration.getSvrbConfiguration());
+        gcpPilot ? null : SecureValueRecoveryBCredentialsGeneratorFactory.svrbCredentialsGenerator(configuration.getSvrbConfiguration());
 
-    final ExecutorService awsSdkMetricsExecutor = ManagedExecutors.newVirtualThreadPerTaskExecutor(
+    final ExecutorService awsSdkMetricsExecutor = gcpPilot ? null : ManagedExecutors.newVirtualThreadPerTaskExecutor(
         "awsSdkMetrics",
         configuration.getVirtualThreadConfiguration().maxConcurrentThreadsPerExecutor(),
         environment);
 
-    DynamoDbAsyncClient dynamoDbAsyncClient = configuration.getDynamoDbClientConfiguration()
+    DynamoDbAsyncClient dynamoDbAsyncClient = gcpPilot ? null : configuration.getDynamoDbClientConfiguration()
         .buildAsyncClient(awsCredentialsProvider, new MicrometerAwsSdkMetricPublisher(awsSdkMetricsExecutor, "dynamoDbAsyncCommand"));
 
-    DynamoDbClient dynamoDbClient = configuration.getDynamoDbClientConfiguration()
+    DynamoDbClient dynamoDbClient = gcpPilot ? null : configuration.getDynamoDbClientConfiguration()
         .buildSyncClient(awsCredentialsProvider, new MicrometerAwsSdkMetricPublisher(awsSdkMetricsExecutor, "dynamoDbSyncCommand"));
 
-    final AwsCredentialsProvider cdnCredentialsProvider = configuration.getCdnConfiguration().credentials().build();
-    final S3AsyncClient asyncCdnS3Client = S3AsyncClient.builder()
+    final AwsCredentialsProvider cdnCredentialsProvider = gcpPilot ? null : configuration.getCdnConfiguration().credentials().build();
+    final S3AsyncClient asyncCdnS3Client = gcpPilot ? null : S3AsyncClient.builder()
         .credentialsProvider(cdnCredentialsProvider)
         .region(Region.of(configuration.getCdnConfiguration().region()))
         .build();
@@ -290,14 +293,14 @@ public record CommandDependencies(
 
     final PostgresPersistence postgres = configuration.getPostgresConfiguration() == null ? null
         : PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
-            configuration.getDynamoDbTables().getMessages().getExpiration(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, configuration.getDynamoDbTables().getRegistrationRecovery().getExpiration(), configuration.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionExecutor);
+            configuration.getMessageRetention(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, configuration.getRecoveryRetention(), configuration.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionExecutor);
     PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres != null ? postgres.recoveryPasswords() : new PhoneNumberRecoveryPasswords(
         configuration.getDynamoDbTables().getRegistrationRecovery().getTableName(),
-        configuration.getDynamoDbTables().getRegistrationRecovery().getExpiration(),
+        configuration.getRecoveryRetention(),
         dynamoDbClient,
         clock);
 
-    RedeemedReceiptsManager redeemedReceiptsManager = new RedeemedReceiptsManager(clock,
+    RedeemedReceiptsManager redeemedReceiptsManager = gcpPilot ? null : new RedeemedReceiptsManager(clock,
         configuration.getDynamoDbTables().getRedeemedReceipts().getTableName(),
         dynamoDbClient);
 
@@ -341,7 +344,7 @@ public record CommandDependencies(
             configuration.getDynamoDbTables().getKemLastResortKeys().getTableName()));
     PersistentMessageStore messagesDynamoDb = postgres != null ? postgres.messages() : new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         configuration.getDynamoDbTables().getMessages().getTableName(),
-        configuration.getDynamoDbTables().getMessages().getExpiration(),
+        configuration.getMessageRetention(),
         messageDeletionExecutor);
     FaultTolerantRedisClusterClient messagesCluster = configuration.getMessageCacheConfiguration()
         .getRedisClusterConfiguration().build("messages", redisClientResourcesBuilder);
@@ -353,7 +356,7 @@ public record CommandDependencies(
         retryExecutor,
         configuration.getSvr2Configuration(),
         () -> dynamicConfigurationManager.getConfiguration().getSvr2StatusCodesToIgnoreForAccountDeletion());
-    SecureValueRecoveryClient secureValueRecoveryBClient = new SecureValueRecoveryClient(
+    SecureValueRecoveryClient secureValueRecoveryBClient = gcpPilot ? null : new SecureValueRecoveryClient(
         secureValueRecoveryBCredentialsGenerator,
         secureValueRecoveryServiceExecutor,
         retryExecutor,
@@ -373,8 +376,15 @@ public record CommandDependencies(
         Clock.systemUTC(),
         configuration.getFoundationDbMessagesConfiguration().batchPriorityTransactionTimeout(),
         configuration.getFoundationDbMessagesConfiguration().batchPriorityTransactionRetryLimit());
-    ProfilesManager profilesManager = new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
-        configuration.getCdnConfiguration().bucket());
+    final org.whispersystems.textsecuregcm.avatars.GcsAvatarStorage gcsAvatars = gcpPilot
+        ? configuration.getGcpAvatars().build(messageDeletionExecutor, clock) : null;
+    if (gcsAvatars != null) environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
+      @Override public void stop() throws Exception { gcsAvatars.close(); }
+    });
+    ProfilesManager profilesManager = gcpPilot
+        ? new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, gcsAvatars)
+        : new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
+            configuration.getCdnConfiguration().bucket());
     ReportMessageStore reportMessageDynamoDb = postgres != null ? postgres.reportMessages() : new ReportMessageDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         configuration.getDynamoDbTables().getReportMessage().getTableName(),
         configuration.getReportMessageConfiguration().getReportTtl());
@@ -408,7 +418,7 @@ public record CommandDependencies(
         webAuthnCeremonyManager);
     RateLimiters rateLimiters = RateLimiters.create(dynamicConfigurationManager, rateLimitersCluster, retryExecutor);
     final BackupsDb backupsDb =
-        new BackupsDb(dynamoDbAsyncClient, configuration.getDynamoDbTables().getBackups().getTableName(), clock);
+        gcpPilot ? null : new BackupsDb(dynamoDbAsyncClient, configuration.getDynamoDbTables().getBackups().getTableName(), clock);
     final GenericServerSecretParams backupsGenericZkSecretParams;
     try {
       backupsGenericZkSecretParams =
@@ -416,7 +426,7 @@ public record CommandDependencies(
     } catch (InvalidInputException e) {
       throw new IllegalArgumentException(e);
     }
-    final BackupManager backupManager = new BackupManager(
+    final BackupManager backupManager = gcpPilot ? null : new BackupManager(
         backupsDb,
         backupsGenericZkSecretParams,
         rateLimiters,
@@ -431,7 +441,7 @@ public record CommandDependencies(
         clock,
         configuration.getBackupConfiguration());
 
-    final IssuedReceiptsManager issuedReceiptsManager = new IssuedReceiptsManager(
+    final IssuedReceiptsManager issuedReceiptsManager = gcpPilot ? null : new IssuedReceiptsManager(
         configuration.getDynamoDbTables().getIssuedReceipts().getTableName(),
         dynamoDbClient,
         configuration.getDynamoDbTables().getIssuedReceipts().getGenerator(),
@@ -439,12 +449,12 @@ public record CommandDependencies(
 
     final ServerSecretParams zkSecretParams = new ServerSecretParams(configuration.getGroupsZkConfig().serverSecret().value());
     final ServerZkReceiptOperations zkReceiptOperations = new ServerZkReceiptOperations(zkSecretParams);
-    GooglePlayBillingManager googlePlayBillingManager = new GooglePlayBillingManager(
+    GooglePlayBillingManager googlePlayBillingManager = gcpPilot ? null : new GooglePlayBillingManager(
         new ByteArrayInputStream(configuration.getGooglePlayBilling().credentialsJson().getBytes(StandardCharsets.UTF_8)),
         configuration.getGooglePlayBilling().packageName(),
         configuration.getGooglePlayBilling().applicationName(),
         configuration.getGooglePlayBilling().productIdToLevel());
-    AppleAppStoreManager appleAppStoreManager = new AppleAppStoreManager(
+    AppleAppStoreManager appleAppStoreManager = gcpPilot ? null : new AppleAppStoreManager(
         new AppleAppStoreClient(
             configuration.getAppleAppStore().env(),
             configuration.getAppleAppStore().bundleId(),
@@ -456,7 +466,7 @@ public record CommandDependencies(
             configuration.getAppleAppStore().retryConfigurationName()),
         configuration.getAppleAppStore().subscriptionGroupId(),
         configuration.getAppleAppStore().productIdToLevel());
-    final SubscriptionManager subscriptionManager = new SubscriptionManager(
+    final SubscriptionManager subscriptionManager = gcpPilot ? null : new SubscriptionManager(
         new Subscriptions(configuration.getDynamoDbTables().getSubscriptions().getTableName(), dynamoDbClient),
         List.of(googlePlayBillingManager, appleAppStoreManager),
         zkReceiptOperations,
@@ -469,7 +479,7 @@ public record CommandDependencies(
     PushNotificationManager pushNotificationManager = new PushNotificationManager(accountsManager,
         apnSender, fcmSender, pushNotificationScheduler);
     PushNotificationExperimentSamples pushNotificationExperimentSamples =
-        new PushNotificationExperimentSamples(dynamoDbAsyncClient,
+        gcpPilot ? null : new PushNotificationExperimentSamples(dynamoDbAsyncClient,
             configuration.getDynamoDbTables().getPushNotificationExperimentSamples().getTableName(),
             Clock.systemUTC());
 
@@ -479,7 +489,7 @@ public record CommandDependencies(
     environment.lifecycle().manage(apnSender);
     environment.lifecycle().manage(disconnectionRequestManager);
     environment.lifecycle().manage(redisMessageAvailabilityManager);
-    environment.lifecycle().manage(new ManagedAwsCrt());
+    if (!gcpPilot) environment.lifecycle().manage(new ManagedAwsCrt());
 
     return new CommandDependencies(
         accountsManager,

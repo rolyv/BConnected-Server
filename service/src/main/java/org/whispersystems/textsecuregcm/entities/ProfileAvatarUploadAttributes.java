@@ -8,7 +8,7 @@ package org.whispersystems.textsecuregcm.entities;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(description = "Profile avatar upload form (S3 Post Policy, AWS Signature version 4)")
+@Schema(description = "Profile avatar upload form; algorithm selects AWS or Google V4 multipart signing fields")
 public class ProfileAvatarUploadAttributes {
 
   @Schema(description = "Object key for the avatar")
@@ -19,7 +19,7 @@ public class ProfileAvatarUploadAttributes {
   @JsonProperty
   private String credential;
 
-  @Schema(description = "Access control list setting")
+  @Schema(description = "Access control list setting; omit the multipart ACL field when empty")
   @JsonProperty
   private String acl;
 
@@ -27,7 +27,7 @@ public class ProfileAvatarUploadAttributes {
   @JsonProperty
   private String algorithm;
 
-  @Schema(description = "Date in AWS format")
+  @Schema(description = "UTC signing date in V4 basic ISO-8601 format")
   @JsonProperty
   private String date;
 
