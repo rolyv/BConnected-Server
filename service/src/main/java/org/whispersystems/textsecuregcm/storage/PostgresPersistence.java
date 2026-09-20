@@ -31,7 +31,8 @@ public record PostgresPersistence(
     ReportMessagePostgres reportMessages,
     org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceChecksPostgres
         appleDeviceChecks,
-    ClientReleasesPostgres clientReleases) {
+    ClientReleasesPostgres clientReleases,
+    javax.sql.DataSource dataSource) {
   public static PostgresPersistence build(
       final Environment environment,
       final PostgresConfiguration configuration,
@@ -129,6 +130,7 @@ public record PostgresPersistence(
         reportMessages,
         new org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceChecksPostgres(
             dataSource, com.webauthn4j.appattest.DeviceCheckManager.createObjectConverter()),
-        new ClientReleasesPostgres(dataSource));
+        new ClientReleasesPostgres(dataSource),
+        dataSource);
   }
 }

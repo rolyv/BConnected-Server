@@ -87,7 +87,7 @@ import org.whispersystems.textsecuregcm.push.PushNotificationManager;
 import org.whispersystems.textsecuregcm.registration.ClientType;
 import org.whispersystems.textsecuregcm.registration.MessageTransport;
 import org.whispersystems.textsecuregcm.registration.RegistrationFraudException;
-import org.whispersystems.textsecuregcm.registration.RegistrationServiceClient;
+import org.whispersystems.textsecuregcm.registration.RegistrationService;
 import org.whispersystems.textsecuregcm.registration.RegistrationServiceException;
 import org.whispersystems.textsecuregcm.registration.TransportNotAllowedException;
 import org.whispersystems.textsecuregcm.registration.VerificationSession;
@@ -135,7 +135,7 @@ public class VerificationController {
   @VisibleForTesting
   static final String VERIFICATION_CODE_PUSH_NOTIFICATION_EXPERIMENT_NAME = "verificationCodePushNotification";
 
-  private final RegistrationServiceClient registrationServiceClient;
+  private final RegistrationService registrationServiceClient;
   private final VerificationSessionManager verificationSessionManager;
   private final PushNotificationManager pushNotificationManager;
   private final RegistrationCaptchaManager registrationCaptchaManager;
@@ -149,7 +149,7 @@ public class VerificationController {
   private final ExperimentEnrollmentManager experimentEnrollmentManager;
   private final Clock clock;
 
-  public VerificationController(final RegistrationServiceClient registrationServiceClient,
+  public VerificationController(final RegistrationService registrationServiceClient,
       final VerificationSessionManager verificationSessionManager,
       final PushNotificationManager pushNotificationManager,
       final RegistrationCaptchaManager registrationCaptchaManager,
@@ -659,6 +659,8 @@ public class VerificationController {
       } else {
         throw e.getCause();
       }
+    } catch (final StatusRuntimeException e) {
+      throw new ServerErrorException(Response.Status.SERVICE_UNAVAILABLE, e);
     } catch (final RuntimeException e) {
       logger.error("Registration service failure", e);
       throw new ServerErrorException(Response.Status.INTERNAL_SERVER_ERROR);
@@ -731,6 +733,10 @@ public class VerificationController {
       resultSession = registrationServiceClient.checkVerificationCode(registrationServiceSession.id(),
               submitVerificationCodeRequest.code(),
               REGISTRATION_RPC_TIMEOUT);
+    } catch (final IllegalArgumentException e) {
+      throw new BadRequestException("Invalid verification code format");
+    } catch (final StatusRuntimeException e) {
+      throw new ServerErrorException(Response.Status.SERVICE_UNAVAILABLE, e);
     } catch (final VerificationSessionRateLimitExceededException e) {
       throw new ClientErrorException(buildResponseForRateLimitExceeded(verificationSession,
           e.getRegistrationSession(),

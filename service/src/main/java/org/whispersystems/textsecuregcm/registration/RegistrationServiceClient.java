@@ -38,7 +38,7 @@ import org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
 import org.whispersystems.textsecuregcm.controllers.VerificationSessionRateLimitExceededException;
 import org.whispersystems.textsecuregcm.entities.RegistrationServiceSession;
 
-public class RegistrationServiceClient implements Managed {
+public class RegistrationServiceClient implements RegistrationService {
 
   private static final Base64.Encoder BASE64_UNPADDED_ENCODER = Base64.getEncoder().withoutPadding();
 

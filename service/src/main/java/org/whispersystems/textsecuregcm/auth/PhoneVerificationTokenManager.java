@@ -19,7 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.entities.PhoneVerificationRequest;
 import org.whispersystems.textsecuregcm.entities.RegistrationServiceSession;
-import org.whispersystems.textsecuregcm.registration.RegistrationServiceClient;
+import org.whispersystems.textsecuregcm.registration.RegistrationService;
 import org.whispersystems.textsecuregcm.spam.RegistrationRecoveryChecker;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
@@ -32,12 +32,12 @@ public class PhoneVerificationTokenManager {
 
   private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
 
-  private final RegistrationServiceClient registrationServiceClient;
+  private final RegistrationService registrationServiceClient;
   private final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager;
   private final RegistrationRecoveryChecker registrationRecoveryChecker;
 
   public PhoneVerificationTokenManager(final PhoneNumberIdentifierStore phoneNumberIdentifiers,
-      final RegistrationServiceClient registrationServiceClient,
+      final RegistrationService registrationServiceClient,
       final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
       final RegistrationRecoveryChecker registrationRecoveryChecker) {
     this.phoneNumberIdentifiers = phoneNumberIdentifiers;

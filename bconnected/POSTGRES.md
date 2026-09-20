@@ -44,7 +44,7 @@ The `type: file` monitored-object implementation can load dynamic configuration 
 
 ## Schema and cloud connection
 
-Apply all ten migrations with a migration identity before starting the selected backend:
+Apply all eleven migrations with a migration identity before starting the selected backend:
 
 1. [001-postgres.sql](migrations/001-postgres.sql): encrypted envelopes and remote configuration.
 2. [002-ec-prekeys.sql](migrations/002-ec-prekeys.sql): one-time EC keys.
@@ -56,10 +56,11 @@ Apply all ten migrations with a migration identity before starting the selected 
 8. [008-push-challenges.sql](migrations/008-push-challenges.sql): push-challenge records.
 9. [009-apple-device-checks.sql](migrations/009-apple-device-checks.sql): attestation records and global public-key ownership.
 10. [010-client-releases.sql](migrations/010-client-releases.sql): operator-maintained client-release metadata.
+11. [011-telnyx-registration.sql](migrations/011-telnyx-registration.sql): durable provider registration sessions and shared HMAC-keyed quotas.
 
-These define **21 application tables**, excluding the migration ledger. Migration 003 adds six account-related tables. The root BConnected repository's `services/community/scripts/migrate-signal.mjs` applies reviewed migrations with checksums and explicit grants. The server does not change schemas at startup.
+These define **23 application tables**, excluding the migration ledger. Migration 003 adds six account-related tables. The root BConnected repository's `services/community/scripts/migrate-signal.mjs` applies reviewed migrations with checksums and explicit grants. The server does not change schemas at startup.
 
-The 2026-09-20 [cloud evidence](https://github.com/rolyv/BConnected/blob/codex/bconnected-pilot/infra/signal-deployment.json) records all ten migrations applied, all 21 application tables empty, and 81 table grants: SELECT/INSERT/UPDATE/DELETE on 20 tables and SELECT only on `client_releases`. Private Cloud Run execution `bconnected-signal-db-check-8vr9v` passed IAM login and the 21-table probe at `2026-09-20T22:08:13.227303Z`; its synthetic writes were rolled back. Schema isolation and denial of runtime schema creation passed. The probe did not run the Java server or deploy messaging.
+The 2026-09-20 [cloud evidence](https://github.com/rolyv/BConnected/blob/codex/bconnected-pilot/infra/signal-deployment.json) records all eleven migrations applied, all 23 application tables empty, and 89 table grants: SELECT/INSERT/UPDATE/DELETE on 22 tables and SELECT only on `client_releases`. Private Cloud Run execution `bconnected-signal-db-check-r2b4w` passed IAM login and the 23-table probe at `2026-09-20T22:38:12.531408Z`; its synthetic writes were rolled back. Schema isolation and denial of runtime schema creation passed. The probe did not run the Java server or deploy messaging.
 
 The pilot database target is Cloud SQL PostgreSQL 17 at `roly-dev:us-east1:bconnected-postgres`, database `bconnected`. The messaging IAM database username is `bconnected-signal@roly-dev.iam`, separate from the community API identity. Grant schema usage and the table privileges above; the runtime does not need schema-creation or community-schema privileges. Cloud SQL IAM grants are restricted to this instance, and runtime authentication uses no stored database password.
 
@@ -123,4 +124,4 @@ Upstream already supplies GCS attachment uploads through `GcsAttachmentGenerator
 
 No Signal data backfill or dual-write migration exists. An existing deployment would need coordinated writers/readers, data transfer and verification before switching; switching back after PostgreSQL receives writes requires reconciliation.
 
-Before opening the pilot, deploy an owned service composition, configure SMS and APNs, bind approved alumni to Signal identities, and connect the forked iPhone/libsignal networking to owned endpoints. Telnyx Verify is selected, but account access and its registration adapter are pending; no SMS integration is deployed. Validate two real clients exchanging encrypted DMs/group messages, offline redelivery, acknowledgements, suspension and re-registration. The 10,000-member configuration target does not establish 8,000-member capacity.
+Before opening the pilot, deploy an owned service composition, configure SMS and APNs, bind approved alumni to Signal identities, and connect the forked iPhone/libsignal networking to owned endpoints. The [Telnyx registration adapter](TELNYX.md) and PostgreSQL session coordinator passed 99 tests and a live local SMS/code-check probe. Provider credentials/profile and the user-approved $10 daily cap are configured; the Signal service is not deployed. Validate two real clients exchanging encrypted DMs/group messages, offline redelivery, acknowledgements, suspension and re-registration. The 10,000-member configuration target does not establish 8,000-member capacity.

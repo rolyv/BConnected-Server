@@ -8,12 +8,19 @@ package org.whispersystems.textsecuregcm.configuration;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import io.dropwizard.core.setup.Environment;
 import io.dropwizard.jackson.Discoverable;
-import org.whispersystems.textsecuregcm.registration.RegistrationServiceClient;
-import java.util.concurrent.Executor;
+import org.whispersystems.textsecuregcm.registration.RegistrationService;
+import java.time.Clock;
+import javax.annotation.Nullable;
+import javax.sql.DataSource;
 import java.util.concurrent.ScheduledExecutorService;
 
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type", defaultImpl = RegistrationServiceConfiguration.class)
 public interface RegistrationServiceClientFactory extends Discoverable {
 
-  RegistrationServiceClient build(Environment environment, ScheduledExecutorService identityRefreshExecutor);
+  RegistrationService build(Environment environment, ScheduledExecutorService identityRefreshExecutor);
+
+  default RegistrationService build(Environment environment, ScheduledExecutorService identityRefreshExecutor,
+      @Nullable DataSource dataSource, Clock clock) {
+    return build(environment, identityRefreshExecutor);
+  }
 }

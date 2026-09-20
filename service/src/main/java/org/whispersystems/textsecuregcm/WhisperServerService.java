@@ -244,7 +244,7 @@ import org.whispersystems.textsecuregcm.push.RedisMessageAvailabilityManager;
 import org.whispersystems.textsecuregcm.redis.ConnectionEventLogger;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
-import org.whispersystems.textsecuregcm.registration.RegistrationServiceClient;
+import org.whispersystems.textsecuregcm.registration.RegistrationService;
 import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 import org.whispersystems.textsecuregcm.s3.S3MonitoringSupplier;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
@@ -789,8 +789,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             config.getHlrLookupConfiguration().retryConfigurationName(),
             retryExecutor);
 
-    RegistrationServiceClient registrationServiceClient = config.getRegistrationServiceConfiguration()
-        .build(environment, registrationIdentityTokenRefreshExecutor);
+    RegistrationService registrationServiceClient = config.getRegistrationServiceConfiguration()
+        .build(environment, registrationIdentityTokenRefreshExecutor, postgres == null ? null : postgres.dataSource(), clock);
     KeyTransparencyServiceClient keyTransparencyServiceClient = new KeyTransparencyServiceClient(
         config.getKeyTransparencyServiceConfiguration().host(),
         config.getKeyTransparencyServiceConfiguration().port(),
