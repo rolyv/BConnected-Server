@@ -30,7 +30,7 @@ public class KeysManager {
   // KeysController for backwards compatibility
   private static final String GET_KEYS_COUNTER_NAME = MetricsUtil.name(KeysManager.class, "getKeys");
 
-  private final SingleUseECPreKeyStore ecPreKeys;
+  private final SingleUseECPreKeyStorage ecPreKeys;
   private final PagedSingleUseKEMPreKeyStore pagedPqPreKeys;
   private final RepeatedUseECSignedPreKeyStore ecSignedPreKeys;
   private final RepeatedUseKEMSignedPreKeyStore pqLastResortKeys;
@@ -38,7 +38,7 @@ public class KeysManager {
   private static final String  TAKE_PQ_NAME = MetricsUtil.name(KeysManager.class, "takePq");
 
   public KeysManager(
-      final SingleUseECPreKeyStore ecPreKeys,
+      final SingleUseECPreKeyStorage ecPreKeys,
       final PagedSingleUseKEMPreKeyStore pagedPqPreKeys,
       final RepeatedUseECSignedPreKeyStore ecSignedPreKeys,
       final RepeatedUseKEMSignedPreKeyStore pqLastResortKeys) {

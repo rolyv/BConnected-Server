@@ -46,7 +46,7 @@ import software.amazon.awssdk.services.dynamodb.model.ReturnValue;
  * the event that a party wants to begin a session with a device that has no single-use pre-keys remaining, that party
  * may fall back to using the device's repeated-use ("last-resort") signed pre-key instead.
  */
-public class SingleUseECPreKeyStore {
+public class SingleUseECPreKeyStore implements SingleUseECPreKeyStorage {
   private final DynamoDbAsyncClient dynamoDbAsyncClient;
   private final String tableName;
 

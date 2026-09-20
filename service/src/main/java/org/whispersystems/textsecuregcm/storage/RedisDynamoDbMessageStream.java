@@ -20,7 +20,7 @@ import static org.whispersystems.textsecuregcm.metrics.MetricsUtil.name;
 /// A [MessageStream] implementation that produces message from a joint DynamoDB/Redis message store.
 public class RedisDynamoDbMessageStream implements MessageStream {
 
-  private final MessagesDynamoDb messagesDynamoDb;
+  private final PersistentMessageStore messagesDynamoDb;
   private final MessagesCache messagesCache;
 
   private final UUID accountIdentifier;
@@ -36,7 +36,7 @@ public class RedisDynamoDbMessageStream implements MessageStream {
 
   private static final String UUID_VERSION_TAG = "uuidVersion";
 
-  public RedisDynamoDbMessageStream(final MessagesDynamoDb messagesDynamoDb,
+  public RedisDynamoDbMessageStream(final PersistentMessageStore messagesDynamoDb,
       final MessagesCache messagesCache,
       final RedisMessageAvailabilityManager redisMessageAvailabilityManager,
       final UUID accountIdentifier,
@@ -52,7 +52,7 @@ public class RedisDynamoDbMessageStream implements MessageStream {
   }
 
   @VisibleForTesting
-  RedisDynamoDbMessageStream(final MessagesDynamoDb messagesDynamoDb,
+  RedisDynamoDbMessageStream(final PersistentMessageStore messagesDynamoDb,
       final MessagesCache messagesCache,
       final UUID accountIdentifier,
       final Device device,

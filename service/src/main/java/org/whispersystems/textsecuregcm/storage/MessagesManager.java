@@ -76,7 +76,7 @@ public class MessagesManager {
   @VisibleForTesting
   static final String READ_LIVE_MESSAGES_FROM_FOUNDATIONDB_EXPERIMENT_NAME = "foundationDbReadLiveMessages";
 
-  private final MessagesDynamoDb messagesDynamoDb;
+  private final PersistentMessageStore messagesDynamoDb;
   private final MessagesCache messagesCache;
   private final FoundationDbMessageStore foundationDbMessageStore;
   private final RedisMessageAvailabilityManager redisMessageAvailabilityManager;
@@ -86,7 +86,7 @@ public class MessagesManager {
   private final ExperimentEnrollmentManager experimentEnrollmentManager;
 
   public MessagesManager(
-      final MessagesDynamoDb messagesDynamoDb,
+      final PersistentMessageStore messagesDynamoDb,
       final MessagesCache messagesCache,
       final FoundationDbMessageStore foundationDbMessageStore,
       final RedisMessageAvailabilityManager redisMessageAvailabilityManager,

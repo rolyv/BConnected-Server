@@ -40,7 +40,7 @@ import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.ReturnValue;
 import software.amazon.awssdk.services.dynamodb.model.WriteRequest;
 
-public class MessagesDynamoDb extends AbstractDynamoDbStore {
+public class MessagesDynamoDb extends AbstractDynamoDbStore implements PersistentMessageStore {
 
   @VisibleForTesting
   static final String KEY_PARTITION = "H";

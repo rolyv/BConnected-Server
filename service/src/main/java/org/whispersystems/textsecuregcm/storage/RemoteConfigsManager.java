@@ -38,7 +38,7 @@ public class RemoteConfigsManager {
       .map(p -> p.name().toLowerCase())
       .collect(Collectors.toSet());
 
-  public RemoteConfigsManager(final RemoteConfigs remoteConfigs, final Map<String, String> globalConfig) {
+  public RemoteConfigsManager(final RemoteConfigStore remoteConfigs, final Map<String, String> globalConfig) {
     this.remoteConfigSupplier =
         Suppliers.memoizeWithExpiration(remoteConfigs::getAll, 10, TimeUnit.SECONDS);
     this.globalConfig = globalConfig;

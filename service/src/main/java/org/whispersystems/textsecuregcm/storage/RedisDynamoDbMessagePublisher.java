@@ -29,7 +29,7 @@ import reactor.core.publisher.Flux;
 /// messages.
 class RedisDynamoDbMessagePublisher implements MessageAvailabilityListener, Flow.Publisher<MessageStreamEntry> {
 
-  private final MessagesDynamoDb messagesDynamoDb;
+  private final PersistentMessageStore messagesDynamoDb;
   private final MessagesCache messagesCache;
   private final RedisMessageAvailabilityManager redisMessageAvailabilityManager;
 
@@ -131,7 +131,7 @@ class RedisDynamoDbMessagePublisher implements MessageAvailabilityListener, Flow
     }
   }
 
-  RedisDynamoDbMessagePublisher(final MessagesDynamoDb messagesDynamoDb,
+  RedisDynamoDbMessagePublisher(final PersistentMessageStore messagesDynamoDb,
       final MessagesCache messagesCache,
       final RedisMessageAvailabilityManager redisMessageAvailabilityManager,
       final UUID accountIdentifier,

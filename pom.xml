@@ -110,6 +110,12 @@
   <dependencyManagement>
     <!-- note: order matters, and earlier declarations take precedence -->
     <dependencies>
+      <!-- pgJDBC and Google Cloud clients must use one annotations version. -->
+      <dependency>
+        <groupId>org.checkerframework</groupId>
+        <artifactId>checker-qual</artifactId>
+        <version>3.55.1</version>
+      </dependency>
       <!-- use a pinned version of jackson, rather than Dropwizard's BOM -->
       <dependency>
         <groupId>com.fasterxml.jackson</groupId>

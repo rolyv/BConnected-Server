@@ -74,6 +74,14 @@ import org.whispersystems.websocket.configuration.WebSocketConfiguration;
 // @noinspection MismatchedQueryAndUpdateOfCollection, WeakerAccess
 public class WhisperServerConfiguration extends Configuration {
 
+  @Valid
+  @JsonProperty
+  private org.whispersystems.textsecuregcm.configuration.PostgresConfiguration postgres;
+
+  public org.whispersystems.textsecuregcm.configuration.PostgresConfiguration getPostgresConfiguration() {
+    return postgres;
+  }
+
   @NotNull
   @Valid
   @JsonProperty

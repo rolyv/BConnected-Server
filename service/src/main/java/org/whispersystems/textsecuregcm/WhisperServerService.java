@@ -270,6 +270,8 @@ import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.KeysManager;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
 import org.whispersystems.textsecuregcm.storage.MessagesDynamoDb;
+import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
+import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.OneTimeDonationsManager;
 import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
@@ -284,6 +286,7 @@ import org.whispersystems.textsecuregcm.storage.ProfilesV2;
 import org.whispersystems.textsecuregcm.storage.PushChallengeDynamoDb;
 import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigs;
+import org.whispersystems.textsecuregcm.storage.RemoteConfigStore;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigsManager;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
@@ -590,8 +593,12 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         .region(Region.of(config.getPagedSingleUseKEMPreKeyStore().region()))
         .endpointOverride(config.getPagedSingleUseKEMPreKeyStore().endpointOverride())
         .build();
+    final PostgresPersistence postgres = config.getPostgresConfiguration() == null ? null
+        : PostgresPersistence.build(environment, config.getPostgresConfiguration(),
+            config.getDynamoDbTables().getMessages().getExpiration(), messageDeletionAsyncExecutor);
     KeysManager keysManager = new KeysManager(
-        new SingleUseECPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcKeys().getTableName()),
+        postgres != null ? postgres.ecPreKeys()
+            : new SingleUseECPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcKeys().getTableName()),
         new PagedSingleUseKEMPreKeyStore(
             dynamoDbAsyncClient,
             asyncKeysS3Client,
@@ -599,11 +606,11 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             config.getPagedSingleUseKEMPreKeyStore().bucket()),
         new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
         new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getKemLastResortKeys().getTableName()));
-    MessagesDynamoDb messagesDynamoDb = new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
+    PersistentMessageStore messagesDynamoDb = postgres != null ? postgres.messages() : new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         config.getDynamoDbTables().getMessages().getTableName(),
         config.getDynamoDbTables().getMessages().getExpiration(),
         messageDeletionAsyncExecutor);
-    RemoteConfigs remoteConfigs = new RemoteConfigs(dynamoDbClient,
+    RemoteConfigStore remoteConfigs = postgres != null ? postgres.remoteConfigs() : new RemoteConfigs(dynamoDbClient,
         config.getDynamoDbTables().getRemoteConfig().getTableName());
     PushChallengeDynamoDb pushChallengeDynamoDb = new PushChallengeDynamoDb(dynamoDbClient,
         config.getDynamoDbTables().getPushChallenge().getTableName());

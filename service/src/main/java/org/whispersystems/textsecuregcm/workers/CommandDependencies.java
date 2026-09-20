@@ -68,6 +68,8 @@ import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.KeysManager;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
 import org.whispersystems.textsecuregcm.storage.MessagesDynamoDb;
+import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
+import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
@@ -307,14 +309,18 @@ public record CommandDependencies(
         dynamoDbAsyncClient, asyncKeysS3Client,
         configuration.getDynamoDbTables().getPagedKemKeys().getTableName(),
         configuration.getPagedSingleUseKEMPreKeyStore().bucket());
+    final PostgresPersistence postgres = configuration.getPostgresConfiguration() == null ? null
+        : PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
+            configuration.getDynamoDbTables().getMessages().getExpiration(), messageDeletionExecutor);
     KeysManager keys = new KeysManager(
-        new SingleUseECPreKeyStore(dynamoDbAsyncClient, configuration.getDynamoDbTables().getEcKeys().getTableName()),
+        postgres != null ? postgres.ecPreKeys()
+            : new SingleUseECPreKeyStore(dynamoDbAsyncClient, configuration.getDynamoDbTables().getEcKeys().getTableName()),
         pagedSingleUseKEMPreKeyStore,
         new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient,
             configuration.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
         new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
             configuration.getDynamoDbTables().getKemLastResortKeys().getTableName()));
-    MessagesDynamoDb messagesDynamoDb = new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
+    PersistentMessageStore messagesDynamoDb = postgres != null ? postgres.messages() : new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         configuration.getDynamoDbTables().getMessages().getTableName(),
         configuration.getDynamoDbTables().getMessages().getExpiration(),
         messageDeletionExecutor);

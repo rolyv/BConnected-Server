@@ -21,7 +21,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-public class RemoteConfigs {
+public class RemoteConfigs implements RemoteConfigStore {
 
   private final DynamoDbClient dynamoDbClient;
   private final String tableName;
