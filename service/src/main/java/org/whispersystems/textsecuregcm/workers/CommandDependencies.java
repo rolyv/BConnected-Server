@@ -58,6 +58,7 @@ import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
 import org.whispersystems.textsecuregcm.storage.AccountLockManager;
 import org.whispersystems.textsecuregcm.storage.Accounts;
+import org.whispersystems.textsecuregcm.storage.AccountStore;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
@@ -77,6 +78,7 @@ import org.whispersystems.textsecuregcm.storage.SingleUseKEMPreKeyStorage;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatars;
 import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
@@ -89,6 +91,7 @@ import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageDynamoDb;
+import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.storage.SingleUseECPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
@@ -151,53 +154,60 @@ public record CommandDependencies(
 
     environment.getObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    final FDB fdb = FDB.selectAPIVersion(FoundationDbVersion.getFoundationDbApiVersion());
-
-    // Jetty and the FoundationDB client both register shutdown hooks to begin shutdown/cleanup operations. There isn't
-    // a good way to coordinate or enforce ordering between shutdown hooks, and so the two processes will race.
-    // Generally, FoundationDB will shut down before Jetty does, meaning we'll still be trying to serve requests that
-    // require talking to FoundationDB even though FoundationDB has shut down. To avoid that scenario, we disabled
-    // FoundationDB's shutdown hook and let the JVM terminate its (daemon) threads at exit. This isn't as graceful as
-    // we'd like, but is the least bad option given current constraints.
-    fdb.disableShutdownHook();
-
-    final FoundationDbExternalClientConfiguration externalClientConfiguration = configuration.getFoundationDbMessagesConfiguration()
-        .externalClientConfiguration();
-    if (externalClientConfiguration != null) {
-      // If threadsPerClient is not specified, we default to the cluster size so that there is 1:1 correspondence between
-      // Database objects and threads.
-      final int clientThreadsPerVersion = externalClientConfiguration.threadsPerClient()
-          .orElseGet(() -> configuration.getFoundationDbMessagesConfiguration().clusters().size());
-      externalClientConfiguration.clientLibraryPaths().forEach(path -> fdb.options().setExternalClientLibrary(path));
-      fdb.options().setClientThreadsPerVersion(clientThreadsPerVersion);
-    }
-
+    final FDB fdb;
     final Map<Integer, List<FaultTolerantDatabase>> messageDatabasesByEpoch;
-    {
-      final Map<String, FaultTolerantDatabase> faultTolerantDatabasesByName =
-          configuration.getFoundationDbMessagesConfiguration().clusters().entrySet().stream()
-              .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey,
-                  entry -> {
-                    try {
-                      final Database database = entry.getValue().build(fdb);
-                      database.options().setMaxWatches(configuration.getFoundationDbMessagesConfiguration().maxWatchesPerClient());
-                      database.options().setTransactionTimeout(
-                          configuration.getFoundationDbMessagesConfiguration().transactionTimeout().toMillis());
-                      database.options().setTransactionRetryLimit(
-                          configuration.getFoundationDbMessagesConfiguration().transactionRetryLimit());
+    if (configuration.getPostgresConfiguration() == null) {
+      fdb = FDB.selectAPIVersion(FoundationDbVersion.getFoundationDbApiVersion());
 
-                      return new FaultTolerantDatabase(database, entry.getKey(),
-                          configuration.getFoundationDbMessagesConfiguration().circuitBreakerConfigurationName());
-                    } catch (final IOException e) {
-                      throw new UncheckedIOException("Failed to construct FoundationDB database", e);
-                    }
-                  }));
+      // Jetty and the FoundationDB client both register shutdown hooks to begin shutdown/cleanup operations. There isn't
+      // a good way to coordinate or enforce ordering between shutdown hooks, and so the two processes will race.
+      // Generally, FoundationDB will shut down before Jetty does, meaning we'll still be trying to serve requests that
+      // require talking to FoundationDB even though FoundationDB has shut down. To avoid that scenario, we disabled
+      // FoundationDB's shutdown hook and let the JVM terminate its (daemon) threads at exit. This isn't as graceful as
+      // we'd like, but is the least bad option given current constraints.
+      fdb.disableShutdownHook();
 
-      messageDatabasesByEpoch = configuration.getFoundationDbMessagesConfiguration().epochs().entrySet().stream()
-          .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey,
-              entry -> entry.getValue().stream()
-                  .map(faultTolerantDatabasesByName::get)
-                  .toList()));
+      final FoundationDbExternalClientConfiguration externalClientConfiguration = configuration.getFoundationDbMessagesConfiguration()
+          .externalClientConfiguration();
+      if (externalClientConfiguration != null) {
+        // If threadsPerClient is not specified, we default to the cluster size so that there is 1:1 correspondence between
+        // Database objects and threads.
+        final int clientThreadsPerVersion = externalClientConfiguration.threadsPerClient()
+            .orElseGet(() -> configuration.getFoundationDbMessagesConfiguration().clusters().size());
+        externalClientConfiguration.clientLibraryPaths().forEach(path -> fdb.options().setExternalClientLibrary(path));
+        fdb.options().setClientThreadsPerVersion(clientThreadsPerVersion);
+      }
+
+      {
+        final Map<String, FaultTolerantDatabase> faultTolerantDatabasesByName =
+            configuration.getFoundationDbMessagesConfiguration().clusters().entrySet().stream()
+                .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey,
+                    entry -> {
+                      try {
+                        final Database database = entry.getValue().build(fdb);
+                        database.options().setMaxWatches(configuration.getFoundationDbMessagesConfiguration().maxWatchesPerClient());
+                        database.options().setTransactionTimeout(
+                            configuration.getFoundationDbMessagesConfiguration().transactionTimeout().toMillis());
+                        database.options().setTransactionRetryLimit(
+                            configuration.getFoundationDbMessagesConfiguration().transactionRetryLimit());
+
+                        return new FaultTolerantDatabase(database, entry.getKey(),
+                            configuration.getFoundationDbMessagesConfiguration().circuitBreakerConfigurationName());
+                      } catch (final IOException e) {
+                        throw new UncheckedIOException("Failed to construct FoundationDB database", e);
+                      }
+                    }));
+
+        messageDatabasesByEpoch = configuration.getFoundationDbMessagesConfiguration().epochs().entrySet().stream()
+            .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey,
+                entry -> entry.getValue().stream()
+                    .map(faultTolerantDatabasesByName::get)
+                    .toList()));
+      }
+
+    } else {
+      fdb = null;
+      messageDatabasesByEpoch = Map.of();
     }
 
     final AwsCredentialsProvider awsCredentialsProvider = configuration.getAwsCredentialsConfiguration().build();
@@ -278,7 +288,10 @@ public record CommandDependencies(
         .build();
 
 
-    PhoneNumberRecoveryPasswords phoneNumberRecoveryPasswords = new PhoneNumberRecoveryPasswords(
+    final PostgresPersistence postgres = configuration.getPostgresConfiguration() == null ? null
+        : PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
+            configuration.getDynamoDbTables().getMessages().getExpiration(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, configuration.getDynamoDbTables().getRegistrationRecovery().getExpiration(), configuration.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionExecutor);
+    PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres != null ? postgres.recoveryPasswords() : new PhoneNumberRecoveryPasswords(
         configuration.getDynamoDbTables().getRegistrationRecovery().getTableName(),
         configuration.getDynamoDbTables().getRegistrationRecovery().getExpiration(),
         dynamoDbClient,
@@ -288,7 +301,7 @@ public record CommandDependencies(
         configuration.getDynamoDbTables().getRedeemedReceipts().getTableName(),
         dynamoDbClient);
 
-    Accounts accounts = new Accounts(
+    AccountStore accounts = postgres != null ? postgres.accounts() : new Accounts(
         clock,
         dynamoDbClient,
         dynamoDbAsyncClient,
@@ -299,9 +312,7 @@ public record CommandDependencies(
         configuration.getDynamoDbTables().getAccounts().getUsernamesTableName(),
         configuration.getDynamoDbTables().getDeletedAccounts().getTableName(),
         configuration.getDynamoDbTables().getAccounts().getUsedLinkDeviceTokensTableName());
-    final PostgresPersistence postgres = configuration.getPostgresConfiguration() == null ? null
-        : PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
-            configuration.getDynamoDbTables().getMessages().getExpiration(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, clock, messageDeletionExecutor);
+
     PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres != null ? postgres.phoneNumbers() : new PhoneNumberIdentifiers(dynamoDbAsyncClient,
         configuration.getDynamoDbTables().getPhoneNumberIdentifiers().getTableName());
 
@@ -324,9 +335,9 @@ public record CommandDependencies(
         postgres != null ? postgres.ecPreKeys()
             : new SingleUseECPreKeyStore(dynamoDbAsyncClient, configuration.getDynamoDbTables().getEcKeys().getTableName()),
         pagedSingleUseKEMPreKeyStore,
-        new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient,
+        postgres != null ? postgres.signedEcKeys() : new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient,
             configuration.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
-        new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
+        postgres != null ? postgres.signedKemKeys() : new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
             configuration.getDynamoDbTables().getKemLastResortKeys().getTableName()));
     PersistentMessageStore messagesDynamoDb = postgres != null ? postgres.messages() : new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         configuration.getDynamoDbTables().getMessages().getTableName(),
@@ -354,7 +365,7 @@ public record CommandDependencies(
         disconnectionRequestListenerExecutor, retryExecutor);
     MessagesCache messagesCache = new MessagesCache(messagesCluster,
         messageDeliveryScheduler, messageDeletionExecutor, retryExecutor, Clock.systemUTC());
-    final FoundationDbMessageStore foundationDbMessageStore = new FoundationDbMessageStore(messageDatabasesByEpoch,
+    final FoundationDbMessageStore foundationDbMessageStore = postgres != null ? null : new FoundationDbMessageStore(messageDatabasesByEpoch,
         configuration.getFoundationDbMessagesConfiguration().activeEpoch(),
         new VersionstampUUIDCipher(configuration.getFoundationDbMessagesConfiguration().currentVersionstampCipherKey(),
             configuration.getFoundationDbMessagesConfiguration().versionstampCipherKeys().get(configuration.getFoundationDbMessagesConfiguration().currentVersionstampCipherKey()).value()),
@@ -364,7 +375,7 @@ public record CommandDependencies(
         configuration.getFoundationDbMessagesConfiguration().batchPriorityTransactionRetryLimit());
     ProfilesManager profilesManager = new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
         configuration.getCdnConfiguration().bucket());
-    ReportMessageDynamoDb reportMessageDynamoDb = new ReportMessageDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
+    ReportMessageStore reportMessageDynamoDb = postgres != null ? postgres.reportMessages() : new ReportMessageDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         configuration.getDynamoDbTables().getReportMessage().getTableName(),
         configuration.getReportMessageConfiguration().getReportTtl());
     ReportMessageManager reportMessageManager = new ReportMessageManager(reportMessageDynamoDb, rateLimitersCluster,
@@ -374,7 +385,7 @@ public record CommandDependencies(
     final MessagesManager messagesManager =
         new MessagesManager(messagesDynamoDb, messagesCache, foundationDbMessageStore, redisMessageAvailabilityManager,
             reportMessageManager, messageDeletionExecutor, Clock.systemUTC(), experimentEnrollmentManager);
-    AccountLockManager accountLockManager = new AccountLockManager(dynamoDbClient,
+    AccountLockManager accountLockManager = postgres != null ? postgres.accountLocks() : new AccountLockManager(dynamoDbClient,
         configuration.getDynamoDbTables().getDeletedAccountsLock().getTableName());
     PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager =
         new PhoneNumberRecoveryPasswordsManager(phoneNumberRecoveryPasswords);

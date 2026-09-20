@@ -20,12 +20,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.whispersystems.textsecuregcm.s3.S3ObjectMonitor;
+import org.whispersystems.textsecuregcm.s3.ObjectMonitor;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
 
 public class DynamicConfigurationManager<T> {
 
-  private final S3ObjectMonitor configMonitor;
+  private final ObjectMonitor configMonitor;
   private final Class<T> configurationClass;
 
   // Set on initial config fetch
@@ -40,7 +40,7 @@ public class DynamicConfigurationManager<T> {
 
   private static final Logger logger = LoggerFactory.getLogger(DynamicConfigurationManager.class);
 
-  public DynamicConfigurationManager(final S3ObjectMonitor configMonitor, final Class<T> configurationClass) {
+  public DynamicConfigurationManager(final ObjectMonitor configMonitor, final Class<T> configurationClass) {
     this.configMonitor = configMonitor;
     this.configurationClass = configurationClass;
   }
@@ -62,7 +62,7 @@ public class DynamicConfigurationManager<T> {
 
     this.configMonitor.start(this::receiveConfiguration);
 
-    // Starting an S3ObjectMonitor immediately does a blocking retrieve of the data, but it might
+    // Starting the object monitor immediately does a blocking retrieve of the data, but it might
     // fail to parse, in which case we wait for an update (which will happen on another thread) to
     // give us a valid configuration before marking ourselves ready
     while (configuration.get() == null) {

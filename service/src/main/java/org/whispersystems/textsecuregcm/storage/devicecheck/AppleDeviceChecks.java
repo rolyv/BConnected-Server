@@ -4,22 +4,10 @@
  */
 package org.whispersystems.textsecuregcm.storage.devicecheck;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.webauthn4j.appattest.authenticator.DCAppleDevice;
-import com.webauthn4j.appattest.authenticator.DCAppleDeviceImpl;
-import com.webauthn4j.appattest.data.attestation.statement.AppleAppAttestAttestationStatement;
-import com.webauthn4j.converter.AttestedCredentialDataConverter;
 import com.webauthn4j.converter.util.ObjectConverter;
-import com.webauthn4j.data.attestation.authenticator.AttestedCredentialData;
-import com.webauthn4j.data.attestation.statement.AttestationStatement;
-import com.webauthn4j.data.extension.authenticator.AuthenticationExtensionsAuthenticatorOutputs;
-import com.webauthn4j.data.extension.authenticator.RegistrationExtensionAuthenticatorOutput;
-import java.security.PublicKey;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.util.AttributeValues;
@@ -47,7 +35,7 @@ import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
  *
  * @implNote We use a second table keyed on the public key to enforce uniqueness.
  */
-public class AppleDeviceChecks {
+public class AppleDeviceChecks implements AppleDeviceCheckStore {
 
   // B: uuid, primary key
   public static final String KEY_ACCOUNT_UUID = "U";
@@ -70,7 +58,7 @@ public class AppleDeviceChecks {
   private final DynamoDbClient dynamoDbClient;
   private final String deviceCheckTableName;
   private final String publicKeyConstraintTableName;
-  private final ObjectConverter objectConverter;
+  private final AppleDeviceCheckCodec codec;
 
   public AppleDeviceChecks(
       final DynamoDbClient dynamoDbClient,
@@ -78,7 +66,7 @@ public class AppleDeviceChecks {
       final String deviceCheckTableName,
       final String publicKeyConstraintTableName) {
     this.dynamoDbClient = dynamoDbClient;
-    this.objectConverter = objectConverter;
+    this.codec = new AppleDeviceCheckCodec(objectConverter);
     this.deviceCheckTableName = deviceCheckTableName;
     this.publicKeyConstraintTableName = publicKeyConstraintTableName;
   }
@@ -135,7 +123,7 @@ public class AppleDeviceChecks {
           TransactWriteItem.builder().put(Put.builder()
               .tableName(publicKeyConstraintTableName)
               .item(Map.of(
-                  KEY_PUBLIC_KEY, AttributeValues.fromByteArray(extractPublicKey(appleDevice).getEncoded()),
+                  KEY_PUBLIC_KEY, AttributeValues.fromByteArray(AppleDeviceCheckCodec.publicKey(appleDevice).getEncoded()),
                   KEY_ACCOUNT_UUID, AttributeValues.fromUUID(account.getAccountIdentifier())
               ))
               // Enforces public key uniqueness, as described in https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server#Store-the-public-key-and-receipt
@@ -205,63 +193,25 @@ public class AppleDeviceChecks {
   }
 
   private Map<String, AttributeValue> toItem(final Account account, final byte[] keyId, DCAppleDevice appleDevice) {
-    // Serialize the various data members, see: https://webauthn4j.github.io/webauthn4j/en/#deep-dive
-    final AttestedCredentialDataConverter attestedCredentialDataConverter =
-        new AttestedCredentialDataConverter(objectConverter);
-    final byte[] attestedCredentialData =
-        attestedCredentialDataConverter.convert(appleDevice.getAttestedCredentialData());
-    final byte[] attestationStatement = objectConverter.getCborConverter()
-        .writeValueAsBytes(new AttestationStatementEnvelope(appleDevice.getAttestationStatement()));
-    final long counter = appleDevice.getCounter();
-    final byte[] authenticatorExtensions = objectConverter.getCborConverter()
-        .writeValueAsBytes(appleDevice.getAuthenticatorExtensions());
-
+    final AppleDeviceCheckCodec.Encoded encoded = codec.encode(appleDevice);
     return Map.of(
         KEY_ACCOUNT_UUID, AttributeValues.fromUUID(account.getAccountIdentifier()),
         KEY_PUBLIC_KEY_ID, AttributeValues.fromByteArray(keyId),
-        ATTR_CRED_DATA, AttributeValues.fromByteArray(attestedCredentialData),
-        ATTR_STATEMENT, AttributeValues.fromByteArray(attestationStatement),
-        ATTR_AUTHENTICATOR_EXTENSIONS, AttributeValues.fromByteArray(authenticatorExtensions),
-        ATTR_COUNTER, AttributeValues.n(counter));
+        ATTR_CRED_DATA, AttributeValues.fromByteArray(encoded.credentialData()),
+        ATTR_STATEMENT, AttributeValues.fromByteArray(encoded.statement()),
+        ATTR_AUTHENTICATOR_EXTENSIONS, AttributeValues.fromByteArray(encoded.extensions()),
+        ATTR_COUNTER, AttributeValues.n(encoded.counter()));
   }
 
   private DCAppleDevice fromItem(final Map<String, AttributeValue> item) {
-    // Deserialize the fields stored in dynamodb, see: https://webauthn4j.github.io/webauthn4j/en/#deep-dive
-
-    final AttestedCredentialDataConverter attestedCredentialDataConverter =
-        new AttestedCredentialDataConverter(objectConverter);
-
-    final AttestedCredentialData credData = attestedCredentialDataConverter.convert(getByteArray(item, ATTR_CRED_DATA)
-        .orElseThrow(() -> new IllegalStateException("Stored device check key missing attestation credential data")));
-
-    // The attestationStatement is an interface, so we also need to encode enough type information (the format)
-    // so we know how to deserialize the statement. See https://webauthn4j.github.io/webauthn4j/en/#attestationstatement
-    final byte[] serializedStatementEnvelope = getByteArray(item, ATTR_STATEMENT)
-        .orElseThrow(() -> new IllegalStateException("Stored device check key missing attestation statement"));
-    final AttestationStatement statement = Optional.ofNullable(objectConverter.getCborConverter()
-            .readValue(serializedStatementEnvelope, AttestationStatementEnvelope.class))
-        .orElseThrow(() -> new IllegalStateException("Stored device check key missing attestation statement"))
-        .getAttestationStatement();
-
-    final long counter = AttributeValues.getLong(item, ATTR_COUNTER, 0);
-
-    final byte[] serializedExtensions = getByteArray(item, ATTR_AUTHENTICATOR_EXTENSIONS)
-        .orElseThrow(() -> new IllegalStateException("Stored device check key missing attestation extensions"));
-
-    @SuppressWarnings("unchecked") final AuthenticationExtensionsAuthenticatorOutputs<RegistrationExtensionAuthenticatorOutput> extensions = objectConverter.getCborConverter()
-        .readValue(serializedExtensions, AuthenticationExtensionsAuthenticatorOutputs.class);
-
-    return new DCAppleDeviceImpl(credData, statement, counter, extensions);
-  }
-
-  private static PublicKey extractPublicKey(DCAppleDevice appleDevice) {
-    // This is the leaf public key as described here:
-    // https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server#Verify-the-attestation
-    // We know the sha256 of the public key matches the keyId, the apple webauthn verifier validates that. Step 5 here:
-    // https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide#Walking-through-the-validation-steps
-    final AppleAppAttestAttestationStatement attestationStatement = ((AppleAppAttestAttestationStatement) appleDevice.getAttestationStatement());
-    Objects.requireNonNull(attestationStatement);
-    return attestationStatement.getX5c().getEndEntityAttestationCertificate().getCertificate().getPublicKey();
+    return codec.decode(
+        getByteArray(item, ATTR_CRED_DATA)
+            .orElseThrow(() -> new IllegalStateException("Stored device check key missing attestation credential data")),
+        getByteArray(item, ATTR_STATEMENT)
+            .orElseThrow(() -> new IllegalStateException("Stored device check key missing attestation statement")),
+        getByteArray(item, ATTR_AUTHENTICATOR_EXTENSIONS)
+            .orElseThrow(() -> new IllegalStateException("Stored device check key missing attestation extensions")),
+        AttributeValues.getLong(item, ATTR_COUNTER, 0));
   }
 
 
@@ -271,34 +221,6 @@ public class AppleDeviceChecks {
 
   private static Optional<byte[]> getByteArray(Map<String, AttributeValue> item, String key) {
     return AttributeValues.get(item, key).map(av -> av.b().asByteArray());
-  }
-
-  /**
-   * Wrapper that provides type information when deserializing attestation statements
-   */
-  private static class AttestationStatementEnvelope {
-
-    @JsonProperty("attStmt")
-    @JsonTypeInfo(
-        use = JsonTypeInfo.Id.NAME,
-        include = JsonTypeInfo.As.EXTERNAL_PROPERTY,
-        property = "fmt"
-    )
-    private AttestationStatement attestationStatement;
-
-    @JsonCreator
-    public AttestationStatementEnvelope(@JsonProperty("attStmt") AttestationStatement attestationStatement) {
-      this.attestationStatement = attestationStatement;
-    }
-
-    @JsonProperty("fmt")
-    public String getFormat() {
-      return attestationStatement.getFormat();
-    }
-
-    public AttestationStatement getAttestationStatement() {
-      return attestationStatement;
-    }
   }
 
 }

@@ -30,7 +30,7 @@ import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
  * Each {@link Account} may have one or more {@link Device devices}. Each "active" (i.e. those that have completed
  * provisioning and are capable of sending and receiving messages) must have exactly one "last resort" pre-key.
  */
-public abstract class RepeatedUseSignedPreKeyStore<K extends SignedPreKey<?>> {
+public abstract class RepeatedUseSignedPreKeyStore<K extends SignedPreKey<?>> implements SignedPreKeyStore<K> {
 
   private final DynamoDbAsyncClient dynamoDbAsyncClient;
   private final String tableName;
@@ -77,6 +77,16 @@ public abstract class RepeatedUseSignedPreKeyStore<K extends SignedPreKey<?>> {
             .item(getItemFromPreKey(identifier, deviceId, preKey))
             .build())
         .build();
+  }
+
+  @Override
+  public AccountMutation buildInsertion(final UUID identifier, final byte deviceId, final K preKey) {
+    return new AccountMutation.Dynamo(buildTransactWriteItemForInsertion(identifier, deviceId, preKey));
+  }
+
+  @Override
+  public AccountMutation buildDeletion(final UUID identifier, final byte deviceId) {
+    return new AccountMutation.Dynamo(buildTransactWriteItemForDeletion(identifier, deviceId));
   }
 
   public TransactWriteItem buildTransactWriteItemForDeletion(final UUID identifier, final byte deviceId) {

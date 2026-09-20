@@ -202,7 +202,7 @@ class AccountsManagerTest {
       account.setNumber(number, phoneNumberIdentifier);
 
       return null;
-    }).when(accounts).changeNumber(any(), anyString(), any(), any(), any());
+    }).when(accounts).changeNumberWithMutations(any(), anyString(), any(), any(), any());
 
     final SecureStorageClient storageClient = mock(SecureStorageClient.class);
     when(storageClient.deleteStoredData(any(UUID.class))).thenReturn(CompletableFuture.completedFuture(null));
@@ -838,7 +838,7 @@ class AccountsManagerTest {
   @ValueSource(booleans = {false, true})
   void testCreateFreshAccount(final boolean hasE164)
       throws AccountAlreadyExistsException, ReceiptAlreadyRedeemedException {
-    when(accounts.create(any(), any())).thenReturn(true);
+    when(accounts.createWithMutations(any(), any())).thenReturn(true);
 
     final Optional<String> maybeE164 = hasE164 ? Optional.of("+18005550123") : Optional.empty();
     final Integer pniRegistrationId = hasE164 ? 2 : null;
@@ -868,9 +868,9 @@ class AccountsManagerTest {
         });
 
     if (maybeE164.isPresent()) {
-      verify(accounts).create(argThat(account -> maybeE164.equals(account.getNumber())), any());
+      verify(accounts).createWithMutations(argThat(account -> maybeE164.equals(account.getNumber())), any());
     } else {
-      verify(accounts).create(argThat(account -> account.getNumber().isEmpty()), any(), any(), any());
+      verify(accounts).createWithMutations(argThat(account -> account.getNumber().isEmpty()), any(), any(), any());
     }
     verify(keysManager).buildWriteItemsForNewDevice(
         eq(createdAccount.getAccountIdentifier()),
@@ -918,12 +918,12 @@ class AccountsManagerTest {
     };
 
     if (maybeE164.isPresent()) {
-      when(accounts.create(any(), any())).thenAnswer(existingAccountAnswer);
+      when(accounts.createWithMutations(any(), any())).thenAnswer(existingAccountAnswer);
     } else {
-      when(accounts.create(any(), any(), any(), any())).thenAnswer(existingAccountAnswer);
+      when(accounts.createWithMutations(any(), any(), any(), any())).thenAnswer(existingAccountAnswer);
     }
 
-    when(accounts.reclaimAccount(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
+    when(accounts.reclaimWithMutations(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
 
     final Account reregisteredAccount = maybeE164.isPresent()
         ? createAccount(maybeE164.get(), attributes)
@@ -948,10 +948,10 @@ class AccountsManagerTest {
 
     if (maybeE164.isPresent()) {
       verify(accounts)
-          .create(argThat(account -> existingUuid.equals(account.getAccountIdentifier())), any());
+          .createWithMutations(argThat(account -> existingUuid.equals(account.getAccountIdentifier())), any());
     } else {
       verify(accounts)
-          .create(argThat(account -> existingUuid.equals(account.getAccountIdentifier())), any(), any(), any());
+          .createWithMutations(argThat(account -> existingUuid.equals(account.getAccountIdentifier())), any(), any(), any());
     }
 
     verify(keysManager).buildWriteItemsForNewDevice(
@@ -1034,7 +1034,7 @@ class AccountsManagerTest {
         Optional.empty(),
         Optional.empty());
 
-    when(accounts.reclaimAccount(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
+    when(accounts.reclaimWithMutations(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
 
     final Account reclaimedAccount = accountsManager.recover(existingAccount,
         accountAttributes,
@@ -1061,7 +1061,7 @@ class AccountsManagerTest {
     assertTrue(reclaimedAccount.getAccountRecoveryPassword().orElseThrow().verify(HexFormat.of().formatHex(recoveryPassword)));
     assertTrue(reclaimedPrimaryDevice.getAuthTokenHash().verify(primaryDeviceSpec.password()));
 
-    verify(accounts).reclaimAccount(eq(existingAccount), argThat(account -> existingAccount.getAccountIdentifier().equals(account.getAccountIdentifier())), any());
+    verify(accounts).reclaimWithMutations(eq(existingAccount), argThat(account -> existingAccount.getAccountIdentifier().equals(account.getAccountIdentifier())), any());
 
     verify(keysManager).buildWriteItemsForNewDevice(
         eq(reclaimedAccount.getAccountIdentifier()),
@@ -1178,14 +1178,14 @@ class AccountsManagerTest {
     final UUID recentlyDeletedUuid = UUID.randomUUID();
 
     when(accounts.findRecentlyDeletedAccountIdentifier(any())).thenReturn(Optional.of(recentlyDeletedUuid));
-    when(accounts.create(any(), any())).thenReturn(true);
+    when(accounts.createWithMutations(any(), any())).thenReturn(true);
 
     final String e164 = "+18005550123";
     final AccountAttributes attributes = new AccountAttributes(false, 1, 2, null, null, true, null, null);
 
     final Account account = createAccount(e164, attributes);
 
-    verify(accounts).create(
+    verify(accounts).createWithMutations(
         argThat(a -> e164.equals(a.getNumber().get()) && recentlyDeletedUuid.equals(a.getAccountIdentifier())),
         any());
 

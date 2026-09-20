@@ -42,6 +42,7 @@ import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsMana
 import org.whispersystems.textsecuregcm.tests.util.AccountsHelper;
 import org.whispersystems.textsecuregcm.util.Pair;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import org.whispersystems.textsecuregcm.storage.AccountMutation;
 
 class RegistrationLockVerificationManagerTest {
 
@@ -87,7 +88,7 @@ class RegistrationLockVerificationManagerTest {
     when(account.getRegistrationLock()).thenReturn(existingRegistrationLock);
 
     when(phoneNumberRecoveryPasswordsManager.buildTransactWriteItemForRemovePassword(any()))
-        .thenReturn(TransactWriteItem.builder().build());
+        .thenReturn(new AccountMutation.Dynamo(TransactWriteItem.builder().build()));
   }
 
   @ParameterizedTest

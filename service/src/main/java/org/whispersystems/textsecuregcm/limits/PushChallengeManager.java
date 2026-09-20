@@ -16,13 +16,13 @@ import org.whispersystems.textsecuregcm.push.NotPushRegisteredException;
 import org.whispersystems.textsecuregcm.push.PushNotificationManager;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.Device;
-import org.whispersystems.textsecuregcm.storage.PushChallengeDynamoDb;
+import org.whispersystems.textsecuregcm.storage.PushChallengeStore;
 import org.whispersystems.textsecuregcm.util.Util;
 import org.whispersystems.textsecuregcm.util.ua.ClientPlatform;
 
 public class PushChallengeManager {
   private final PushNotificationManager pushNotificationManager;
-  private final PushChallengeDynamoDb pushChallengeDynamoDb;
+  private final PushChallengeStore pushChallengeDynamoDb;
 
   private final SecureRandom random = new SecureRandom();
 
@@ -38,7 +38,7 @@ public class PushChallengeManager {
   private static final String SOURCE_COUNTRY_TAG_NAME = "sourceCountry";
 
   public PushChallengeManager(final PushNotificationManager pushNotificationManager,
-      final PushChallengeDynamoDb pushChallengeDynamoDb) {
+      final PushChallengeStore pushChallengeDynamoDb) {
 
     this.pushNotificationManager = pushNotificationManager;
     this.pushChallengeDynamoDb = pushChallengeDynamoDb;

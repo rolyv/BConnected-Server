@@ -129,6 +129,7 @@ public class ClearOrphanedFoundationDbQueuesCommand extends AbstractCommandWithD
     final int chunksPerShard = Objects.requireNonNull(namespace.getInt(CHUNKS_PER_SHARD_ARGUMENT));
 
     final FDB fdb = commandDependencies.fdb();
+    if (fdb == null) throw new IllegalStateException("FoundationDB queue cleanup is unavailable in PostgreSQL mode");
 
     final Stream<FaultTolerantDatabase> databases = configuration.getFoundationDbMessagesConfiguration().clusters().entrySet().stream()
         .map(entry -> {

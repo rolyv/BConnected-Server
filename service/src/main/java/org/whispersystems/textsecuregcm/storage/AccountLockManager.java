@@ -6,17 +6,24 @@ import com.amazonaws.services.dynamodbv2.AmazonDynamoDBLockClientOptions;
 import com.amazonaws.services.dynamodbv2.LockItem;
 import com.amazonaws.services.dynamodbv2.ReleaseLockOptions;
 import com.google.common.annotations.VisibleForTesting;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
 import org.whispersystems.textsecuregcm.util.ThrowingSupplier;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
 public class AccountLockManager {
 
   private final AmazonDynamoDBLockClient lockClient;
+  private final DataSource lockDataSource;
+  private final ThreadLocal<SqlLockScope> sqlLockScope = new ThreadLocal<>();
 
   static final String KEY_ACCOUNT_PNI = "P";
 
@@ -34,6 +41,15 @@ public class AccountLockManager {
   @VisibleForTesting
   AccountLockManager(final AmazonDynamoDBLockClient lockClient) {
     this.lockClient = lockClient;
+    this.lockDataSource = null;
+  }
+
+  /// Uses a dedicated PostgreSQL connection pool for lifecycle locks. It MUST NOT be the account/key data pool:
+  /// callbacks perform their own database operations while retaining the lock connection. The caller owns this
+  /// pool's lifecycle and must allow its transactions to remain open for the full synchronous callback duration.
+  public AccountLockManager(final DataSource dedicatedLockDataSource) {
+    this.lockClient = null;
+    this.lockDataSource = Objects.requireNonNull(dedicatedLockDataSource);
   }
 
   /// Acquires a distributed, pessimistic lock for the accounts identified by the given phone number identifiers. By
@@ -55,10 +71,15 @@ public class AccountLockManager {
       throw new IllegalArgumentException("List of PNIs to lock must not be empty");
     }
 
+    Objects.requireNonNull(task);
+    if (lockDataSource != null) {
+      return withPostgresLocks(Set.copyOf(phoneNumberIdentifiers), task);
+    }
+
     final List<LockItem> lockItems = new ArrayList<>(phoneNumberIdentifiers.size());
 
     try {
-      for (final UUID pni : phoneNumberIdentifiers) {
+      for (final UUID pni : phoneNumberIdentifiers.stream().sorted().toList()) {
         try {
           lockItems.add(lockClient.acquireLock(AcquireLockOptions.builder(pni.toString())
               .withAcquireReleasedLocksConsistently(true)
@@ -74,6 +95,100 @@ public class AccountLockManager {
             .withBestEffort(true)
             .build());
       }
+    }
+  }
+
+  private record SqlLockScope(Connection connection, Set<Long> acquiredKeys) {}
+
+  private <V, E extends Exception> V withPostgresLocks(final Set<UUID> identifiers,
+      final ThrowingSupplier<V, E> task) throws E {
+    // Sort the actual advisory keys, not the UUIDs: even a hash collision then cannot invert the lock order.
+    // Collisions only serialize unrelated identities; row/account identity is never inferred from this hash.
+    final List<Long> keys = identifiers.stream().map(AccountLockManager::advisoryKey).distinct().sorted().toList();
+    final SqlLockScope enclosing = sqlLockScope.get();
+    if (enclosing != null) {
+      // Account creation can hold its PNI lock and then lock a recently-deleted ACI. Reuse the same connection so
+      // nested calls work even with a one-connection lock pool. Acquiring a newly requested key without waiting
+      // prevents nested scopes from forming an inverted-order deadlock. Never rerun a callback after side effects.
+      acquirePostgresLocks(enclosing, keys, true);
+      return task.get();
+    }
+
+    final Connection connection;
+    try {
+      connection = lockDataSource.getConnection();
+    } catch (SQLException e) {
+      throw new IllegalStateException("Cannot open PostgreSQL account lifecycle lock connection", e);
+    }
+
+    Throwable failure = null;
+    try {
+      try {
+        connection.setAutoCommit(false);
+      } catch (SQLException e) {
+        throw new IllegalStateException("Cannot begin PostgreSQL account lifecycle lock scope", e);
+      }
+      final SqlLockScope scope = new SqlLockScope(connection, new HashSet<>());
+      acquirePostgresLocks(scope, keys, false);
+      sqlLockScope.set(scope);
+      return task.get();
+    } catch (Exception | Error e) {
+      failure = e;
+      throw e;
+    } finally {
+      sqlLockScope.remove();
+      releasePostgresLocks(connection, failure);
+    }
+  }
+
+  private static long advisoryKey(final UUID identifier) {
+    return identifier.getMostSignificantBits()
+        ^ Long.rotateLeft(identifier.getLeastSignificantBits(), 23) ^ 0x42434143434C4F43L;
+  }
+
+  private static void acquirePostgresLocks(final SqlLockScope scope, final List<Long> keys,
+      final boolean nested) {
+    for (final long key : keys) {
+      if (scope.acquiredKeys().contains(key)) continue;
+      try (var statement = scope.connection().prepareStatement(nested
+          ? "SELECT pg_try_advisory_xact_lock(?)" : "SELECT pg_advisory_xact_lock(?)")) {
+        statement.setLong(1, key);
+        try (var result = statement.executeQuery()) {
+          if (nested && (!result.next() || !result.getBoolean(1))) {
+            throw new IllegalStateException("Nested PostgreSQL account lifecycle lock is already held");
+          }
+        }
+        scope.acquiredKeys().add(key);
+      } catch (SQLException e) {
+        throw new IllegalStateException("Cannot acquire PostgreSQL account lifecycle lock", e);
+      }
+    }
+  }
+
+  private static void releasePostgresLocks(final Connection connection, final Throwable callbackFailure) {
+    SQLException cleanupFailure = null;
+    try {
+      // There are no data writes in this transaction. Rollback releases every acquired advisory lock, including
+      // nested and partially-acquired sets, before the connection is returned to its pool.
+      connection.rollback();
+    } catch (SQLException e) {
+      cleanupFailure = e;
+      try {
+        // A connection whose rollback failed must not return to a pool while potentially retaining locks.
+        connection.abort(Runnable::run);
+      } catch (SQLException abortFailure) {
+        cleanupFailure.addSuppressed(abortFailure);
+      }
+    }
+    try {
+      connection.close();
+    } catch (SQLException e) {
+      if (cleanupFailure == null) cleanupFailure = e;
+      else cleanupFailure.addSuppressed(e);
+    }
+    if (cleanupFailure != null) {
+      if (callbackFailure != null) callbackFailure.addSuppressed(cleanupFailure);
+      else throw new IllegalStateException("Cannot release PostgreSQL account lifecycle locks", cleanupFailure);
     }
   }
 

@@ -27,7 +27,7 @@ import javax.annotation.Nullable;
 
 public class ReportMessageManager {
 
-  private final ReportMessageDynamoDb reportMessageDynamoDb;
+  private final ReportMessageStore reportMessageDynamoDb;
   private final FaultTolerantRedisClusterClient rateLimitCluster;
 
   private final Duration counterTtl;
@@ -40,7 +40,7 @@ public class ReportMessageManager {
 
   private static final Logger logger = LoggerFactory.getLogger(ReportMessageManager.class);
 
-  public ReportMessageManager(final ReportMessageDynamoDb reportMessageDynamoDb,
+  public ReportMessageManager(final ReportMessageStore reportMessageDynamoDb,
       final FaultTolerantRedisClusterClient rateLimitCluster,
       final Duration counterTtl) {
 

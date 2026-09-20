@@ -13,13 +13,12 @@ import java.util.UUID;
 import com.google.common.annotations.VisibleForTesting;
 import org.whispersystems.textsecuregcm.auth.SaltedTokenHash;
 import org.whispersystems.textsecuregcm.util.Pair;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 
 public class PhoneNumberRecoveryPasswordsManager {
 
-  private final PhoneNumberRecoveryPasswords phoneNumberRecoveryPasswords;
+  private final PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords;
 
-  public PhoneNumberRecoveryPasswordsManager(final PhoneNumberRecoveryPasswords phoneNumberRecoveryPasswords) {
+  public PhoneNumberRecoveryPasswordsManager(final PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords) {
     this.phoneNumberRecoveryPasswords = requireNonNull(phoneNumberRecoveryPasswords);
   }
 
@@ -40,26 +39,26 @@ public class PhoneNumberRecoveryPasswordsManager {
     return phoneNumberRecoveryPasswords.addOrReplace(phoneNumberIdentifier, tokenHash);
   }
 
-  public TransactWriteItem buildTransactWriteItemForStorePassword(final UUID phoneNumberIdentifier, final byte[] password) {
-    return phoneNumberRecoveryPasswords.buildWriteItemForAddOrReplace(phoneNumberIdentifier, SaltedTokenHash.generateFor(bytesToString(password)));
+  public AccountMutation buildTransactWriteItemForStorePassword(final UUID phoneNumberIdentifier, final byte[] password) {
+    return phoneNumberRecoveryPasswords.buildMutationForAddOrReplace(phoneNumberIdentifier, SaltedTokenHash.generateFor(bytesToString(password)));
   }
 
   public boolean remove(final UUID phoneNumberIdentifier) {
     return phoneNumberRecoveryPasswords.removeEntry(phoneNumberIdentifier);
   }
 
-  public TransactWriteItem buildTransactWriteItemForRemovePassword(final UUID phoneNumberIdentifier) {
-    return phoneNumberRecoveryPasswords.buildWriteItemForRemove(phoneNumberIdentifier);
+  public AccountMutation buildTransactWriteItemForRemovePassword(final UUID phoneNumberIdentifier) {
+    return phoneNumberRecoveryPasswords.buildMutationForRemove(phoneNumberIdentifier);
   }
 
   private static String bytesToString(final byte[] bytes) {
     return HexFormat.of().formatHex(bytes);
   }
 
-  Optional<Pair<SaltedTokenHash, TransactWriteItem>> getPasswordAndWriteItemForMigration(final UUID phoneNumberIdentifier) {
+  Optional<Pair<SaltedTokenHash, AccountMutation>> getPasswordAndWriteItemForMigration(final UUID phoneNumberIdentifier) {
     final Optional<SaltedTokenHash> maybeExistingPassword = phoneNumberRecoveryPasswords.lookup(phoneNumberIdentifier);
 
     return maybeExistingPassword.map(existingPassword ->
-        new Pair<>(existingPassword, phoneNumberRecoveryPasswords.buildConditionCheckForMigration(phoneNumberIdentifier, existingPassword)));
+        new Pair<>(existingPassword, phoneNumberRecoveryPasswords.buildConditionMutationForMigration(phoneNumberIdentifier, existingPassword)));
   }
 }

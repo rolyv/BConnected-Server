@@ -27,6 +27,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import javax.annotation.Nullable;
 import org.reactivestreams.Publisher;
 import org.signal.libsignal.protocol.SealedSenderMultiRecipientMessage;
 import org.slf4j.Logger;
@@ -78,7 +79,7 @@ public class MessagesManager {
 
   private final PersistentMessageStore messagesDynamoDb;
   private final MessagesCache messagesCache;
-  private final FoundationDbMessageStore foundationDbMessageStore;
+  @Nullable private final FoundationDbMessageStore foundationDbMessageStore;
   private final RedisMessageAvailabilityManager redisMessageAvailabilityManager;
   private final ReportMessageManager reportMessageManager;
   private final ExecutorService messageDeletionExecutor;
@@ -88,7 +89,7 @@ public class MessagesManager {
   public MessagesManager(
       final PersistentMessageStore messagesDynamoDb,
       final MessagesCache messagesCache,
-      final FoundationDbMessageStore foundationDbMessageStore,
+      @Nullable final FoundationDbMessageStore foundationDbMessageStore,
       final RedisMessageAvailabilityManager redisMessageAvailabilityManager,
       final ReportMessageManager reportMessageManager,
       final ExecutorService messageDeletionExecutor,
@@ -124,7 +125,8 @@ public class MessagesManager {
 
     final CompletableFuture<Map<Byte, FoundationDbMessageStore.InsertResult>> foundationDbInsertFuture;
 
-    if (experimentEnrollmentManager.isEnrolled(accountIdentifier, MIRROR_INSERTS_EXPERIMENT_NAME)) {
+    if (hasFoundationDbStore()
+        && experimentEnrollmentManager.isEnrolled(accountIdentifier, MIRROR_INSERTS_EXPERIMENT_NAME)) {
       // Multi-recipient messages will have both a "shared MRM key" and actual message content; we only need/want the
       // latter for FoundationDB
       final Map<Byte, Envelope> minimizedMessagesByDeviceId = messagesByDeviceId.entrySet().stream()
@@ -290,6 +292,13 @@ public class MessagesManager {
   }
 
   public MessageStream getMessages(final UUID destinationUuid, final Device destinationDevice) {
+    if (!hasFoundationDbStore()) {
+      // PostgreSQL/Redis installations have no FoundationDB backend. Remote experiment enrollment must never
+      // select one implicitly or cause creation of a mirroring stream against a missing backend.
+      return new RedisDynamoDbMessageStream(messagesDynamoDb, messagesCache, redisMessageAvailabilityManager,
+          destinationUuid, destinationDevice, false);
+    }
+
     if (experimentEnrollmentManager.isEnrolled(destinationUuid, READ_LIVE_MESSAGES_FROM_FOUNDATIONDB_EXPERIMENT_NAME)) {
       return new ConcatenatingMessageStream(
           new RedisDynamoDbMessageStream(messagesDynamoDb, messagesCache, redisMessageAvailabilityManager,
@@ -319,7 +328,8 @@ public class MessagesManager {
   }
 
   public CompletableFuture<Void> clear(final UUID destinationUuid) {
-    if (experimentEnrollmentManager.isEnrolled(destinationUuid, MessagesManager.MIRROR_DELETIONS_EXPERIMENT_NAME)) {
+    if (hasFoundationDbStore()
+        && experimentEnrollmentManager.isEnrolled(destinationUuid, MessagesManager.MIRROR_DELETIONS_EXPERIMENT_NAME)) {
       messageDeletionExecutor.execute(() -> {
         try {
           foundationDbMessageStore.clearAll(new AciServiceIdentifier(destinationUuid));
@@ -333,7 +343,8 @@ public class MessagesManager {
   }
 
   public CompletableFuture<Void> clear(final UUID destinationUuid, final byte deviceId) {
-    if (experimentEnrollmentManager.isEnrolled(destinationUuid, MessagesManager.MIRROR_DELETIONS_EXPERIMENT_NAME)) {
+    if (hasFoundationDbStore()
+        && experimentEnrollmentManager.isEnrolled(destinationUuid, MessagesManager.MIRROR_DELETIONS_EXPERIMENT_NAME)) {
       messageDeletionExecutor.execute(() -> {
         try {
           foundationDbMessageStore.clearAll(new AciServiceIdentifier(destinationUuid), deviceId);
@@ -409,14 +420,14 @@ public class MessagesManager {
 
   /// Record versionstamps for the current time in the FoundationDB database(s).
   public void recordFoundationDbVersionstamps() {
-    foundationDbMessageStore.recordVersionstamps();
+    requireFoundationDbStore().recordVersionstamps();
   }
 
   /// Clean up expired entries in the FoundationDB versionstamp clock.
   ///
   /// @param oldestRetainedEntryTimestamp the earliest time for which we still want to be able to obtain a versionstamp
   public void expireOldFoundationDbVersionstamps(final Instant oldestRetainedEntryTimestamp) {
-    foundationDbMessageStore.expireOldVersionstamps(oldestRetainedEntryTimestamp);
+    requireFoundationDbStore().expireOldVersionstamps(oldestRetainedEntryTimestamp);
   }
 
   /// Delete messages in FoundationDB for the given devices that were inserted before the given
@@ -429,7 +440,7 @@ public class MessagesManager {
   /// @param cutoffTime the expiration threshold. Messages inserted before this time may be deleted; messages inserted
   /// after it will not be.
   public void deleteFoundationDbMessagesBefore(final Map<AciServiceIdentifier, List<Byte>> accountDeviceIdentifiers, final Instant cutoffTime) {
-    foundationDbMessageStore.deleteMessagesBefore(accountDeviceIdentifiers, cutoffTime);
+    requireFoundationDbStore().deleteMessagesBefore(accountDeviceIdentifiers, cutoffTime);
   }
 
   /// Trim the provided message queue if needed.
@@ -449,6 +460,18 @@ public class MessagesManager {
       final boolean dryRun) {
     // All trims will be considered successful during a dry run
     final UnaryOperator<Mono<Boolean>> deleteModifier = dryRun ? _ -> Mono.just(true) : UnaryOperator.identity();
-    return foundationDbMessageStore.trimQueue(aci, device, maxQueueSizeBytes, targetQueueSizeBytes, rangeSplitChunkSizeBytes, deleteModifier);
+    return requireFoundationDbStore().trimQueue(aci, device, maxQueueSizeBytes, targetQueueSizeBytes, rangeSplitChunkSizeBytes, deleteModifier);
+  }
+
+  public boolean hasFoundationDbStore() {
+    return foundationDbMessageStore != null;
+  }
+
+  private FoundationDbMessageStore requireFoundationDbStore() {
+    if (foundationDbMessageStore == null) {
+      throw new UnsupportedOperationException(
+          "FoundationDB message storage is not configured; this maintenance operation is unavailable in PostgreSQL/Redis mode");
+    }
+    return foundationDbMessageStore;
   }
 }

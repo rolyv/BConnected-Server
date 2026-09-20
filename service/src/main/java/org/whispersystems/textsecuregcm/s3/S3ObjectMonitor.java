@@ -33,7 +33,7 @@ import javax.annotation.Nullable;
 /**
  * An S3 object monitor watches a specific object in an S3 bucket and notifies a listener if that object changes.
  */
-public class S3ObjectMonitor {
+public class S3ObjectMonitor implements ObjectMonitor {
 
   private final String s3Bucket;
   private final String objectKey;

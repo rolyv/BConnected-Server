@@ -29,7 +29,7 @@ import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import org.whispersystems.textsecuregcm.storage.AccountMutation;
 
 public class RegistrationLockVerificationManager {
   public enum Flow {
@@ -140,7 +140,7 @@ public class RegistrationLockVerificationManager {
       // Until the timeout, the current reglock can still be supplied,
       // along with phone number verification, to restore access.
 
-      final List<TransactWriteItem> additionalWriteItems;
+      final List<AccountMutation> additionalWriteItems;
 
       // The client often sends an empty registration lock token on the first request
       // and sends an actual token if the server returns a 423 indicating that one is required.

@@ -101,6 +101,7 @@ import org.whispersystems.textsecuregcm.util.TestRandomUtil;
 import org.whispersystems.textsecuregcm.util.TestRemoteAddressFilterProvider;
 import org.whispersystems.textsecuregcm.util.UsernameHashZkProofVerifier;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import org.whispersystems.textsecuregcm.storage.AccountMutation;
 
 @ExtendWith(DropwizardExtensionsSupport.class)
 class AccountControllerTest {
@@ -232,7 +233,7 @@ class AccountControllerTest {
     }).when(usernameZkProofVerifier).verifyProof(any(), any());
 
     when(PHONE_NUMBER_RECOVERY_PASSWORDS_MANAGER.buildTransactWriteItemForStorePassword(any(), any(byte[].class)))
-        .thenReturn(TransactWriteItem.builder().build());
+        .thenReturn(new AccountMutation.Dynamo(TransactWriteItem.builder().build()));
   }
 
   @AfterEach

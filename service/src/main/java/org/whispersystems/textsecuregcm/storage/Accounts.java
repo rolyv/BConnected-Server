@@ -82,7 +82,34 @@ import software.amazon.awssdk.utils.CompletableFutureUtils;
  * make sure the field is stored in a DDB attribute and then put back into the account object in {@link Accounts#fromItem(Map)}.
  */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-public class Accounts {
+public class Accounts implements AccountStore {
+
+
+  @Override public boolean createWithMutations(Account account, Collection<AccountMutation> mutations)
+      throws AccountAlreadyExistsException {
+    return create(account, AccountMutation.toDynamo(mutations));
+  }
+  @Override public boolean createWithMutations(Account account, ReceiptCredentialPresentation receipt, byte[] password,
+      Collection<AccountMutation> mutations) throws AccountAlreadyExistsException, ReceiptAlreadyRedeemedException {
+    return create(account, receipt, password, AccountMutation.toDynamo(mutations));
+  }
+  @Override public CompletionStage<Void> reclaimWithMutations(Account previous, Account replacement,
+      Collection<AccountMutation> mutations) {
+    return reclaimAccount(previous, replacement, AccountMutation.toDynamo(mutations));
+  }
+  @Override public void updateWithMutations(Account account, Collection<AccountMutation> mutations) {
+    updateTransactionally(account, AccountMutation.toDynamo(mutations));
+  }
+  @Override public void changeNumberWithMutations(Account account, String number, UUID pni, Optional<UUID> displaced,
+      Collection<AccountMutation> mutations) {
+    changeNumber(account, number, pni, displaced, AccountMutation.toDynamo(mutations));
+  }
+  @Override public void deleteWithMutations(UUID aci, Collection<AccountMutation> mutations) {
+    delete(aci, AccountMutation.toDynamo(mutations));
+  }
+  @Override public AccountMutation linkDeviceMutation(String token, Duration ttl) {
+    return new AccountMutation.Dynamo(buildTransactWriteItemForLinkDevice(token, ttl));
+  }
 
   private static final Logger log = LoggerFactory.getLogger(Accounts.class);
 
@@ -1317,7 +1344,7 @@ public class Accounts {
             .map(Accounts::fromItem)));
   }
 
-  boolean accountExists(final UUID aci) {
+  public boolean accountExists(final UUID aci) {
     final GetItemResponse response = dynamoDbClient.getItem(GetItemRequest.builder()
         .tableName(accountsTableName)
         .key(Map.of(KEY_ACCOUNT_UUID, AttributeValues.fromUUID(aci)))
@@ -1455,7 +1482,7 @@ public class Accounts {
     }
   }
 
-  Flux<Account> getAll(final int segments, final Scheduler scheduler) {
+  public Flux<Account> getAll(final int segments, final Scheduler scheduler) {
     if (segments < 1) {
       throw new IllegalArgumentException("Total number of segments must be positive");
     }
@@ -1476,7 +1503,7 @@ public class Accounts {
         .sequential();
   }
 
-  Flux<UUID> getAllAccountIdentifiers(final int segments, final Scheduler scheduler) {
+  public Flux<UUID> getAllAccountIdentifiers(final int segments, final Scheduler scheduler) {
     if (segments < 1) {
       throw new IllegalArgumentException("Total number of segments must be positive");
     }
@@ -1709,7 +1736,7 @@ public class Accounts {
         .build();
   }
 
-  CompletableFuture<Void> regenerateConstraints(final Account account) {
+  public CompletableFuture<Void> regenerateConstraints(final Account account) {
     final List<CompletableFuture<?>> constraintFutures = new ArrayList<>();
 
     account.getNumber().ifPresent(phoneNumber ->

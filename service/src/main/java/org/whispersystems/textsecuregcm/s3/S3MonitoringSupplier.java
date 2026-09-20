@@ -32,7 +32,7 @@ public class S3MonitoringSupplier<T> implements ManagedSupplier<T> {
 
   private final AtomicReference<T> holder;
 
-  private final S3ObjectMonitor monitor;
+  private final ObjectMonitor monitor;
 
   private final Function<InputStream, T> parser;
 

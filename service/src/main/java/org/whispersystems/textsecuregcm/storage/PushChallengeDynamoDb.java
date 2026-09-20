@@ -19,7 +19,7 @@ import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 /**
  * Stores push challenge tokens. Users may have at most one outstanding push challenge token at a time.
  */
-public class PushChallengeDynamoDb extends AbstractDynamoDbStore {
+public class PushChallengeDynamoDb extends AbstractDynamoDbStore implements PushChallengeStore {
 
   private final String tableName;
   private final Clock clock;

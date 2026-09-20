@@ -67,7 +67,7 @@ import org.whispersystems.textsecuregcm.storage.UsernameReservationNotFoundExcep
 import org.whispersystems.textsecuregcm.util.HeaderUtils;
 import org.whispersystems.textsecuregcm.util.UsernameHashZkProofVerifier;
 import org.whispersystems.textsecuregcm.util.Util;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import org.whispersystems.textsecuregcm.storage.AccountMutation;
 
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 @Path("/v1/accounts")
@@ -222,7 +222,7 @@ public class AccountController {
     final Account account = accounts.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED));
 
-    final Collection<TransactWriteItem> additionalWriteItems =
+    final Collection<AccountMutation> additionalWriteItems =
         account.getPhoneNumberIdentifier()
             .flatMap(phoneNumberIdentifier -> attributes.recoveryPassword().map(recoveryPassword ->
                 List.of(phoneNumberRecoveryPasswordsManager.buildTransactWriteItemForStorePassword(phoneNumberIdentifier, recoveryPassword))))

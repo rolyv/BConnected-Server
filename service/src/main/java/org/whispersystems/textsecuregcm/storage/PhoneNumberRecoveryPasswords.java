@@ -29,7 +29,7 @@ import software.amazon.awssdk.services.dynamodb.model.PutItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.ReturnValue;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 
-public class PhoneNumberRecoveryPasswords {
+public class PhoneNumberRecoveryPasswords implements PhoneNumberRecoveryPasswordStore {
 
   // For historical reasons, we record the PNI as a UUID string rather than a compact byte array
   static final String KEY_PNI = "P";
@@ -101,6 +101,22 @@ public class PhoneNumberRecoveryPasswords {
                 ATTR_HASH, AttributeValues.fromString(data.hash())))
             .build())
         .build();
+  }
+
+  @Override
+  public AccountMutation buildMutationForAddOrReplace(final UUID phoneNumberIdentifier, final SaltedTokenHash data) {
+    return new AccountMutation.Dynamo(buildWriteItemForAddOrReplace(phoneNumberIdentifier, data));
+  }
+
+  @Override
+  public AccountMutation buildMutationForRemove(final UUID phoneNumberIdentifier) {
+    return new AccountMutation.Dynamo(buildWriteItemForRemove(phoneNumberIdentifier));
+  }
+
+  @Override
+  public AccountMutation buildConditionMutationForMigration(final UUID phoneNumberIdentifier,
+      final SaltedTokenHash expectedPassword) {
+    return new AccountMutation.Dynamo(buildConditionCheckForMigration(phoneNumberIdentifier, expectedPassword));
   }
 
   ///  Remove the entry associated with the provided PNI

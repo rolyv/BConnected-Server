@@ -63,7 +63,7 @@ public class AppleDeviceCheckManager {
 
   private static final String KEY_COUNT_DISTRIBUTION_NAME = MetricsUtil.name(AppleDeviceCheckManager.class, "keyCount");
 
-  private final AppleDeviceChecks appleDeviceChecks;
+  private final AppleDeviceCheckStore appleDeviceChecks;
   private final FaultTolerantRedisClusterClient redisClient;
   private final DeviceCheckManager deviceCheckManager;
   private final String teamId;
@@ -72,7 +72,7 @@ public class AppleDeviceCheckManager {
   private static final String RETRY_NAME = ResilienceUtil.name(AppleDeviceCheckManager.class);
 
   public AppleDeviceCheckManager(
-      AppleDeviceChecks appleDeviceChecks,
+      AppleDeviceCheckStore appleDeviceChecks,
       FaultTolerantRedisClusterClient redisClient,
       DeviceCheckManager deviceCheckManager,
       String teamId,

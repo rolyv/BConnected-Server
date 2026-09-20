@@ -21,7 +21,7 @@ import javax.annotation.Nullable;
 
 public class ClientReleaseManager implements Managed {
 
-  private final ClientReleases clientReleases;
+  private final ClientReleaseStore clientReleases;
   private final ScheduledExecutorService scheduledExecutorService;
   private final Duration refreshInterval;
   private final Clock clock;
@@ -33,7 +33,7 @@ public class ClientReleaseManager implements Managed {
 
   private static final Logger logger = LoggerFactory.getLogger(ClientReleaseManager.class);
 
-  public ClientReleaseManager(final ClientReleases clientReleases,
+  public ClientReleaseManager(final ClientReleaseStore clientReleases,
       final ScheduledExecutorService scheduledExecutorService,
       final Duration refreshInterval,
       final Clock clock) {

@@ -160,6 +160,7 @@ import org.whispersystems.textsecuregcm.util.TestRandomUtil;
 import org.whispersystems.textsecuregcm.util.UUIDUtil;
 import org.whispersystems.textsecuregcm.util.UsernameHashZkProofVerifier;
 import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import org.whispersystems.textsecuregcm.storage.AccountMutation;
 
 class AccountsGrpcServiceTest extends SimpleBaseGrpcTest<AccountsGrpcService, AccountsGrpc.AccountsBlockingStub> {
 
@@ -804,7 +805,7 @@ class AccountsGrpcServiceTest extends SimpleBaseGrpcTest<AccountsGrpcService, Ac
     final byte[] registrationRecoveryPassword = TestRandomUtil.nextBytes(32);
 
     when(phoneNumberRecoveryPasswordsManager.buildTransactWriteItemForStorePassword(phoneNumberIdentifier, registrationRecoveryPassword))
-        .thenReturn(TransactWriteItem.builder().build());
+        .thenReturn(new AccountMutation.Dynamo(TransactWriteItem.builder().build()));
 
     assertDoesNotThrow(() ->
         authenticatedServiceStub().setRegistrationRecoveryPassword(SetRegistrationRecoveryPasswordRequest.newBuilder()

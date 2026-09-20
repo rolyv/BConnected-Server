@@ -17,7 +17,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.whispersystems.textsecuregcm.metrics.MetricsUtil.name;
 
-public class ReportMessageDynamoDb {
+public class ReportMessageDynamoDb implements ReportMessageStore {
 
   static final String KEY_HASH = "H";
   static final String ATTR_TTL = "E";

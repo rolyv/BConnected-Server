@@ -256,6 +256,7 @@ import org.whispersystems.textsecuregcm.spam.SpamChecker;
 import org.whispersystems.textsecuregcm.spam.SpamFilter;
 import org.whispersystems.textsecuregcm.storage.AccountLockManager;
 import org.whispersystems.textsecuregcm.storage.Accounts;
+import org.whispersystems.textsecuregcm.storage.AccountStore;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager;
@@ -263,6 +264,7 @@ import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseManager;
 import org.whispersystems.textsecuregcm.storage.ClientReleases;
+import org.whispersystems.textsecuregcm.storage.ClientReleaseStore;
 import org.whispersystems.textsecuregcm.storage.DonationPermits;
 import org.whispersystems.textsecuregcm.storage.DonationPermitsManager;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
@@ -280,6 +282,7 @@ import org.whispersystems.textsecuregcm.storage.PersistentTimer;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatars;
 import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
@@ -289,6 +292,7 @@ import org.whispersystems.textsecuregcm.storage.Profiles;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
 import org.whispersystems.textsecuregcm.storage.ProfilesV2;
 import org.whispersystems.textsecuregcm.storage.PushChallengeDynamoDb;
+import org.whispersystems.textsecuregcm.storage.PushChallengeStore;
 import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigs;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigStore;
@@ -296,6 +300,7 @@ import org.whispersystems.textsecuregcm.storage.RemoteConfigsManager;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageDynamoDb;
+import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.storage.SingleUseECPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
@@ -306,6 +311,7 @@ import org.whispersystems.textsecuregcm.storage.VerificationSessionStore;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckManager;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckTrustAnchor;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceChecks;
+import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckStore;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FaultTolerantDatabase;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDbMessageStore;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDBWarmup;
@@ -502,55 +508,62 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     final DynamoDbClient dynamoDbClient = config.getDynamoDbClientConfiguration()
         .buildSyncClient(awsCredentialsProvider, new MicrometerAwsSdkMetricPublisher(awsSdkMetricsExecutor, "dynamoDbSync"));
 
-    final FDB fdb = FDB.selectAPIVersion(FoundationDbVersion.getFoundationDbApiVersion());
-
-    // Jetty and the FoundationDB client both register shutdown hooks to begin shutdown/cleanup operations. There isn't
-    // a good way to coordinate or enforce ordering between shutdown hooks, and so the two processes will race.
-    // Generally, FoundationDB will shut down before Jetty does, meaning we'll still be trying to serve requests that
-    // require talking to FoundationDB even though FoundationDB has shut down. To avoid that scenario, we disabled
-    // FoundationDB's shutdown hook and let the JVM terminate its (daemon) threads at exit. This isn't as graceful as
-    // we'd like, but is the least bad option given current constraints.
-    fdb.disableShutdownHook();
-
-    final FoundationDbExternalClientConfiguration externalClientConfiguration = config.getFoundationDbMessagesConfiguration()
-        .externalClientConfiguration();
-    if (externalClientConfiguration != null) {
-      // If threadsPerClient is not specified, we default to the cluster size so that there is 1:1 correspondence between
-      // Database objects and threads.
-      final int clientThreadsPerVersion = externalClientConfiguration.threadsPerClient()
-          .orElseGet(() -> config.getFoundationDbMessagesConfiguration().clusters().size());
-      externalClientConfiguration.clientLibraryPaths().forEach(path -> fdb.options().setExternalClientLibrary(path));
-      fdb.options().setClientThreadsPerVersion(clientThreadsPerVersion);
-    }
-
+    final FDB fdb;
     final Map<Integer, List<FaultTolerantDatabase>> messageDatabasesByEpoch;
-    {
-      final Map<String, FaultTolerantDatabase> faultTolerantDatabasesByName =
-          config.getFoundationDbMessagesConfiguration().clusters().entrySet().stream()
-              .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey,
-                  entry -> {
-                    try {
-                      final Database database = entry.getValue().build(fdb);
-                      database.options().setMaxWatches(config.getFoundationDbMessagesConfiguration().maxWatchesPerClient());
-                      database.options().setTransactionTimeout(
-                          config.getFoundationDbMessagesConfiguration().transactionTimeout().toMillis());
-                      database.options().setTransactionRetryLimit(
-                          config.getFoundationDbMessagesConfiguration().transactionRetryLimit());
+    if (config.getPostgresConfiguration() == null) {
+      fdb = FDB.selectAPIVersion(FoundationDbVersion.getFoundationDbApiVersion());
 
-                      return new FaultTolerantDatabase(database, entry.getKey(),
-                          config.getFoundationDbMessagesConfiguration().circuitBreakerConfigurationName());
-                    } catch (final IOException e) {
-                      throw new UncheckedIOException(e);
-                    }
-                  }));
+      // Jetty and the FoundationDB client both register shutdown hooks to begin shutdown/cleanup operations. There isn't
+      // a good way to coordinate or enforce ordering between shutdown hooks, and so the two processes will race.
+      // Generally, FoundationDB will shut down before Jetty does, meaning we'll still be trying to serve requests that
+      // require talking to FoundationDB even though FoundationDB has shut down. To avoid that scenario, we disabled
+      // FoundationDB's shutdown hook and let the JVM terminate its (daemon) threads at exit. This isn't as graceful as
+      // we'd like, but is the least bad option given current constraints.
+      fdb.disableShutdownHook();
 
-      messageDatabasesByEpoch = config.getFoundationDbMessagesConfiguration().epochs().entrySet().stream()
-          .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey,
-              entry -> entry.getValue().stream()
-                  .map(faultTolerantDatabasesByName::get)
-                  .toList()));
+      final FoundationDbExternalClientConfiguration externalClientConfiguration = config.getFoundationDbMessagesConfiguration()
+          .externalClientConfiguration();
+      if (externalClientConfiguration != null) {
+        // If threadsPerClient is not specified, we default to the cluster size so that there is 1:1 correspondence between
+        // Database objects and threads.
+        final int clientThreadsPerVersion = externalClientConfiguration.threadsPerClient()
+            .orElseGet(() -> config.getFoundationDbMessagesConfiguration().clusters().size());
+        externalClientConfiguration.clientLibraryPaths().forEach(path -> fdb.options().setExternalClientLibrary(path));
+        fdb.options().setClientThreadsPerVersion(clientThreadsPerVersion);
+      }
 
-      environment.lifecycle().manage(new FoundationDBWarmup(faultTolerantDatabasesByName));
+      {
+        final Map<String, FaultTolerantDatabase> faultTolerantDatabasesByName =
+            config.getFoundationDbMessagesConfiguration().clusters().entrySet().stream()
+                .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey,
+                    entry -> {
+                      try {
+                        final Database database = entry.getValue().build(fdb);
+                        database.options().setMaxWatches(config.getFoundationDbMessagesConfiguration().maxWatchesPerClient());
+                        database.options().setTransactionTimeout(
+                            config.getFoundationDbMessagesConfiguration().transactionTimeout().toMillis());
+                        database.options().setTransactionRetryLimit(
+                            config.getFoundationDbMessagesConfiguration().transactionRetryLimit());
+
+                        return new FaultTolerantDatabase(database, entry.getKey(),
+                            config.getFoundationDbMessagesConfiguration().circuitBreakerConfigurationName());
+                      } catch (final IOException e) {
+                        throw new UncheckedIOException(e);
+                      }
+                    }));
+
+        messageDatabasesByEpoch = config.getFoundationDbMessagesConfiguration().epochs().entrySet().stream()
+            .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey,
+                entry -> entry.getValue().stream()
+                    .map(faultTolerantDatabasesByName::get)
+                    .toList()));
+
+        environment.lifecycle().manage(new FoundationDBWarmup(faultTolerantDatabasesByName));
+      }
+
+    } else {
+      fdb = null;
+      messageDatabasesByEpoch = Map.of();
     }
 
     final AwsCredentialsProvider cdnCredentialsProvider = config.getCdnConfiguration().credentials().build();
@@ -569,11 +582,14 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         .allowCoreThreadTimeOut(true)
         .workQueue(messageDeletionQueue).build();
 
+    final PostgresPersistence postgres = config.getPostgresConfiguration() == null ? null
+        : PostgresPersistence.build(environment, config.getPostgresConfiguration(),
+            config.getDynamoDbTables().getMessages().getExpiration(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, config.getDynamoDbTables().getRegistrationRecovery().getExpiration(), config.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionAsyncExecutor);
     RedeemedReceiptsManager redeemedReceiptsManager = new RedeemedReceiptsManager(clock,
         config.getDynamoDbTables().getRedeemedReceipts().getTableName(),
         dynamoDbClient);
 
-    Accounts accounts = new Accounts(
+    AccountStore accounts = postgres != null ? postgres.accounts() : new Accounts(
         clock,
         dynamoDbClient,
         dynamoDbAsyncClient,
@@ -584,11 +600,9 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getDynamoDbTables().getAccounts().getUsernamesTableName(),
         config.getDynamoDbTables().getDeletedAccounts().getTableName(),
         config.getDynamoDbTables().getAccounts().getUsedLinkDeviceTokensTableName());
-    ClientReleases clientReleases = new ClientReleases(dynamoDbAsyncClient,
+    ClientReleaseStore clientReleases = postgres != null ? postgres.clientReleases() : new ClientReleases(dynamoDbAsyncClient,
         config.getDynamoDbTables().getClientReleases().getTableName());
-    final PostgresPersistence postgres = config.getPostgresConfiguration() == null ? null
-        : PostgresPersistence.build(environment, config.getPostgresConfiguration(),
-            config.getDynamoDbTables().getMessages().getExpiration(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, clock, messageDeletionAsyncExecutor);
+
     PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres != null ? postgres.phoneNumbers() : new PhoneNumberIdentifiers(dynamoDbAsyncClient,
         config.getDynamoDbTables().getPhoneNumberIdentifiers().getTableName());
 
@@ -612,20 +626,20 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             asyncKeysS3Client,
             config.getDynamoDbTables().getPagedKemKeys().getTableName(),
             config.getPagedSingleUseKEMPreKeyStore().bucket()),
-        new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
-        new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getKemLastResortKeys().getTableName()));
+        postgres != null ? postgres.signedEcKeys() : new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
+        postgres != null ? postgres.signedKemKeys() : new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getKemLastResortKeys().getTableName()));
     PersistentMessageStore messagesDynamoDb = postgres != null ? postgres.messages() : new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         config.getDynamoDbTables().getMessages().getTableName(),
         config.getDynamoDbTables().getMessages().getExpiration(),
         messageDeletionAsyncExecutor);
     RemoteConfigStore remoteConfigs = postgres != null ? postgres.remoteConfigs() : new RemoteConfigs(dynamoDbClient,
         config.getDynamoDbTables().getRemoteConfig().getTableName());
-    PushChallengeDynamoDb pushChallengeDynamoDb = new PushChallengeDynamoDb(dynamoDbClient,
+    PushChallengeStore pushChallengeDynamoDb = postgres != null ? postgres.pushChallenges() : new PushChallengeDynamoDb(dynamoDbClient,
         config.getDynamoDbTables().getPushChallenge().getTableName());
-    ReportMessageDynamoDb reportMessageDynamoDb = new ReportMessageDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
+    ReportMessageStore reportMessageDynamoDb = postgres != null ? postgres.reportMessages() : new ReportMessageDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         config.getDynamoDbTables().getReportMessage().getTableName(),
         config.getReportMessageConfiguration().getReportTtl());
-    PhoneNumberRecoveryPasswords phoneNumberRecoveryPasswords = new PhoneNumberRecoveryPasswords(
+    PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres != null ? postgres.recoveryPasswords() : new PhoneNumberRecoveryPasswords(
         config.getDynamoDbTables().getRegistrationRecovery().getTableName(),
         config.getDynamoDbTables().getRegistrationRecovery().getExpiration(),
         dynamoDbClient,
@@ -803,7 +817,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getCdnConfiguration().bucket());
     MessagesCache messagesCache = new MessagesCache(messagesCluster, messageDeliveryScheduler,
         messageDeletionAsyncExecutor, retryExecutor, clock);
-    final FoundationDbMessageStore foundationDbMessageStore = new FoundationDbMessageStore(messageDatabasesByEpoch,
+    final FoundationDbMessageStore foundationDbMessageStore = postgres != null ? null : new FoundationDbMessageStore(messageDatabasesByEpoch,
         config.getFoundationDbMessagesConfiguration().activeEpoch(),
         new VersionstampUUIDCipher(config.getFoundationDbMessagesConfiguration().currentVersionstampCipherKey(),
             config.getFoundationDbMessagesConfiguration().versionstampCipherKeys().get(config.getFoundationDbMessagesConfiguration().currentVersionstampCipherKey()).value()),
@@ -826,7 +840,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getDynamoDbTables().getChangeNumberWaitingPeriods().getTableName(), dynamoDbClient);
     final ChangeNumberWaitingPeriodManager changeNumberWaitingPeriodManager = new ChangeNumberWaitingPeriodManager(
         changeNumberWaitingPeriods, config.getChangeNumber().postRegistrationWaitingPeriod(), clock);
-    AccountLockManager accountLockManager = new AccountLockManager(dynamoDbClient,
+    AccountLockManager accountLockManager = postgres != null ? postgres.accountLocks() : new AccountLockManager(dynamoDbClient,
         config.getDynamoDbTables().getDeletedAccountsLock().getTableName());
     final WebAuthnCeremonyManager webAuthnCeremonyManager = new WebAuthnCeremonyManager(
         config.getRegistrationWebAuthnConfiguration().relyingPartyId(),
@@ -1007,7 +1021,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getBackupConfiguration());
     final BackupMetrics backupMetrics = new BackupMetrics();
 
-    final AppleDeviceChecks appleDeviceChecks = new AppleDeviceChecks(
+    final AppleDeviceCheckStore appleDeviceChecks = postgres != null ? postgres.appleDeviceChecks() : new AppleDeviceChecks(
         dynamoDbClient,
         DeviceCheckManager.createObjectConverter(),
         config.getDynamoDbTables().getAppleDeviceChecks().getTableName(),

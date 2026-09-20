@@ -20,7 +20,7 @@ import java.time.Instant;
 import java.util.Collections;
 import java.util.Map;
 
-public class ClientReleases {
+public class ClientReleases implements ClientReleaseStore {
 
   private final DynamoDbAsyncClient dynamoDbAsyncClient;
   private final String tableName;
@@ -37,6 +37,7 @@ public class ClientReleases {
     this.tableName = tableName;
   }
 
+  @Override
   public Map<ClientPlatform, Map<Semver, ClientRelease>> getClientReleases() {
     return Collections.unmodifiableMap(
         Flux.from(dynamoDbAsyncClient.scanPaginator(ScanRequest.builder()

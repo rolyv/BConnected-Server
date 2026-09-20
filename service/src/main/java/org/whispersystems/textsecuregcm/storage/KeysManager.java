@@ -24,7 +24,6 @@ import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
 import org.whispersystems.textsecuregcm.util.Futures;
 import org.whispersystems.textsecuregcm.util.Optionals;
 import reactor.core.publisher.Flux;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 
 public class KeysManager {
   // KeysController for backwards compatibility
@@ -32,45 +31,45 @@ public class KeysManager {
 
   private final SingleUseECPreKeyStorage ecPreKeys;
   private final SingleUseKEMPreKeyStorage pagedPqPreKeys;
-  private final RepeatedUseECSignedPreKeyStore ecSignedPreKeys;
-  private final RepeatedUseKEMSignedPreKeyStore pqLastResortKeys;
+  private final SignedPreKeyStore<ECSignedPreKey> ecSignedPreKeys;
+  private final SignedPreKeyStore<KEMSignedPreKey> pqLastResortKeys;
 
   private static final String  TAKE_PQ_NAME = MetricsUtil.name(KeysManager.class, "takePq");
 
   public KeysManager(
       final SingleUseECPreKeyStorage ecPreKeys,
       final SingleUseKEMPreKeyStorage pagedPqPreKeys,
-      final RepeatedUseECSignedPreKeyStore ecSignedPreKeys,
-      final RepeatedUseKEMSignedPreKeyStore pqLastResortKeys) {
+      final SignedPreKeyStore<ECSignedPreKey> ecSignedPreKeys,
+      final SignedPreKeyStore<KEMSignedPreKey> pqLastResortKeys) {
     this.ecPreKeys = ecPreKeys;
     this.pagedPqPreKeys = pagedPqPreKeys;
     this.ecSignedPreKeys = ecSignedPreKeys;
     this.pqLastResortKeys = pqLastResortKeys;
   }
 
-  public TransactWriteItem buildWriteItemForEcSignedPreKey(final UUID identifier,
+  public AccountMutation buildWriteItemForEcSignedPreKey(final UUID identifier,
       final byte deviceId,
       final ECSignedPreKey ecSignedPreKey) {
 
-    return ecSignedPreKeys.buildTransactWriteItemForInsertion(identifier, deviceId, ecSignedPreKey);
+    return ecSignedPreKeys.buildInsertion(identifier, deviceId, ecSignedPreKey);
   }
 
-  public TransactWriteItem buildWriteItemForLastResortKey(final UUID identifier,
+  public AccountMutation buildWriteItemForLastResortKey(final UUID identifier,
       final byte deviceId,
       final KEMSignedPreKey lastResortSignedPreKey) {
 
-    return pqLastResortKeys.buildTransactWriteItemForInsertion(identifier, deviceId, lastResortSignedPreKey);
+    return pqLastResortKeys.buildInsertion(identifier, deviceId, lastResortSignedPreKey);
   }
 
   @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-  public List<TransactWriteItem> buildWriteItemsForNewDevice(final UUID accountIdentifier,
+  public List<AccountMutation> buildWriteItemsForNewDevice(final UUID accountIdentifier,
       final Optional<UUID> maybePhoneNumberIdentifier,
       final byte deviceId,
       final ECSignedPreKey aciSignedPreKey,
       final Optional<ECSignedPreKey> maybePniSignedPreKey,
       final KEMSignedPreKey aciPqLastResortPreKey,
       final Optional<KEMSignedPreKey> maybePniPqLastResortPreKey) {
-    final List<TransactWriteItem> writeItems = new ArrayList<>(buildWriteItemsForNewDevice(accountIdentifier, deviceId, aciSignedPreKey, aciPqLastResortPreKey));
+    final List<AccountMutation> writeItems = new ArrayList<>(buildWriteItemsForNewDevice(accountIdentifier, deviceId, aciSignedPreKey, aciPqLastResortPreKey));
 
     maybePhoneNumberIdentifier.ifPresent(pni ->
         writeItems.addAll(buildWriteItemsForNewDevice(pni, deviceId,
@@ -80,28 +79,28 @@ public class KeysManager {
     return writeItems;
   }
 
-  private List<TransactWriteItem> buildWriteItemsForNewDevice(final UUID identifier,
+  private List<AccountMutation> buildWriteItemsForNewDevice(final UUID identifier,
       final byte deviceId,
       final ECSignedPreKey signedPreKey,
       final KEMSignedPreKey lastResortPreKey) {
     return List.of(
-        ecSignedPreKeys.buildTransactWriteItemForInsertion(identifier, deviceId, signedPreKey),
-        pqLastResortKeys.buildTransactWriteItemForInsertion(identifier, deviceId, lastResortPreKey)
+        ecSignedPreKeys.buildInsertion(identifier, deviceId, signedPreKey),
+        pqLastResortKeys.buildInsertion(identifier, deviceId, lastResortPreKey)
     );
   }
 
   @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-  public List<TransactWriteItem> buildWriteItemsForRemovedDevice(final UUID accountIdentifier,
+  public List<AccountMutation> buildWriteItemsForRemovedDevice(final UUID accountIdentifier,
       final Optional<UUID> maybePhoneNumberIdentifier,
       final byte deviceId) {
-    final List<TransactWriteItem> writeItems = new ArrayList<>(List.of(
-        ecSignedPreKeys.buildTransactWriteItemForDeletion(accountIdentifier, deviceId),
-        pqLastResortKeys.buildTransactWriteItemForDeletion(accountIdentifier, deviceId)
+    final List<AccountMutation> writeItems = new ArrayList<>(List.of(
+        ecSignedPreKeys.buildDeletion(accountIdentifier, deviceId),
+        pqLastResortKeys.buildDeletion(accountIdentifier, deviceId)
     ));
 
     maybePhoneNumberIdentifier.ifPresent(phoneNumberIdentifier -> writeItems.addAll(List.of(
-        ecSignedPreKeys.buildTransactWriteItemForDeletion(phoneNumberIdentifier, deviceId),
-        pqLastResortKeys.buildTransactWriteItemForDeletion(phoneNumberIdentifier, deviceId)))
+        ecSignedPreKeys.buildDeletion(phoneNumberIdentifier, deviceId),
+        pqLastResortKeys.buildDeletion(phoneNumberIdentifier, deviceId)))
     );
 
     return writeItems;

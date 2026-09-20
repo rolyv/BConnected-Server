@@ -134,7 +134,7 @@ import org.whispersystems.textsecuregcm.util.RegistrationIdValidator;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
 import org.whispersystems.textsecuregcm.util.UUIDUtil;
 import org.whispersystems.textsecuregcm.util.UsernameHashZkProofVerifier;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
+import org.whispersystems.textsecuregcm.storage.AccountMutation;
 
 public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
@@ -370,7 +370,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
     final Account account = getAuthenticatedAccount();
     final byte[] recoveryPassword = request.getRegistrationRecoveryPassword().toByteArray();
 
-    final Collection<TransactWriteItem> additionalWriteItems = account.getPhoneNumberIdentifier()
+    final Collection<AccountMutation> additionalWriteItems = account.getPhoneNumberIdentifier()
         .map(phoneNumberIdentifier ->
             List.of(phoneNumberRecoveryPasswordsManager.buildTransactWriteItemForStorePassword(phoneNumberIdentifier, recoveryPassword)))
         .orElseGet(Collections::emptyList);

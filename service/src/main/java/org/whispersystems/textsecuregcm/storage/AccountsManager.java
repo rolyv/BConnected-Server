@@ -105,7 +105,6 @@ import org.whispersystems.textsecuregcm.util.Util;
 import org.whispersystems.textsecuregcm.util.logging.ImpossibleEvents;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Scheduler;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 
 public class AccountsManager extends RedisPubSubAdapter<String, String> implements Managed {
@@ -137,7 +136,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
 
   private static final Logger logger = LoggerFactory.getLogger(AccountsManager.class);
 
-  private final Accounts accounts;
+  private final AccountStore accounts;
   private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
   private final FaultTolerantRedisClusterClient cacheCluster;
   private final FaultTolerantRedisClient pubSubRedisClient;
@@ -297,7 +296,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
   private static class UncheckedWebAuthnMismatchException extends NoStackTraceRuntimeException {
   }
 
-  public AccountsManager(final Accounts accounts,
+  public AccountsManager(final AccountStore accounts,
       final PhoneNumberIdentifierStore phoneNumberIdentifiers,
       final FaultTolerantRedisClusterClient cacheCluster,
       final FaultTolerantRedisClient pubSubRedisClient,
@@ -520,7 +519,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
     @Nullable PushTokenType previousPushTokenType = null;
 
     try {
-      final List<TransactWriteItem> additionalWriteItems = new ArrayList<>(keysManager.buildWriteItemsForNewDevice(account.getAccountIdentifier(),
+      final List<AccountMutation> additionalWriteItems = new ArrayList<>(keysManager.buildWriteItemsForNewDevice(account.getAccountIdentifier(),
           account.getPhoneNumberIdentifier(),
           Device.PRIMARY_ID,
           primaryDeviceSpec.aciInfo().signedPreKey(),
@@ -536,15 +535,15 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
         if (maybeRecentlyDeletedAccountIdentifier.isPresent()) {
           // If we are re-using a recently deleted ACI, also obtain a lock for it so that clearing queues for the ACI synchronize against it
           accountLockManager.withLock(Set.of(maybeRecentlyDeletedAccountIdentifier.get()), () -> {
-            accounts.create(account, additionalWriteItems);
+            accounts.createWithMutations(account, additionalWriteItems);
             return null;
           });
         } else {
-          accounts.create(account, additionalWriteItems);
+          accounts.createWithMutations(account, additionalWriteItems);
         }
       } else {
         assert accountAttributes.recoveryPassword().isPresent();
-        accounts.create(account,
+        accounts.createWithMutations(account,
             maybeReceiptCredentialPresentation.get(),
             accountAttributes.recoveryPassword().get(),
             additionalWriteItems);
@@ -647,7 +646,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
     final UUID aci = existingAccount.getAccountIdentifier();
     account.setAccountIdentifier(aci);
 
-    final List<TransactWriteItem> additionalWriteItems = new ArrayList<>(keysManager.buildWriteItemsForNewDevice(account.getAccountIdentifier(),
+    final List<AccountMutation> additionalWriteItems = new ArrayList<>(keysManager.buildWriteItemsForNewDevice(account.getAccountIdentifier(),
         account.getPhoneNumberIdentifier(),
         Device.PRIMARY_ID,
         primaryDeviceSpec.aciInfo().signedPreKey(),
@@ -675,7 +674,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
             messagesManager.clear(aci),
             profilesManager.deleteAll(aci, false))
         .thenCompose(ignored -> disconnectionRequestManager.requestDisconnection(existingAccount))
-        .thenCompose(ignored -> accounts.reclaimAccount(existingAccount, account, additionalWriteItems))
+        .thenCompose(ignored -> accounts.reclaimWithMutations(existingAccount, account, additionalWriteItems))
         .thenCompose(ignored -> {
           // We should have cleared all messages before overwriting the old account, but more may have arrived
           // while we were working. Similarly, the old account holder could have added keys or profiles. We'll
@@ -743,7 +742,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
 
     account.addDevice(deviceSpec.toDevice(nextDeviceId, clock, account.getAccountIdentityKey()));
 
-    final List<TransactWriteItem> additionalWriteItems = new ArrayList<>(keysManager.buildWriteItemsForNewDevice(
+    final List<AccountMutation> additionalWriteItems = new ArrayList<>(keysManager.buildWriteItemsForNewDevice(
         account.getAccountIdentifier(),
         account.getPhoneNumberIdentifier(),
         nextDeviceId,
@@ -752,10 +751,10 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
         deviceSpec.aciInfo().pqLastResortPreKey(),
         deviceSpec.pniInfo().map(DeviceIdentityInfo::pqLastResortPreKey)));
 
-    additionalWriteItems.add(accounts.buildTransactWriteItemForLinkDevice(linkDeviceToken, LINK_DEVICE_TOKEN_EXPIRATION_DURATION));
+    additionalWriteItems.add(accounts.linkDeviceMutation(linkDeviceToken, LINK_DEVICE_TOKEN_EXPIRATION_DURATION));
 
     try {
-      accounts.updateTransactionally(account, additionalWriteItems);
+      accounts.updateWithMutations(account, additionalWriteItems);
       redisDelete(account);
 
       final String key = getLinkedDeviceKey(getLinkDeviceTokenIdentifier(linkDeviceToken));
@@ -783,6 +782,8 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
       }
 
       throw e;
+    } catch (final DeviceLinkTokenConflictException e) {
+      throw new LinkDeviceTokenAlreadyUsedException();
     } catch (final TransactionCanceledException transactionCanceledException) {
       // We can be confident the transaction was canceled because the linked device token was already used if the
       // "check token" transaction write item is the only one that failed. That SHOULD be the last one in the
@@ -936,13 +937,13 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
 
     account.removeDevice(deviceId);
 
-    final List<TransactWriteItem> additionalWriteItems = new ArrayList<>(
+    final List<AccountMutation> additionalWriteItems = new ArrayList<>(
         keysManager.buildWriteItemsForRemovedDevice(
             account.getAccountIdentifier(),
             account.getPhoneNumberIdentifier(),
             deviceId));
     try {
-      accounts.updateTransactionally(account, additionalWriteItems);
+      accounts.updateWithMutations(account, additionalWriteItems);
 
       redisDelete(account);
 
@@ -1042,7 +1043,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
             keysManager.deleteSingleUsePreKeys(originalPhoneNumberIdentifier))
         .join();
 
-      final Collection<TransactWriteItem> keyWriteItems =
+      final Collection<AccountMutation> keyWriteItems =
           buildPniKeyWriteItems(targetPhoneNumberIdentifier, pniSignedPreKeys, pniPqLastResortPreKeys);
 
     return updateWithRetries(
@@ -1050,17 +1051,17 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
           setPniKeys(a, pniIdentityKey, pniRegistrationIds);
           return true;
         },
-        a -> accounts.changeNumber(a, targetNumber, targetPhoneNumberIdentifier, maybeDisplacedUuid, keyWriteItems),
+        a -> accounts.changeNumberWithMutations(a, targetNumber, targetPhoneNumberIdentifier, maybeDisplacedUuid, keyWriteItems),
         () -> accounts.getByAccountIdentifier(uuid).orElseThrow(AccountNotFoundException::new),
         AccountChangeValidator.NUMBER_CHANGE_VALIDATOR);
   }
 
-  private Collection<TransactWriteItem> buildPniKeyWriteItems(
+  private Collection<AccountMutation> buildPniKeyWriteItems(
       final UUID phoneNumberIdentifier,
       final Map<Byte, ECSignedPreKey> pniSignedPreKeys,
       final Map<Byte, KEMSignedPreKey> pniPqLastResortPreKeys) {
 
-    final List<TransactWriteItem> keyWriteItems = new ArrayList<>();
+    final List<AccountMutation> keyWriteItems = new ArrayList<>();
 
     pniSignedPreKeys.forEach((deviceId, signedPreKey) ->
         keyWriteItems.add(keysManager.buildWriteItemForEcSignedPreKey(phoneNumberIdentifier, deviceId, signedPreKey)));
@@ -1249,7 +1250,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
 
   public Account update(final UUID accountIdentifier,
       final Consumer<Account> updater,
-      final Collection<TransactWriteItem> additionalWriteItems) {
+      final Collection<AccountMutation> additionalWriteItems) {
 
     return update(accountIdentifier, a -> {
       updater.accept(a);
@@ -1329,11 +1330,11 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
    */
   private Account update(final UUID accountIdentifier,
       final Function<Account, Boolean> updater,
-      final Collection<TransactWriteItem> additionalWriteItems) {
+      final Collection<AccountMutation> additionalWriteItems) {
 
     final ThrowingConsumer<Account, RuntimeException> persister = additionalWriteItems.isEmpty()
         ? accounts::update
-        : account -> accounts.updateTransactionally(account, additionalWriteItems);
+        : account -> accounts.updateWithMutations(account, additionalWriteItems);
 
     return updateTimer.record(() -> {
 
@@ -1516,7 +1517,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
   }
 
   private void delete(final Account account) {
-    final List<TransactWriteItem> additionalWriteItems = new ArrayList<>();
+    final List<AccountMutation> additionalWriteItems = new ArrayList<>();
 
     account.getDevices().stream()
         .flatMap(device -> keysManager.buildWriteItemsForRemovedDevice(
@@ -1536,7 +1537,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
             messagesManager.clear(account.getAccountIdentifier()),
             profilesManager.deleteAll(account.getAccountIdentifier(), true))
         .join();
-    accounts.delete(account.getAccountIdentifier(), additionalWriteItems);
+    accounts.deleteWithMutations(account.getAccountIdentifier(), additionalWriteItems);
     redisDelete(account);
 
     disconnectionRequestManager.requestDisconnection(account);
@@ -2027,7 +2028,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
           .flatMap(phoneNumberRecoveryPasswordsManager::getPasswordAndWriteItemForMigration)
           .ifPresent(passwordAndWriteItem -> {
             account.setAccountRecoveryPassword(passwordAndWriteItem.first());
-            accounts.updateTransactionally(account, List.of(passwordAndWriteItem.second()));
+            accounts.updateWithMutations(account, List.of(passwordAndWriteItem.second()));
 
             redisDelete(account);
           });
