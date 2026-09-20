@@ -32,7 +32,6 @@ import org.whispersystems.textsecuregcm.util.SystemMapper;
 import org.whispersystems.textsecuregcm.util.Util;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
@@ -48,9 +47,8 @@ public class ProfilesManager {
 
   private static final byte[] EMPTY = new byte[0];
 
-  private final Profiles profilesV1;
-  private final ProfilesV2 profilesV2;
-  private final ProfileAvatars profileAvatars;
+  private final ProfileDataStore profiles;
+  private final ProfileAvatarStore profileAvatars;
   private final FaultTolerantRedisClusterClient cacheCluster;
   private final ScheduledExecutorService retryExecutor;
   private final S3AsyncClient s3Client;
@@ -82,8 +80,20 @@ public class ProfilesManager {
       final S3AsyncClient s3Client,
       final String bucket,
       final ClusterLuaScript setLuaScript) {
-    this.profilesV1 = profilesV1;
-    this.profilesV2 = profilesV2;
+    this(new DynamoProfileDataStore(profilesV1, profilesV2), profileAvatars, cacheCluster, retryExecutor, s3Client, bucket, setLuaScript);
+  }
+
+  public ProfilesManager(final ProfileDataStore profiles, final ProfileAvatarStore profileAvatars,
+      final FaultTolerantRedisClusterClient cacheCluster, final ScheduledExecutorService retryExecutor,
+      final S3AsyncClient s3Client, final String bucket) throws IOException {
+    this(profiles, profileAvatars, cacheCluster, retryExecutor, s3Client, bucket,
+        ClusterLuaScript.fromResource(cacheCluster, "lua/profile_set.lua", ScriptOutputType.STATUS));
+  }
+
+  private ProfilesManager(final ProfileDataStore profiles, final ProfileAvatarStore profileAvatars,
+      final FaultTolerantRedisClusterClient cacheCluster, final ScheduledExecutorService retryExecutor,
+      final S3AsyncClient s3Client, final String bucket, final ClusterLuaScript setLuaScript) {
+    this.profiles = profiles;
     this.profileAvatars = profileAvatars;
     this.cacheCluster = cacheCluster;
     this.retryExecutor = retryExecutor;
@@ -96,7 +106,7 @@ public class ProfilesManager {
   public void setV1(UUID uuid, VersionedProfileV1 versionedProfile) {
     redisDelete(uuid);
 
-    profilesV1.set(uuid, versionedProfile);
+    profiles.setV1(uuid, versionedProfile);
 
     redisSet(uuid, null, versionedProfile);
 
@@ -105,31 +115,20 @@ public class ProfilesManager {
       // downgrades to v1, all v2 profiles are stale
       assert !DeviceCapability.PROFILES_V2.preventDowngrade();
 
-      profilesV2.deleteAll(uuid);
+      profiles.deleteV2(uuid);
     } catch (final Exception e) {
       logger.warn("Failed to delete v2 profile data: {}", uuid, e);
     }
   }
 
-  /// Transactionally sets v1 and v2 Profile data in DynamoDB.
+  /// Transactionally sets v1 and v2 profile data in the selected database.
   ///
-  /// Note: writes to the Redis cache are not transactional, and a failed DynamoDB write may leave incorrect data in Redis
+  /// Note: writes to the Redis cache are not transactional, and a failed database write may leave incorrect data in Redis
   /// @throws WriteConflictException if the expected data hash does not match the stored data hash
   public void set(UUID uuid, VersionedProfileV1 versionedProfileV1, VersionedProfile versionedProfile, @Nullable byte[] expectedCurrentDataHash) throws WriteConflictException {
 
-    final TransactWriteItem v1TransactWriteItem = profilesV1.getTransactWriteItem(uuid, versionedProfileV1);
-
     redisDelete(uuid);
-
-    profilesV2.set(uuid,
-        versionedProfile.version(),
-        versionedProfile.data(),
-        versionedProfile.dataHash(),
-        versionedProfile.commitment(),
-        versionedProfile.paymentAddress(),
-        versionedProfile.paymentAddressHash(),
-        expectedCurrentDataHash,
-        v1TransactWriteItem);
+    profiles.setBoth(uuid, versionedProfileV1, versionedProfile, expectedCurrentDataHash);
 
     redisSet(uuid, versionedProfile, versionedProfileV1);
   }
@@ -140,7 +139,7 @@ public class ProfilesManager {
   /// deletions, such as registration, should preserve them, so that PIN recovery includes the avatar.
   public CompletableFuture<Void> deleteAll(UUID uuid, final boolean includeAvatar) {
 
-    final CompletableFuture<Void> profilesV1AndAvatars = Mono.fromFuture(profilesV1.deleteAll(uuid))
+    final CompletableFuture<Void> profilesV1AndAvatars = Mono.fromFuture(profiles.deleteV1(uuid))
         .flatMapIterable(Function.identity())
         .flatMap(avatar ->
           Mono.fromFuture(includeAvatar ? deleteAvatar(avatar) : CompletableFuture.completedFuture(null))
@@ -149,7 +148,7 @@ public class ProfilesManager {
               .onErrorComplete())
         .then().toFuture();
 
-    return CompletableFuture.allOf(redisDeleteAsync(uuid), profilesV1AndAvatars, profilesV2.deleteAll(uuid));
+    return CompletableFuture.allOf(redisDeleteAsync(uuid), profilesV1AndAvatars, profiles.deleteV2(uuid));
   }
 
   public CompletableFuture<Void> deleteAvatar(String avatar) {
@@ -173,7 +172,7 @@ public class ProfilesManager {
 
   public Optional<VersionedProfileV1> getV1(UUID uuid, String version) {
     return redisGetV1(uuid, version).or(() -> {
-      final Optional<VersionedProfileV1> profile = profilesV1.get(uuid, version);
+      final Optional<VersionedProfileV1> profile = profiles.getV1(uuid, version);
       try {
         profile.ifPresent(versionedProfile -> redisSet(uuid, null, versionedProfile));
       } catch (RedisException e) {
@@ -186,7 +185,7 @@ public class ProfilesManager {
 
   public Optional<VersionedProfile> get(UUID uuid, byte[] version) {
     return redisGet(uuid, version).or(() -> {
-      final Optional<VersionedProfile> profile = profilesV2.get(uuid, version);
+      final Optional<VersionedProfile> profile = profiles.getV2(uuid, version);
       try {
         profile.ifPresent(versionedProfile -> redisSet(uuid, versionedProfile, null));
       } catch (RedisException e) {
@@ -344,7 +343,7 @@ public class ProfilesManager {
         .executeRunnable(() -> cacheCluster.withBinaryCluster(
             connection -> connection.sync().del(getCacheKeyV1(accountIdentifier))));
 
-    final VersionedProfileV1 versionedProfileV1 = profilesV1.setAvatar(accountIdentifier, version, avatar, commitment);
+    final VersionedProfileV1 versionedProfileV1 = profiles.setV1Avatar(accountIdentifier, version, avatar, commitment);
 
     redisSet(accountIdentifier, null, versionedProfileV1);
   }

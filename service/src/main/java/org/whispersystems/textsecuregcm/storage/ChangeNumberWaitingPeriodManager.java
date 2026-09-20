@@ -15,11 +15,11 @@ import java.util.UUID;
 /// Manages post-registration change number waiting period expiration data
 public class ChangeNumberWaitingPeriodManager {
 
-  private final ChangeNumberWaitingPeriods changeNumberWaitingPeriods;
+  private final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods;
   private final Duration waitingPeriod;
   private final Clock clock;
 
-  public ChangeNumberWaitingPeriodManager(final ChangeNumberWaitingPeriods changeNumberWaitingPeriods,
+  public ChangeNumberWaitingPeriodManager(final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods,
       final Duration waitingPeriod, final Clock clock) {
     this.changeNumberWaitingPeriods = changeNumberWaitingPeriods;
     this.waitingPeriod = waitingPeriod;

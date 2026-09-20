@@ -10,9 +10,9 @@ import org.whispersystems.textsecuregcm.registration.VerificationSession;
 
 public class VerificationSessionManager {
 
-  private final VerificationSessions verificationSessions;
+  private final VerificationSessionStore verificationSessions;
 
-  public VerificationSessionManager(final VerificationSessions verificationSessions) {
+  public VerificationSessionManager(final VerificationSessionStore verificationSessions) {
     this.verificationSessions = verificationSessions;
   }
 

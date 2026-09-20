@@ -90,7 +90,7 @@ import org.whispersystems.textsecuregcm.spam.SpamCheckResult;
 import org.whispersystems.textsecuregcm.spam.SpamChecker;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageHelper;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.util.HeaderUtils;
@@ -106,7 +106,7 @@ public class MessageController {
   private final CardinalityEstimator messageByteLimitEstimator;
   private final MessageSender messageSender;
   private final AccountsManager accountsManager;
-  private final PhoneNumberIdentifiers phoneNumberIdentifiers;
+  private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
   private final ReportMessageManager reportMessageManager;
   private final ServerSecretParams serverSecretParams;
   private final SpamChecker spamChecker;
@@ -149,7 +149,7 @@ public class MessageController {
       CardinalityEstimator messageByteLimitEstimator,
       MessageSender messageSender,
       AccountsManager accountsManager,
-      PhoneNumberIdentifiers phoneNumberIdentifiers,
+      PhoneNumberIdentifierStore phoneNumberIdentifiers,
       ReportMessageManager reportMessageManager,
       final ServerSecretParams serverSecretParams,
       final SpamChecker spamChecker,

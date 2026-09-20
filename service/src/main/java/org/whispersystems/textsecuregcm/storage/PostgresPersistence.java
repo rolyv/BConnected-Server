@@ -6,15 +6,18 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.dropwizard.core.setup.Environment;
 import io.dropwizard.lifecycle.Managed;
 import java.time.Duration;
+import java.time.Clock;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.configuration.PostgresConfiguration;
 
 public record PostgresPersistence(MessagesPostgres messages, RemoteConfigsPostgres remoteConfigs,
-                                  SingleUseECPreKeysPostgres ecPreKeys) {
+                                  SingleUseECPreKeysPostgres ecPreKeys, SingleUseKEMPreKeysPostgres kemPreKeys, ProfilesPostgres profiles, ProfileAvatarsPostgres profileAvatars,
+                                  PhoneNumberIdentifiersPostgres phoneNumbers, VerificationSessionsPostgres verificationSessions,
+                                  ChangeNumberWaitingPeriodsPostgres waitingPeriods) {
   public static PostgresPersistence build(final Environment environment, final PostgresConfiguration configuration,
-      final Duration messageRetention, final Executor executor) {
+      final Duration messageRetention, final Duration avatarRetention, final Clock clock, final Executor executor) {
     final HikariConfig pool = new HikariConfig();
     pool.setJdbcUrl(configuration.jdbcUrl());
     pool.setUsername(configuration.username());
@@ -35,11 +38,15 @@ public record PostgresPersistence(MessagesPostgres messages, RemoteConfigsPostgr
       @Override public void stop() { dataSource.close(); }
     });
     final MessagesPostgres messages = new MessagesPostgres(dataSource, messageRetention, executor);
+    final ProfilesPostgres profiles = new ProfilesPostgres(dataSource, executor);
+    final ProfileAvatarsPostgres avatars = profiles.avatarStore(avatarRetention, clock);
+    final VerificationSessionsPostgres sessions = new VerificationSessionsPostgres(dataSource, clock);
+    final ChangeNumberWaitingPeriodsPostgres waiting = new ChangeNumberWaitingPeriodsPostgres(dataSource, clock);
     environment.lifecycle().scheduledExecutorService("postgres-message-expiry-%d").build().scheduleWithFixedDelay(() -> {
-      try { messages.deleteExpired(5000); }
-      catch (RuntimeException e) { LoggerFactory.getLogger(PostgresPersistence.class).error("PostgreSQL envelope expiry failed", e); }
+      try { messages.deleteExpired(5000); avatars.deleteExpired(5000); sessions.deleteExpired(5000); waiting.deleteExpired(5000); }
+      catch (RuntimeException e) { LoggerFactory.getLogger(PostgresPersistence.class).error("PostgreSQL expiry cleanup failed", e); }
     }, 60, 60, TimeUnit.SECONDS);
     return new PostgresPersistence(messages, new RemoteConfigsPostgres(dataSource),
-        new SingleUseECPreKeysPostgres(dataSource, executor));
+        new SingleUseECPreKeysPostgres(dataSource, executor), new SingleUseKEMPreKeysPostgres(dataSource, executor), profiles, avatars, new PhoneNumberIdentifiersPostgres(dataSource, executor), sessions, waiting);
   }
 }

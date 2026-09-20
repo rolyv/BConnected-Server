@@ -9,7 +9,7 @@ import java.time.Clock;
 import org.whispersystems.textsecuregcm.registration.VerificationSession;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
-public class VerificationSessions extends SerializedExpireableJsonDynamoStore<VerificationSession> {
+public class VerificationSessions extends SerializedExpireableJsonDynamoStore<VerificationSession> implements VerificationSessionStore {
 
   public VerificationSessions(final DynamoDbClient dynamoDbClient, final String tableName, final Clock clock) {
     super(dynamoDbClient, tableName, clock);

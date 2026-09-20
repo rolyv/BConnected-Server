@@ -61,6 +61,7 @@ import org.whispersystems.textsecuregcm.storage.Accounts;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
+import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
 import org.whispersystems.textsecuregcm.storage.DynamoDbRecoveryManager;
 import org.whispersystems.textsecuregcm.storage.FoundationDbVersion;
@@ -72,10 +73,15 @@ import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
 import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
+import org.whispersystems.textsecuregcm.storage.SingleUseKEMPreKeyStorage;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatars;
+import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
+import org.whispersystems.textsecuregcm.storage.DynamoProfileDataStore;
+import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
 import org.whispersystems.textsecuregcm.storage.Profiles;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
 import org.whispersystems.textsecuregcm.storage.ProfilesV2;
@@ -129,7 +135,7 @@ public record CommandDependencies(
     DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager,
     DynamoDbAsyncClient dynamoDbAsyncClient,
     DynamoDbClient dynamoDbClient,
-    PhoneNumberIdentifiers phoneNumberIdentifiers,
+    PhoneNumberIdentifierStore phoneNumberIdentifiers,
     DynamoDbRecoveryManager dynamoDbRecoveryManager,
     FDB fdb,
     AccountLockManager accountLockManager) {
@@ -293,25 +299,27 @@ public record CommandDependencies(
         configuration.getDynamoDbTables().getAccounts().getUsernamesTableName(),
         configuration.getDynamoDbTables().getDeletedAccounts().getTableName(),
         configuration.getDynamoDbTables().getAccounts().getUsedLinkDeviceTokensTableName());
-    PhoneNumberIdentifiers phoneNumberIdentifiers = new PhoneNumberIdentifiers(dynamoDbAsyncClient,
+    final PostgresPersistence postgres = configuration.getPostgresConfiguration() == null ? null
+        : PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
+            configuration.getDynamoDbTables().getMessages().getExpiration(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, clock, messageDeletionExecutor);
+    PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres != null ? postgres.phoneNumbers() : new PhoneNumberIdentifiers(dynamoDbAsyncClient,
         configuration.getDynamoDbTables().getPhoneNumberIdentifiers().getTableName());
-    Profiles profilesV1 = new Profiles(dynamoDbClient, dynamoDbAsyncClient,
-        configuration.getDynamoDbTables().getProfilesV1().getTableName());
-    ProfileAvatars profileAvatars = new ProfileAvatars(dynamoDbClient,
+
+    ProfileDataStore profileStore = postgres != null ? postgres.profiles() : new DynamoProfileDataStore(
+        new Profiles(dynamoDbClient, dynamoDbAsyncClient, configuration.getDynamoDbTables().getProfilesV1().getTableName()),
+        new ProfilesV2(dynamoDbClient, dynamoDbAsyncClient, configuration.getDynamoDbTables().getProfilesV2().getTableName()));
+    ProfileAvatarStore profileAvatars = postgres != null ? postgres.profileAvatars() : new ProfileAvatars(dynamoDbClient,
         configuration.getDynamoDbTables().getProfileAvatars().getTableName(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, clock);
-    ProfilesV2 profiles = new ProfilesV2(dynamoDbClient, dynamoDbAsyncClient,
-        configuration.getDynamoDbTables().getProfilesV2().getTableName());
-    S3AsyncClient asyncKeysS3Client = S3AsyncClient.builder()
+
+    S3AsyncClient asyncKeysS3Client = postgres != null ? null : S3AsyncClient.builder()
         .credentialsProvider(awsCredentialsProvider)
         .region(Region.of(configuration.getPagedSingleUseKEMPreKeyStore().region()))
         .build();
-    PagedSingleUseKEMPreKeyStore pagedSingleUseKEMPreKeyStore = new PagedSingleUseKEMPreKeyStore(
+    SingleUseKEMPreKeyStorage pagedSingleUseKEMPreKeyStore = postgres != null ? postgres.kemPreKeys() : new PagedSingleUseKEMPreKeyStore(
         dynamoDbAsyncClient, asyncKeysS3Client,
         configuration.getDynamoDbTables().getPagedKemKeys().getTableName(),
         configuration.getPagedSingleUseKEMPreKeyStore().bucket());
-    final PostgresPersistence postgres = configuration.getPostgresConfiguration() == null ? null
-        : PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
-            configuration.getDynamoDbTables().getMessages().getExpiration(), messageDeletionExecutor);
+
     KeysManager keys = new KeysManager(
         postgres != null ? postgres.ecPreKeys()
             : new SingleUseECPreKeyStore(dynamoDbAsyncClient, configuration.getDynamoDbTables().getEcKeys().getTableName()),
@@ -354,7 +362,7 @@ public record CommandDependencies(
         Clock.systemUTC(),
         configuration.getFoundationDbMessagesConfiguration().batchPriorityTransactionTimeout(),
         configuration.getFoundationDbMessagesConfiguration().batchPriorityTransactionRetryLimit());
-    ProfilesManager profilesManager = new ProfilesManager(profilesV1, profiles, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
+    ProfilesManager profilesManager = new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
         configuration.getCdnConfiguration().bucket());
     ReportMessageDynamoDb reportMessageDynamoDb = new ReportMessageDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
         configuration.getDynamoDbTables().getReportMessage().getTableName(),
@@ -370,7 +378,7 @@ public record CommandDependencies(
         configuration.getDynamoDbTables().getDeletedAccountsLock().getTableName());
     PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager =
         new PhoneNumberRecoveryPasswordsManager(phoneNumberRecoveryPasswords);
-    final ChangeNumberWaitingPeriods changeNumberWaitingPeriods = new ChangeNumberWaitingPeriods(
+    final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods = postgres != null ? postgres.waitingPeriods() : new ChangeNumberWaitingPeriods(
         configuration.getDynamoDbTables().getChangeNumberWaitingPeriods().getTableName(), dynamoDbClient);
     final ChangeNumberWaitingPeriodManager changeNumberWaitingPeriodManager = new ChangeNumberWaitingPeriodManager(
         changeNumberWaitingPeriods, configuration.getChangeNumber().postRegistrationWaitingPeriod(), clock);

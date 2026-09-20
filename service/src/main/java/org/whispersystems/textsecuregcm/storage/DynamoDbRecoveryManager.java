@@ -15,9 +15,9 @@ import java.util.concurrent.CompletableFuture;
 public class DynamoDbRecoveryManager {
 
   private final Accounts accounts;
-  private final PhoneNumberIdentifiers phoneNumberIdentifiers;
+  private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
 
-  public DynamoDbRecoveryManager(final Accounts accounts, final PhoneNumberIdentifiers phoneNumberIdentifiers) {
+  public DynamoDbRecoveryManager(final Accounts accounts, final PhoneNumberIdentifierStore phoneNumberIdentifiers) {
     this.accounts = accounts;
     this.phoneNumberIdentifiers = phoneNumberIdentifiers;
   }

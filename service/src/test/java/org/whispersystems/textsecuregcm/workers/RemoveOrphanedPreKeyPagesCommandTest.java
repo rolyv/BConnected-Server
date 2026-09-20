@@ -44,6 +44,7 @@ public class RemoveOrphanedPreKeyPagesCommandTest {
   public void removeStalePages(boolean dryRun) throws Exception {
     final TestClock clock = TestClock.pinned(Instant.EPOCH.plus(Duration.ofSeconds(10)));
     final KeysManager keysManager = mock(KeysManager.class);
+    when(keysManager.hasPagedKEMStorage()).thenReturn(true);
 
     final UUID currentPage = UUID.randomUUID();
     final UUID freshOrphanedPage = UUID.randomUUID();
@@ -62,6 +63,7 @@ public class RemoveOrphanedPreKeyPagesCommandTest {
     verify(keysManager, times(dryRun ? 0 : 1))
         .pruneDeadPage(any(), eq((byte) 1), eq(staleOrphanedPage));
     verify(keysManager, times(1)).listStoredKEMPreKeyPages(anyInt());
+    verify(keysManager).hasPagedKEMStorage();
     verifyNoMoreInteractions(keysManager);
   }
 
@@ -69,6 +71,7 @@ public class RemoveOrphanedPreKeyPagesCommandTest {
   public void noCurrentPage() throws Exception {
     final TestClock clock = TestClock.pinned(Instant.EPOCH.plus(Duration.ofSeconds(10)));
     final KeysManager keysManager = mock(KeysManager.class);
+    when(keysManager.hasPagedKEMStorage()).thenReturn(true);
 
     final UUID freshOrphanedPage = UUID.randomUUID();
     final UUID staleOrphanedPage = UUID.randomUUID();
@@ -85,6 +88,7 @@ public class RemoveOrphanedPreKeyPagesCommandTest {
     verify(keysManager, times(1))
         .pruneDeadPage(any(), eq((byte) 1), eq(staleOrphanedPage));
     verify(keysManager, times(1)).listStoredKEMPreKeyPages(anyInt());
+    verify(keysManager).hasPagedKEMStorage();
     verifyNoMoreInteractions(keysManager);
   }
 
@@ -92,9 +96,20 @@ public class RemoveOrphanedPreKeyPagesCommandTest {
   public void noPages() throws Exception {
     final TestClock clock = TestClock.pinned(Instant.EPOCH);
     final KeysManager keysManager = mock(KeysManager.class);
+    when(keysManager.hasPagedKEMStorage()).thenReturn(true);
     when(keysManager.listStoredKEMPreKeyPages(anyInt())).thenReturn(Flux.empty());
     runCommand(clock, Duration.ofSeconds(5), false, keysManager);
     verify(keysManager).listStoredKEMPreKeyPages(anyInt());
+    verify(keysManager).hasPagedKEMStorage();
+    verifyNoMoreInteractions(keysManager);
+  }
+
+  @Test
+  void nativePostgresDoesNotScanOrDeleteObjectPages() throws Exception {
+    final KeysManager keysManager = mock(KeysManager.class);
+    when(keysManager.hasPagedKEMStorage()).thenReturn(false);
+    runCommand(TestClock.pinned(Instant.EPOCH), Duration.ofSeconds(5), false, keysManager);
+    verify(keysManager).hasPagedKEMStorage();
     verifyNoMoreInteractions(keysManager);
   }
 

@@ -46,7 +46,7 @@ import org.whispersystems.textsecuregcm.spam.SpamChecker;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageHelper;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.util.UUIDUtil;
@@ -58,7 +58,7 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
 
   private final AccountsManager accountsManager;
   private final ReportMessageManager reportMessageManager;
-  private final PhoneNumberIdentifiers phoneNumberIdentifiers;
+  private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
   private final RateLimiters rateLimiters;
   private final MessageSender messageSender;
   private final CardinalityEstimator messageByteLimitEstimator;
@@ -71,7 +71,7 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
 
   public MessagesGrpcService(final AccountsManager accountsManager,
       final ReportMessageManager reportMessageManager,
-      final PhoneNumberIdentifiers phoneNumberIdentifiers,
+      final PhoneNumberIdentifierStore phoneNumberIdentifiers,
       final RateLimiters rateLimiters,
       final MessageSender messageSender,
       final CardinalityEstimator messageByteLimitEstimator,

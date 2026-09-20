@@ -59,7 +59,7 @@ import software.amazon.awssdk.services.s3.model.S3Object;
  * periodically check for orphaned pages and remove them.
  * @see SingleUseECPreKeyStore
  */
-public class PagedSingleUseKEMPreKeyStore {
+public class PagedSingleUseKEMPreKeyStore implements SingleUseKEMPreKeyStorage {
 
   private static final Logger log = LoggerFactory.getLogger(PagedSingleUseKEMPreKeyStore.class);
 

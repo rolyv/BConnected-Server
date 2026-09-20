@@ -96,7 +96,7 @@ import org.whispersystems.textsecuregcm.spam.RegistrationFraudChecker.Verificati
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.VerificationSessionManager;
 import org.whispersystems.textsecuregcm.telephony.CarrierData;
@@ -140,7 +140,7 @@ public class VerificationController {
   private final PushNotificationManager pushNotificationManager;
   private final RegistrationCaptchaManager registrationCaptchaManager;
   private final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager;
-  private final PhoneNumberIdentifiers phoneNumberIdentifiers;
+  private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
   private final RateLimiters rateLimiters;
   private final AccountsManager accountsManager;
   private final CarrierDataProvider carrierDataProvider;
@@ -154,7 +154,7 @@ public class VerificationController {
       final PushNotificationManager pushNotificationManager,
       final RegistrationCaptchaManager registrationCaptchaManager,
       final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
-      final PhoneNumberIdentifiers phoneNumberIdentifiers,
+      final PhoneNumberIdentifierStore phoneNumberIdentifiers,
       final RateLimiters rateLimiters,
       final AccountsManager accountsManager,
       final CarrierDataProvider carrierDataProvider,

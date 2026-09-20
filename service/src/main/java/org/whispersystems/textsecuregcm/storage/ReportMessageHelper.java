@@ -24,7 +24,7 @@ public class ReportMessageHelper {
       @Nullable final byte[] reportSpamToken,
       @Nullable final String userAgent,
       final AccountsManager accountsManager,
-      final PhoneNumberIdentifiers phoneNumberIdentifiers,
+      final PhoneNumberIdentifierStore phoneNumberIdentifiers,
       final ReportMessageManager reportMessageManager) {
 
     final Optional<String> maybeSourceNumber;

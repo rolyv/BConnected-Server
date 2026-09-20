@@ -90,6 +90,11 @@ public class RemoveOrphanedPreKeyPagesCommand extends AbstractCommandWithDepende
   protected void run(final Environment environment, final Namespace namespace,
       final WhisperServerConfiguration configuration, final CommandDependencies commandDependencies) throws Exception {
 
+    if (!commandDependencies.keysManager().hasPagedKEMStorage()) {
+      logger.info("KEM page cleanup is not applicable to native PostgreSQL key rows");
+      return;
+    }
+
     final int concurrency = Objects.requireNonNull(namespace.getInt(CONCURRENCY_ARGUMENT));
     final boolean dryRun = Objects.requireNonNull(namespace.getBoolean(DRY_RUN_ARGUMENT));
     final Duration orphanAgeMinimum =

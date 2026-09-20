@@ -22,7 +22,7 @@ import software.amazon.awssdk.services.dynamodb.model.ReturnValue;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemResponse;
 
-public class ProfileAvatars {
+public class ProfileAvatars implements ProfileAvatarStore {
 
   private final DynamoDbClient dynamoDbClient;
   private final String tableName;

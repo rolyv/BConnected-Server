@@ -37,7 +37,7 @@ import software.amazon.awssdk.services.dynamodb.model.Update;
  * Manages a global, persistent mapping of phone numbers to phone number identifiers regardless of whether those
  * numbers/identifiers are actually associated with an account.
  */
-public class PhoneNumberIdentifiers {
+public class PhoneNumberIdentifiers implements PhoneNumberIdentifierStore {
 
   private final DynamoDbAsyncClient dynamoDbClient;
   private final String tableName;
@@ -245,7 +245,7 @@ public class PhoneNumberIdentifiers {
         .whenComplete((ignored, throwable) -> sample.stop(GET_PNI_TIMER));
   }
 
-  CompletableFuture<Void> regeneratePhoneNumberIdentifierMappings(final Account account) {
+  public CompletableFuture<Void> regeneratePhoneNumberIdentifierMappings(final Account account) {
     return account.getNumber()
             .map(phoneNumber -> setPni(phoneNumber,
                     Util.getAlternateForms(phoneNumber),

@@ -18,7 +18,7 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.GetItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 
-public class ChangeNumberWaitingPeriods {
+public class ChangeNumberWaitingPeriods implements ChangeNumberWaitingPeriodStore {
 
   // hash key; bytes
   static final String KEY_ACCOUNT_UUID = "U";

@@ -31,7 +31,7 @@ public class KeysManager {
   private static final String GET_KEYS_COUNTER_NAME = MetricsUtil.name(KeysManager.class, "getKeys");
 
   private final SingleUseECPreKeyStorage ecPreKeys;
-  private final PagedSingleUseKEMPreKeyStore pagedPqPreKeys;
+  private final SingleUseKEMPreKeyStorage pagedPqPreKeys;
   private final RepeatedUseECSignedPreKeyStore ecSignedPreKeys;
   private final RepeatedUseKEMSignedPreKeyStore pqLastResortKeys;
 
@@ -39,7 +39,7 @@ public class KeysManager {
 
   public KeysManager(
       final SingleUseECPreKeyStorage ecPreKeys,
-      final PagedSingleUseKEMPreKeyStore pagedPqPreKeys,
+      final SingleUseKEMPreKeyStorage pagedPqPreKeys,
       final RepeatedUseECSignedPreKeyStore ecSignedPreKeys,
       final RepeatedUseKEMSignedPreKeyStore pqLastResortKeys) {
     this.ecPreKeys = ecPreKeys;
@@ -196,8 +196,11 @@ public class KeysManager {
    * @param lookupConcurrency the number of concurrent lookup operations to perform when populating list results
    * @return All stored prekey pages
    */
+  public boolean hasPagedKEMStorage() { return pagedPqPreKeys instanceof PagedSingleUseKEMPreKeyStore; }
+
   public Flux<DeviceKEMPreKeyPages> listStoredKEMPreKeyPages(int lookupConcurrency) {
-    return pagedPqPreKeys.listStoredPages(lookupConcurrency);
+    if (pagedPqPreKeys instanceof PagedSingleUseKEMPreKeyStore pages) return pages.listStoredPages(lookupConcurrency);
+    throw new IllegalStateException("The selected KEM store has no object-storage pages");
   }
 
   /**
@@ -210,7 +213,8 @@ public class KeysManager {
    * @return A future that completes when the page has been removed
    */
   public CompletableFuture<Void> pruneDeadPage(final UUID identifier, final byte deviceId, final UUID pageId) {
-    return pagedPqPreKeys.deleteBundleFromS3(identifier, deviceId, pageId);
+    if (pagedPqPreKeys instanceof PagedSingleUseKEMPreKeyStore pages) return pages.deleteBundleFromS3(identifier, deviceId, pageId);
+    throw new IllegalStateException("The selected KEM store has no object-storage pages");
   }
 
   public record DevicePreKeys(

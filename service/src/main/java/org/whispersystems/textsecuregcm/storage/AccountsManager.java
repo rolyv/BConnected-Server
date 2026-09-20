@@ -138,7 +138,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
   private static final Logger logger = LoggerFactory.getLogger(AccountsManager.class);
 
   private final Accounts accounts;
-  private final PhoneNumberIdentifiers phoneNumberIdentifiers;
+  private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
   private final FaultTolerantRedisClusterClient cacheCluster;
   private final FaultTolerantRedisClient pubSubRedisClient;
   private final AccountLockManager accountLockManager;
@@ -298,7 +298,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
   }
 
   public AccountsManager(final Accounts accounts,
-      final PhoneNumberIdentifiers phoneNumberIdentifiers,
+      final PhoneNumberIdentifierStore phoneNumberIdentifiers,
       final FaultTolerantRedisClusterClient cacheCluster,
       final FaultTolerantRedisClient pubSubRedisClient,
       final AccountLockManager accountLockManager,

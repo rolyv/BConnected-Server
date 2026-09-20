@@ -260,6 +260,7 @@ import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
+import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseManager;
 import org.whispersystems.textsecuregcm.storage.ClientReleases;
 import org.whispersystems.textsecuregcm.storage.DonationPermits;
@@ -277,9 +278,13 @@ import org.whispersystems.textsecuregcm.storage.OneTimeDonationsManager;
 import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.PersistentTimer;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatars;
+import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
+import org.whispersystems.textsecuregcm.storage.DynamoProfileDataStore;
+import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
 import org.whispersystems.textsecuregcm.storage.Profiles;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
 import org.whispersystems.textsecuregcm.storage.ProfilesV2;
@@ -297,6 +302,7 @@ import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
 import org.whispersystems.textsecuregcm.storage.Subscriptions;
 import org.whispersystems.textsecuregcm.storage.VerificationSessionManager;
 import org.whispersystems.textsecuregcm.storage.VerificationSessions;
+import org.whispersystems.textsecuregcm.storage.VerificationSessionStore;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckManager;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckTrustAnchor;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceChecks;
@@ -580,26 +586,28 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getDynamoDbTables().getAccounts().getUsedLinkDeviceTokensTableName());
     ClientReleases clientReleases = new ClientReleases(dynamoDbAsyncClient,
         config.getDynamoDbTables().getClientReleases().getTableName());
-    PhoneNumberIdentifiers phoneNumberIdentifiers = new PhoneNumberIdentifiers(dynamoDbAsyncClient,
+    final PostgresPersistence postgres = config.getPostgresConfiguration() == null ? null
+        : PostgresPersistence.build(environment, config.getPostgresConfiguration(),
+            config.getDynamoDbTables().getMessages().getExpiration(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, clock, messageDeletionAsyncExecutor);
+    PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres != null ? postgres.phoneNumbers() : new PhoneNumberIdentifiers(dynamoDbAsyncClient,
         config.getDynamoDbTables().getPhoneNumberIdentifiers().getTableName());
-    Profiles profilesV1 = new Profiles(dynamoDbClient, dynamoDbAsyncClient,
-        config.getDynamoDbTables().getProfilesV1().getTableName());
-    ProfilesV2 profiles = new ProfilesV2(dynamoDbClient, dynamoDbAsyncClient, config.getDynamoDbTables().getProfilesV2().getTableName());
-    ProfileAvatars profileAvatars = new ProfileAvatars(dynamoDbClient,
+
+    ProfileDataStore profileStore = postgres != null ? postgres.profiles() : new DynamoProfileDataStore(
+        new Profiles(dynamoDbClient, dynamoDbAsyncClient, config.getDynamoDbTables().getProfilesV1().getTableName()),
+        new ProfilesV2(dynamoDbClient, dynamoDbAsyncClient, config.getDynamoDbTables().getProfilesV2().getTableName()));
+    ProfileAvatarStore profileAvatars = postgres != null ? postgres.profileAvatars() : new ProfileAvatars(dynamoDbClient,
         config.getDynamoDbTables().getProfileAvatars().getTableName(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, clock);
 
-    S3AsyncClient asyncKeysS3Client = S3AsyncClient.builder()
+    S3AsyncClient asyncKeysS3Client = postgres != null ? null : S3AsyncClient.builder()
         .credentialsProvider(awsCredentialsProvider)
         .region(Region.of(config.getPagedSingleUseKEMPreKeyStore().region()))
         .endpointOverride(config.getPagedSingleUseKEMPreKeyStore().endpointOverride())
         .build();
-    final PostgresPersistence postgres = config.getPostgresConfiguration() == null ? null
-        : PostgresPersistence.build(environment, config.getPostgresConfiguration(),
-            config.getDynamoDbTables().getMessages().getExpiration(), messageDeletionAsyncExecutor);
+
     KeysManager keysManager = new KeysManager(
         postgres != null ? postgres.ecPreKeys()
             : new SingleUseECPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcKeys().getTableName()),
-        new PagedSingleUseKEMPreKeyStore(
+        postgres != null ? postgres.kemPreKeys() : new PagedSingleUseKEMPreKeyStore(
             dynamoDbAsyncClient,
             asyncKeysS3Client,
             config.getDynamoDbTables().getPagedKemKeys().getTableName(),
@@ -623,7 +631,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         dynamoDbClient,
         clock);
 
-    final VerificationSessions verificationSessions = new VerificationSessions(dynamoDbClient,
+    final VerificationSessionStore verificationSessions = postgres != null ? postgres.verificationSessions() : new VerificationSessions(dynamoDbClient,
         config.getDynamoDbTables().getVerificationSessions().getTableName(), clock);
 
     final ClientResources sharedClientResources = ClientResources.builder()
@@ -791,7 +799,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         storageServiceExecutor, retryExecutor, config.getSecureStorageServiceConfiguration());
     DisconnectionRequestManager disconnectionRequestManager = new DisconnectionRequestManager(pubsubClient,
         disconnectionRequestListenerExecutor, retryExecutor);
-    ProfilesManager profilesManager = new ProfilesManager(profilesV1, profiles, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
+    ProfilesManager profilesManager = new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
         config.getCdnConfiguration().bucket());
     MessagesCache messagesCache = new MessagesCache(messagesCluster, messageDeliveryScheduler,
         messageDeletionAsyncExecutor, retryExecutor, clock);
@@ -814,7 +822,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     MessagesManager messagesManager =
         new MessagesManager(messagesDynamoDb, messagesCache, foundationDbMessageStore, redisMessageAvailabilityManager,
             reportMessageManager, messageDeletionAsyncExecutor, Clock.systemUTC(), experimentEnrollmentManager);
-    final ChangeNumberWaitingPeriods changeNumberWaitingPeriods = new ChangeNumberWaitingPeriods(
+    final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods = postgres != null ? postgres.waitingPeriods() : new ChangeNumberWaitingPeriods(
         config.getDynamoDbTables().getChangeNumberWaitingPeriods().getTableName(), dynamoDbClient);
     final ChangeNumberWaitingPeriodManager changeNumberWaitingPeriodManager = new ChangeNumberWaitingPeriodManager(
         changeNumberWaitingPeriods, config.getChangeNumber().postRegistrationWaitingPeriod(), clock);
