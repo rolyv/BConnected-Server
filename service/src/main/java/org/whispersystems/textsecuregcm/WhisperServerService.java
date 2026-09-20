@@ -97,9 +97,9 @@ import org.whispersystems.textsecuregcm.auth.ExternalServiceCredentialsGenerator
 import org.whispersystems.textsecuregcm.auth.IdlePrimaryDeviceAuthenticatedWebSocketUpgradeFilter;
 import org.whispersystems.textsecuregcm.auth.PhoneVerificationTokenManager;
 import org.whispersystems.textsecuregcm.auth.RegistrationLockVerificationManager;
-import org.whispersystems.textsecuregcm.auth.webauthn.WebAuthnCeremonyManager;
 import org.whispersystems.textsecuregcm.auth.grpc.ProhibitAuthenticationInterceptor;
 import org.whispersystems.textsecuregcm.auth.grpc.RequireAuthenticationInterceptor;
+import org.whispersystems.textsecuregcm.auth.webauthn.WebAuthnCeremonyManager;
 import org.whispersystems.textsecuregcm.backup.BackupAuthManager;
 import org.whispersystems.textsecuregcm.backup.BackupManager;
 import org.whispersystems.textsecuregcm.backup.BackupsDb;
@@ -133,6 +133,7 @@ import org.whispersystems.textsecuregcm.controllers.KeepAliveController;
 import org.whispersystems.textsecuregcm.controllers.KeyTransparencyController;
 import org.whispersystems.textsecuregcm.controllers.KeysController;
 import org.whispersystems.textsecuregcm.controllers.LoginPurchaseController;
+import org.whispersystems.textsecuregcm.controllers.MediaDownloadController;
 import org.whispersystems.textsecuregcm.controllers.MessageController;
 import org.whispersystems.textsecuregcm.controllers.OneTimeDonationController;
 import org.whispersystems.textsecuregcm.controllers.PaymentsController;
@@ -209,6 +210,7 @@ import org.whispersystems.textsecuregcm.limits.RedisMessageDeliveryLoopMonitor;
 import org.whispersystems.textsecuregcm.mappers.BackupExceptionMapper;
 import org.whispersystems.textsecuregcm.mappers.CompletionExceptionMapper;
 import org.whispersystems.textsecuregcm.mappers.DeviceLimitExceededExceptionMapper;
+import org.whispersystems.textsecuregcm.mappers.FeatureUnavailableExceptionMapper;
 import org.whispersystems.textsecuregcm.mappers.IOExceptionMapper;
 import org.whispersystems.textsecuregcm.mappers.IllegalStateExceptionMapper;
 import org.whispersystems.textsecuregcm.mappers.ImpossiblePhoneNumberExceptionMapper;
@@ -222,6 +224,7 @@ import org.whispersystems.textsecuregcm.mappers.RegistrationLockFailureException
 import org.whispersystems.textsecuregcm.mappers.RegistrationServiceSenderExceptionMapper;
 import org.whispersystems.textsecuregcm.mappers.ServerRejectedExceptionMapper;
 import org.whispersystems.textsecuregcm.mappers.SubscriptionExceptionMapper;
+import org.whispersystems.textsecuregcm.media.GcsMediaDownloadService;
 import org.whispersystems.textsecuregcm.metrics.BackupMetrics;
 import org.whispersystems.textsecuregcm.metrics.CallQualitySurveyManager;
 import org.whispersystems.textsecuregcm.metrics.MessageMetrics;
@@ -239,10 +242,11 @@ import org.whispersystems.textsecuregcm.push.MessageSender;
 import org.whispersystems.textsecuregcm.push.ProvisioningManager;
 import org.whispersystems.textsecuregcm.push.PushNotificationManager;
 import org.whispersystems.textsecuregcm.push.PushNotificationScheduler;
+import org.whispersystems.textsecuregcm.push.PushNotificationSender;
 import org.whispersystems.textsecuregcm.push.ReceiptSender;
 import org.whispersystems.textsecuregcm.push.RedisMessageAvailabilityManager;
 import org.whispersystems.textsecuregcm.redis.ConnectionEventLogger;
-import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
+import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 import org.whispersystems.textsecuregcm.registration.RegistrationService;
 import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
@@ -255,66 +259,66 @@ import org.whispersystems.textsecuregcm.spam.RegistrationRecoveryChecker;
 import org.whispersystems.textsecuregcm.spam.SpamChecker;
 import org.whispersystems.textsecuregcm.spam.SpamFilter;
 import org.whispersystems.textsecuregcm.storage.AccountLockManager;
-import org.whispersystems.textsecuregcm.storage.Accounts;
 import org.whispersystems.textsecuregcm.storage.AccountStore;
+import org.whispersystems.textsecuregcm.storage.Accounts;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager;
-import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
+import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseManager;
-import org.whispersystems.textsecuregcm.storage.ClientReleases;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseStore;
+import org.whispersystems.textsecuregcm.storage.ClientReleases;
 import org.whispersystems.textsecuregcm.storage.DonationPermits;
 import org.whispersystems.textsecuregcm.storage.DonationPermitsManager;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
+import org.whispersystems.textsecuregcm.storage.DynamoProfileDataStore;
 import org.whispersystems.textsecuregcm.storage.FoundationDbVersion;
 import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.KeysManager;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
 import org.whispersystems.textsecuregcm.storage.MessagesDynamoDb;
-import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
-import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.OneTimeDonationsManager;
 import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
+import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
 import org.whispersystems.textsecuregcm.storage.PersistentTimer;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordStore;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
+import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
+import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatars;
 import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
-import org.whispersystems.textsecuregcm.storage.DynamoProfileDataStore;
-import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
 import org.whispersystems.textsecuregcm.storage.Profiles;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
 import org.whispersystems.textsecuregcm.storage.ProfilesV2;
 import org.whispersystems.textsecuregcm.storage.PushChallengeDynamoDb;
 import org.whispersystems.textsecuregcm.storage.PushChallengeStore;
 import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
-import org.whispersystems.textsecuregcm.storage.RemoteConfigs;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigStore;
+import org.whispersystems.textsecuregcm.storage.RemoteConfigs;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigsManager;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageDynamoDb;
-import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
+import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
 import org.whispersystems.textsecuregcm.storage.SingleUseECPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
 import org.whispersystems.textsecuregcm.storage.Subscriptions;
 import org.whispersystems.textsecuregcm.storage.VerificationSessionManager;
-import org.whispersystems.textsecuregcm.storage.VerificationSessions;
 import org.whispersystems.textsecuregcm.storage.VerificationSessionStore;
+import org.whispersystems.textsecuregcm.storage.VerificationSessions;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckManager;
+import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckStore;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckTrustAnchor;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceChecks;
-import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckStore;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FaultTolerantDatabase;
-import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDbMessageStore;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDBWarmup;
+import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDbMessageStore;
 import org.whispersystems.textsecuregcm.storage.foundationdb.VersionstampUUIDCipher;
 import org.whispersystems.textsecuregcm.subscriptions.AppleAppStoreClient;
 import org.whispersystems.textsecuregcm.subscriptions.AppleAppStoreManager;
@@ -666,7 +670,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     FaultTolerantRedisClusterClient rateLimitersCluster = config.getRateLimitersCluster().build("rate_limiters",
         sharedClientResources.mutate());
 
-    FaultTolerantRedisClient pubsubClient =
+    PubSubRedisClient pubsubClient =
         config.getRedisPubSubConfiguration().build("pubsub", sharedClientResources);
 
     final BlockingQueue<Runnable> receiptSenderQueue = new LinkedBlockingQueue<>();
@@ -762,12 +766,12 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     ExternalServiceCredentialsGenerator directoryV2CredentialsGenerator = DirectoryV2Controller.credentialsGenerator(
         config.getDirectoryV2Configuration().getDirectoryV2ClientConfiguration());
-    ExternalServiceCredentialsGenerator storageCredentialsGenerator = SecureStorageController.credentialsGenerator(
-        config.getSecureStorageServiceConfiguration());
+    ExternalServiceCredentialsGenerator storageCredentialsGenerator = config.isStorageEnabled() ? SecureStorageController.credentialsGenerator(
+        config.getSecureStorageServiceConfiguration()) : null;
     ExternalServiceCredentialsGenerator paymentsCredentialsGenerator = gcpPilot ? null : PaymentsController.credentialsGenerator(
         config.getPaymentsServiceConfiguration());
-    ExternalServiceCredentialsGenerator svr2CredentialsGenerator = SecureValueRecovery2Controller.credentialsGenerator(
-        config.getSvr2Configuration());
+    ExternalServiceCredentialsGenerator svr2CredentialsGenerator = config.isSvr2Enabled() ? SecureValueRecovery2Controller.credentialsGenerator(
+        config.getSvr2Configuration()) : null;
     ExternalServiceCredentialsGenerator svrbCredentialsGenerator =
         gcpPilot ? null : SecureValueRecoveryBCredentialsGeneratorFactory.svrbCredentialsGenerator(config.getSvrbConfiguration());
 
@@ -783,7 +787,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         new PhoneNumberRecoveryPasswordsManager(phoneNumberRecoveryPasswords);
     UsernameHashZkProofVerifier usernameHashZkProofVerifier = new UsernameHashZkProofVerifier();
 
-    final CarrierDataProvider carrierDataProvider =
+    final CarrierDataProvider carrierDataProvider = gcpPilot ? null :
         new HlrLookupCarrierDataProvider(config.getHlrLookupConfiguration().apiKey().value(),
             config.getHlrLookupConfiguration().apiSecret().value(),
             hlrLookupHttpExecutor,
@@ -799,7 +803,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getKeyTransparencyServiceConfiguration().tlsCertificate(),
         config.getKeyTransparencyServiceConfiguration().clientCertificate(),
         config.getKeyTransparencyServiceConfiguration().clientPrivateKey().value());
-    SecureValueRecoveryClient secureValueRecovery2Client = new SecureValueRecoveryClient(
+    SecureValueRecoveryClient secureValueRecovery2Client = !config.isSvr2Enabled() ? null : new SecureValueRecoveryClient(
         svr2CredentialsGenerator,
         secureValueRecoveryServiceExecutor,
         retryExecutor,
@@ -811,7 +815,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         retryExecutor,
         config.getSvrbConfiguration(),
         () -> dynamicConfigurationManager.getConfiguration().getSvrbStatusCodesToIgnoreForAccountDeletion());
-    SecureStorageClient secureStorageClient = new SecureStorageClient(storageCredentialsGenerator,
+    SecureStorageClient secureStorageClient = !config.isStorageEnabled() ? null : new SecureStorageClient(storageCredentialsGenerator,
         storageServiceExecutor, retryExecutor, config.getSecureStorageServiceConfiguration());
     DisconnectionRequestManager disconnectionRequestManager = new DisconnectionRequestManager(pubsubClient,
         disconnectionRequestListenerExecutor, retryExecutor);
@@ -819,6 +823,11 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         ? config.getGcpAvatars().build(messageDeletionAsyncExecutor, clock) : null;
     if (gcsAvatars != null) environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
       @Override public void stop() throws Exception { gcsAvatars.close(); }
+    });
+    final GcsMediaDownloadService mediaDownloads =
+        gcpPilot && config.getGcpMediaDownloads() != null ? config.getGcpMediaDownloads().build(clock) : null;
+    if (mediaDownloads != null) environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
+      @Override public void stop() throws Exception { mediaDownloads.close(); }
     });
     ProfilesManager profilesManager = gcpPilot
         ? new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, gcsAvatars)
@@ -865,8 +874,12 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getRegistrationTotpConfiguration().maxValidationDelay(),
             webAuthnCeremonyManager);
     RemoteConfigsManager remoteConfigsManager = new RemoteConfigsManager(remoteConfigs, config.getRemoteConfigConfiguration().globalConfig());
-    APNSender apnSender = new APNSender(apnSenderExecutor, Clock.systemUTC(), config.getApnConfiguration());
-    FcmSender fcmSender = new FcmSender(fcmSenderExecutor, config.getFcmConfiguration().credentials().value());
+    PushNotificationSender apnSender = config.isApnsEnabled()
+        ? new APNSender(apnSenderExecutor, Clock.systemUTC(), config.getApnConfiguration())
+        : PushNotificationSender.unavailable("APNs");
+    PushNotificationSender fcmSender = config.isFcmEnabled()
+        ? new FcmSender(fcmSenderExecutor, config.getFcmConfiguration().credentials().value())
+        : PushNotificationSender.unavailable("FCM");
     PushNotificationScheduler pushNotificationScheduler = new PushNotificationScheduler(pushSchedulerCluster,
         apnSender, fcmSender, accountsManager, 0, 0, retryExecutor);
     PushNotificationManager pushNotificationManager =
@@ -968,7 +981,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     environment.lifecycle().manage(asnInfoProviderSupplier);
 
     environment.lifecycle().manage(dnsResolutionEventLoopGroup);
-    environment.lifecycle().manage(apnSender);
+    if (apnSender instanceof io.dropwizard.lifecycle.Managed managedApns) environment.lifecycle().manage(managedApns);
     environment.lifecycle().manage(pushNotificationScheduler);
     environment.lifecycle().manage(provisioningManager);
     environment.lifecycle().manage(disconnectionRequestManager);
@@ -1179,7 +1192,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             new ProfileGrpcService(clock, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager, config.getBadges(), profileCdnPolicyGenerator, chatGenericZkSecretParams, profileBadgeConverter, rateLimiters),
             new MessagesGrpcService(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender, messageByteLimitCardinalityEstimator, spamChecker, messageDispatcher, Clock.systemUTC()),
             gcpPilot ? null : new BackupsGrpcService(accountsManager, backupAuthManager, backupMetrics),
-            new DevicesGrpcService(accountsManager),
+            new DevicesGrpcService(accountsManager, config.enabledPushTypes()),
             new AttachmentsGrpcService(experimentEnrollmentManager, rateLimiters, gcsAttachmentGenerator,
                 tusAttachmentGenerator, stickerPolicyGenerator,
                 config.getAttachments().maxAttachmentUploadSizeInBytes(), Clock.systemUTC()),
@@ -1215,7 +1228,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             new ProfileAnonymousGrpcService(accountsManager, profilesManager, profileBadgeConverter, profileCdnPolicyGenerator, chatGenericZkSecretParams, groupZkSecretParams, rateLimiters, clock),
             new MessagesAnonymousGrpcService(accountsManager, rateLimiters, messageSender, groupSendTokenUtil, messageByteLimitCardinalityEstimator, spamChecker, Clock.systemUTC()),
             gcpPilot ? null : new BackupsAnonymousGrpcService(backupManager, backupMetrics, config.getAttachments().maxAttachmentUploadSizeInBytes(), config.getAttachments().maxMessageBackupUploadSizeInBytes()),
-            new CredentialsAnonymousGrpcService(accountsManager, ExternalServiceDefinitions.SVR.generatorFactory().apply(config, Clock.systemUTC())),
+            config.isSvr2Enabled() ? new CredentialsAnonymousGrpcService(accountsManager, ExternalServiceDefinitions.SVR.generatorFactory().apply(config, Clock.systemUTC())) : null,
             gcpPilot ? null : new SubscriptionsGrpcService(clock, config.getSubscription(), subscriptionManager, donationPermitsManager,
                 stripeManager, braintreeManager, googlePlayBillingManager, appleAppStoreManager, bankMandateTranslator),
             gcpPilot ? null : new OneTimeDonationsGrpcService(config.getOneTimeDonations(), stripeManager, braintreeManager,
@@ -1328,8 +1341,9 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     final PersistentTimer persistentTimer = new PersistentTimer(rateLimitersCluster, clock);
 
     final List<Object> commonControllers = Lists.newArrayList(
+        mediaDownloads == null ? null : new MediaDownloadController(mediaDownloads, rateLimiters),
         new AccountController(accountsManager, rateLimiters, phoneNumberRecoveryPasswordsManager,
-            usernameHashZkProofVerifier),
+            usernameHashZkProofVerifier, config.enabledPushTypes()),
         new AccountControllerV2(accountsManager, changeNumberManager),
         new AttachmentControllerV4(rateLimiters, gcsAttachmentGenerator, tusAttachmentGenerator,
             experimentEnrollmentManager, config.getAttachments().maxAttachmentUploadSizeInBytes()),
@@ -1339,7 +1353,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         gcpPilot ? null : new CallQualitySurveyController(callQualitySurveyManager),
         new CertificateController(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, callingPreV101GenericZkSecretParams, clock, !gcpPilot),
         new ChallengeController(accountsManager, rateLimitChallengeManager, challengeConstraintChecker),
-        new DeviceController(accountsManager, rateLimiters, persistentTimer),
+        new DeviceController(accountsManager, rateLimiters, persistentTimer, config.enabledPushTypes()),
         gcpPilot ? null : new DeviceCheckController(clock, accountsManager, backupAuthManager, appleDeviceCheckManager, rateLimiters,
             config.getDeviceCheck().backupRedemptionDuration()),
         new DirectoryV2Controller(directoryV2CredentialsGenerator),
@@ -1357,8 +1371,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         gcpPilot ? null : new RegistrationController(accountsManager, phoneVerificationTokenManager, registrationLockVerificationManager,
             rateLimiters, registrationFraudChecker, ReceiptCredentialPresentation::new, zkReceiptOperations, clock, dynamicConfigurationManager),
         new RemoteConfigController(remoteConfigsManager),
-        new SecureStorageController(storageCredentialsGenerator),
-        new SecureValueRecovery2Controller(svr2CredentialsGenerator, accountsManager),
+        config.isStorageEnabled() ? new SecureStorageController(storageCredentialsGenerator) : null,
+        config.isSvr2Enabled() ? new SecureValueRecovery2Controller(svr2CredentialsGenerator, accountsManager) : null,
         gcpPilot ? null : new StickerController(rateLimiters, stickerPolicyGenerator, Clock.systemUTC()),
         gcpPilot ? null : new VerificationController(registrationServiceClient, new VerificationSessionManager(verificationSessions),
             pushNotificationManager, registrationCaptchaManager, phoneNumberRecoveryPasswordsManager,
@@ -1432,6 +1446,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     List.of(
         new LoggingUnhandledExceptionMapper(),
+        new FeatureUnavailableExceptionMapper(),
         new CompletionExceptionMapper(),
         new IOExceptionMapper(),
         new RateLimitExceededExceptionMapper(),

@@ -14,4 +14,38 @@ public class FaultTolerantPubSubConnection<K, V> extends AbstractFaultTolerantPu
 
     super(name, pubSubConnection);
   }
+
+  public void addChannelListener(final io.lettuce.core.pubsub.RedisPubSubListener<K, V> listener) {
+    usePubSubConnection(connection -> connection.addListener(listener));
+  }
+
+  public void removeChannelListener(final io.lettuce.core.pubsub.RedisPubSubListener<K, V> listener) {
+    usePubSubConnection(connection -> connection.removeListener(listener));
+  }
+
+  public void subscribeChannel(final K channel) {
+    usePubSubConnection(connection -> connection.sync().subscribe(channel));
+  }
+
+  public void unsubscribeChannel(final K channel) {
+    usePubSubConnection(connection -> connection.sync().unsubscribe(channel));
+  }
+
+  public void subscribeKeyspace(final io.lettuce.core.pubsub.RedisPubSubListener<K, V> listener, final K[] patterns) {
+    usePubSubConnection(connection -> {
+      connection.addListener(listener);
+      connection.sync().psubscribe(patterns);
+    });
+  }
+
+  public void unsubscribeKeyspace(final io.lettuce.core.pubsub.RedisPubSubListener<K, V> listener) {
+    usePubSubConnection(connection -> {
+      connection.sync().punsubscribe();
+      connection.removeListener(listener);
+    });
+  }
+
+  public void close() {
+    usePubSubConnection(io.lettuce.core.pubsub.StatefulRedisPubSubConnection::close);
+  }
 }

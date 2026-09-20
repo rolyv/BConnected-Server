@@ -27,8 +27,8 @@ import org.whispersystems.textsecuregcm.util.Pair;
 public class PushNotificationManager {
 
   private final AccountsManager accountsManager;
-  private final APNSender apnSender;
-  private final FcmSender fcmSender;
+  private final PushNotificationSender apnSender;
+  private final PushNotificationSender fcmSender;
   private final PushNotificationScheduler pushNotificationScheduler;
 
   private static final Duration VERIFICATION_CODE_TTL = Duration.ofMinutes(10);
@@ -40,8 +40,8 @@ public class PushNotificationManager {
   private static final Logger logger = LoggerFactory.getLogger(PushNotificationManager.class);
 
   public PushNotificationManager(final AccountsManager accountsManager,
-      final APNSender apnSender,
-      final FcmSender fcmSender,
+      final PushNotificationSender apnSender,
+      final PushNotificationSender fcmSender,
       final PushNotificationScheduler pushNotificationScheduler) {
 
     this.accountsManager = accountsManager;
@@ -123,6 +123,14 @@ public class PushNotificationManager {
 
   @VisibleForTesting
   CompletableFuture<Optional<SendPushNotificationResult>> sendNotification(final PushNotification pushNotification) {
+    final PushNotificationSender sender = switch (pushNotification.tokenType()) {
+      case FCM -> fcmSender;
+      case APN -> apnSender;
+    };
+
+    if (sender.isUnavailable()) {
+      return sender.sendNotification(pushNotification).thenApply(Optional::of);
+    }
     if (!pushNotification.urgent()) {
       // Schedule a notification for some time in the future (possibly even now!) rather than sending a notification
       // directly
@@ -132,11 +140,6 @@ public class PushNotificationManager {
           .thenApply(ignored -> Optional.<SendPushNotificationResult>empty())
           .toCompletableFuture();
     }
-
-    final PushNotificationSender sender = switch (pushNotification.tokenType()) {
-      case FCM -> fcmSender;
-      case APN -> apnSender;
-    };
 
     return sender.sendNotification(pushNotification).whenComplete((result, throwable) -> {
       if (throwable == null) {

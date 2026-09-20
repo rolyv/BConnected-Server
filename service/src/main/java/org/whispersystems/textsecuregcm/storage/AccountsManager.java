@@ -4,7 +4,6 @@
  */
 package org.whispersystems.textsecuregcm.storage;
 
-
 import static java.util.Objects.requireNonNull;
 import static org.whispersystems.textsecuregcm.metrics.MetricsUtil.name;
 
@@ -90,11 +89,12 @@ import org.whispersystems.textsecuregcm.identity.AciServiceIdentifier;
 import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantPubSubConnection;
-import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
+import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
 import org.whispersystems.textsecuregcm.util.ExceptionUtils;
+import org.whispersystems.textsecuregcm.util.FeatureUnavailableException;
 import org.whispersystems.textsecuregcm.util.NoStackTraceRuntimeException;
 import org.whispersystems.textsecuregcm.util.Pair;
 import org.whispersystems.textsecuregcm.util.RegistrationIdValidator;
@@ -139,7 +139,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
   private final AccountStore accounts;
   private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
   private final FaultTolerantRedisClusterClient cacheCluster;
-  private final FaultTolerantRedisClient pubSubRedisClient;
+  private final PubSubRedisClient pubSubRedisClient;
   private final AccountLockManager accountLockManager;
   private final KeysManager keysManager;
   private final MessagesManager messagesManager;
@@ -299,7 +299,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
   public AccountsManager(final AccountStore accounts,
       final PhoneNumberIdentifierStore phoneNumberIdentifiers,
       final FaultTolerantRedisClusterClient cacheCluster,
-      final FaultTolerantRedisClient pubSubRedisClient,
+      final PubSubRedisClient pubSubRedisClient,
       final AccountLockManager accountLockManager,
       final KeysManager keysManager,
       final MessagesManager messagesManager,
@@ -370,39 +370,28 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
 
   @Override
   public void start() {
-    pubSubConnection.usePubSubConnection(connection -> {
-      connection.addListener(this);
-
-      boolean subscribed = false;
-
-      // Loop indefinitely until we establish a subscription. We don't want to fail immediately if there's a temporary
-      // Redis connectivity issue, since that would derail the whole startup process and likely lead to unnecessary pod
-      // churn, which might make things worse. If we never establish a connection, readiness probes will eventually fail
-      // and terminate the pods.
-      do {
+    boolean subscribed = false;
+    do {
+      try {
+        pubSubConnection.subscribeKeyspace(this, new String[] {LINKED_DEVICE_KEYSPACE_PATTERN,
+            TRANSFER_ARCHIVE_KEYSPACE_PATTERN, RESTORE_ACCOUNT_REQUEST_KEYSPACE_PATTERN});
+        subscribed = true;
+      } catch (final RedisCommandTimeoutException e) {
         try {
-          connection.sync().psubscribe(LINKED_DEVICE_KEYSPACE_PATTERN, TRANSFER_ARCHIVE_KEYSPACE_PATTERN,
-              RESTORE_ACCOUNT_REQUEST_KEYSPACE_PATTERN);
-
-          subscribed = true;
-        } catch (final RedisCommandTimeoutException e) {
-          try {
-            Thread.sleep(SUBSCRIBE_RETRY_DELAY);
-          } catch (final InterruptedException ex) {
-            throw new RuntimeException(ex);
-          }
+          Thread.sleep(SUBSCRIBE_RETRY_DELAY);
+        } catch (final InterruptedException ex) {
+          Thread.currentThread().interrupt();
+          throw new RuntimeException(ex);
         }
-      } while (!subscribed);
-    });
+      }
+    } while (!subscribed);
   }
 
   @Override
   public void stop() {
-    pubSubConnection.usePubSubConnection(connection -> {
-      connection.sync().punsubscribe();
-      connection.removeListener(this);
-    });
+    pubSubConnection.unsubscribeKeyspace(this);
   }
+
 
   /// Create an account without a phone number.
   ///
@@ -767,8 +756,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
       }
 
       ResilienceUtil.getGeneralRedisRetry(RETRY_NAME)
-          .executeCompletionStage(retryExecutor, () -> pubSubRedisClient.withConnection(connection ->
-              connection.async().set(key, deviceInfoJson, SetArgs.Builder.ex(RECENTLY_ADDED_DEVICE_TTL))))
+          .executeCompletionStage(retryExecutor, () -> pubSubRedisClient.set(key, deviceInfoJson, SetArgs.Builder.ex(RECENTLY_ADDED_DEVICE_TTL)))
           .whenComplete((_, pubSubThrowable) -> {
             if (pubSubThrowable != null) {
               logger.warn("Failed to record recently-created device", pubSubThrowable);
@@ -1517,6 +1505,11 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
   }
 
   private void delete(final Account account) {
+    // Check before constructing any destructive futures, including local keys, messages and avatars.
+    if (secureStorageClient == null || secureValueRecovery2Client == null) {
+      throw new FeatureUnavailableException(
+          "Account deletion while storage or SVR2 cleanup is disabled");
+    }
     final List<AccountMutation> additionalWriteItems = new ArrayList<>();
 
     account.getDevices().stream()
@@ -1830,8 +1823,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
       final String key = getRegistrationIdTransferArchiveKey(account.getAccountIdentifier(), destinationDeviceId, registrationId);
 
       return ResilienceUtil.getGeneralRedisRetry(RETRY_NAME)
-          .executeCompletionStage(retryExecutor, () -> pubSubRedisClient.withConnection(connection -> connection.async()
-                  .set(key, transferArchiveJson, SetArgs.Builder.ex(RECENTLY_ADDED_TRANSFER_ARCHIVE_TTL)))
+          .executeCompletionStage(retryExecutor, () -> pubSubRedisClient.set(key, transferArchiveJson, SetArgs.Builder.ex(RECENTLY_ADDED_TRANSFER_ARCHIVE_TTL))
               .toCompletableFuture())
           .thenRun(Util.NOOP)
           .toCompletableFuture();
@@ -1881,8 +1873,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
     }
 
     return ResilienceUtil.getGeneralRedisRetry(RETRY_NAME)
-        .executeCompletionStage(retryExecutor, () -> pubSubRedisClient.withConnection(connection ->
-                connection.async().set(key, requestJson, SetArgs.Builder.ex(RESTORE_ACCOUNT_REQUEST_TTL)))
+        .executeCompletionStage(retryExecutor, () -> pubSubRedisClient.set(key, requestJson, SetArgs.Builder.ex(RESTORE_ACCOUNT_REQUEST_TTL))
             .toCompletableFuture())
         .thenRun(Util.NOOP)
         .toCompletableFuture();
@@ -1922,7 +1913,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
 
     // The Redis key we're waiting for may have been added before the caller issued a request to watch for it; check to
     // see if it's already there
-    pubSubRedisClient.withConnection(connection -> connection.async().get(redisKey))
+    pubSubRedisClient.get(redisKey)
         .thenAccept(response -> {
           if (StringUtils.isNotBlank(response)) {
             handler.accept(future, response);
@@ -1939,7 +1930,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
       final String tokenIdentifier = channel.substring(LINKED_DEVICE_KEYSPACE_PATTERN.length() - 1);
 
       Optional.ofNullable(waitForDeviceFuturesByTokenIdentifier.remove(tokenIdentifier))
-          .ifPresent(future -> pubSubRedisClient.withConnection(connection -> connection.async().get(getLinkedDeviceKey(tokenIdentifier)))
+          .ifPresent(future -> pubSubRedisClient.get(getLinkedDeviceKey(tokenIdentifier))
               .whenComplete((deviceInfoJson, throwable) -> {
                 if (throwable != null) {
                   future.completeExceptionally(throwable);
@@ -1976,7 +1967,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
         transferArchiveKey = getRegistrationIdTransferArchiveKey(accountIdentifier, deviceId, registrationId);
 
         Optional.ofNullable(waitForTransferArchiveFuturesByDeviceIdentifier.remove(deviceIdentifier))
-            .ifPresent(future -> pubSubRedisClient.withConnection(connection -> connection.async().get(transferArchiveKey))
+            .ifPresent(future -> pubSubRedisClient.get(transferArchiveKey)
                 .whenComplete((transferArchiveJson, throwable) -> {
                   if (throwable != null) {
                     future.completeExceptionally(throwable);
@@ -1992,8 +1983,7 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
       final String token = channel.substring(RESTORE_ACCOUNT_REQUEST_KEYSPACE_PATTERN.length() - 1);
 
       Optional.ofNullable(waitForRestoreAccountRequestFuturesByToken.remove(token))
-          .ifPresent(future -> pubSubRedisClient.withConnection(connection -> connection.async().get(
-                  getRestoreAccountRequestKey(token)))
+          .ifPresent(future -> pubSubRedisClient.get(getRestoreAccountRequestKey(token))
               .whenComplete((requestJson, throwable) -> {
                 if (throwable != null) {
                   future.completeExceptionally(throwable);

@@ -20,14 +20,14 @@ import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantPubSubConnection;
-import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
+import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.redis.RedisOperation;
 import org.whispersystems.textsecuregcm.storage.PubSubProtos;
 import org.whispersystems.textsecuregcm.util.ResilienceUtil;
 
 public class ProvisioningManager extends RedisPubSubAdapter<byte[], byte[]> implements Managed {
 
-  private final FaultTolerantRedisClient pubSubClient;
+  private final PubSubRedisClient pubSubClient;
   private final FaultTolerantPubSubConnection<byte[], byte[]> pubSubConnection;
 
   private final Map<String, Consumer<PubSubProtos.PubSubMessage>> listenersByProvisioningAddress =
@@ -45,7 +45,7 @@ public class ProvisioningManager extends RedisPubSubAdapter<byte[], byte[]> impl
 
   private static final Logger logger = LoggerFactory.getLogger(ProvisioningManager.class);
 
-  public ProvisioningManager(final FaultTolerantRedisClient pubSubClient) {
+  public ProvisioningManager(final PubSubRedisClient pubSubClient) {
     this.pubSubClient = pubSubClient;
     this.pubSubConnection = pubSubClient.createBinaryPubSubConnection();
 
@@ -54,22 +54,22 @@ public class ProvisioningManager extends RedisPubSubAdapter<byte[], byte[]> impl
 
   @Override
   public void start() throws Exception {
-    pubSubConnection.usePubSubConnection(connection -> connection.addListener(this));
+    pubSubConnection.addChannelListener(this);
   }
 
   @Override
   public void stop() throws Exception {
-    pubSubConnection.usePubSubConnection(connection -> connection.removeListener(this));
+    pubSubConnection.removeChannelListener(this);
   }
 
   public void addListener(final String address, final Consumer<PubSubProtos.PubSubMessage> listener) {
     listenersByProvisioningAddress.put(address, listener);
-    pubSubConnection.usePubSubConnection(connection -> connection.sync().subscribe(address.getBytes(StandardCharsets.UTF_8)));
+    pubSubConnection.subscribeChannel(address.getBytes(StandardCharsets.UTF_8));
   }
 
   public void removeListener(final String address) {
     RedisOperation.unchecked(() ->
-        pubSubConnection.usePubSubConnection(connection -> connection.sync().unsubscribe(address.getBytes(StandardCharsets.UTF_8))));
+        pubSubConnection.unsubscribeChannel(address.getBytes(StandardCharsets.UTF_8)));
 
     listenersByProvisioningAddress.remove(address);
   }
@@ -81,8 +81,7 @@ public class ProvisioningManager extends RedisPubSubAdapter<byte[], byte[]> impl
         .build();
 
     final boolean receiverPresent = ResilienceUtil.getGeneralRedisRetry(RETRY_NAME)
-        .executeSupplier(() -> pubSubClient.withBinaryConnection(connection ->
-            connection.sync().publish(address.getBytes(StandardCharsets.UTF_8), pubSubMessage.toByteArray()) > 0));
+        .executeSupplier(() -> pubSubClient.publishToChannel(address.getBytes(StandardCharsets.UTF_8), pubSubMessage.toByteArray()) > 0);
 
     Metrics.counter(SEND_PROVISIONING_MESSAGE_COUNTER_NAME, "online", String.valueOf(receiverPresent)).increment();
 

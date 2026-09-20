@@ -152,6 +152,23 @@ class RegistrationLockVerificationManagerTest {
     exceptionType.second().accept(e);
   }
 
+  @Test
+  void unavailableSvrDoesNotBypassRequiredRegistrationLockOrIssueCredentials() throws Exception {
+    when(existingRegistrationLock.getStatus()).thenReturn(StoredRegistrationLock.Status.REQUIRED);
+    when(existingRegistrationLock.getTimeRemaining()).thenReturn(java.time.Duration.ofDays(1));
+    when(existingRegistrationLock.needsFailureCredentials()).thenReturn(true);
+    when(existingRegistrationLock.verify("wrong-pin")).thenReturn(false);
+    final RegistrationLockVerificationManager manager = new RegistrationLockVerificationManager(accountsManager,
+        disconnectionRequestManager, null, phoneNumberRecoveryPasswordsManager, pushNotificationManager, rateLimiters);
+    final RegistrationLockFailureException failure = assertThrows(RegistrationLockFailureException.class,
+        () -> manager.verifyRegistrationLock(account, "wrong-pin", "Signal-iOS/7.0.0",
+            RegistrationLockVerificationManager.Flow.CHANGE_NUMBER,
+            PhoneVerificationRequest.VerificationType.SESSION));
+    org.assertj.core.api.Assertions.assertThat(failure.getFailure().svr2Credentials()).isNull();
+    verify(account).lockAuthTokenHash();
+    verify(svr2CredentialsGenerator, never()).generateForUuid(any());
+  }
+
   static Stream<Arguments> testErrors() {
     return Stream.of(
         Arguments.of(RegistrationLockError.MISMATCH, PhoneVerificationRequest.VerificationType.SESSION, "reglock", true),

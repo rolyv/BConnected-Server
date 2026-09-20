@@ -7,6 +7,7 @@ package org.whispersystems.textsecuregcm.grpc;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Empty;
+import java.util.EnumSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -29,17 +30,32 @@ import org.signal.chat.errors.NotFound;
 import org.whispersystems.textsecuregcm.auth.grpc.AuthenticatedDevice;
 import org.whispersystems.textsecuregcm.auth.grpc.AuthenticationUtil;
 import org.whispersystems.textsecuregcm.identity.IdentityType;
+import org.whispersystems.textsecuregcm.push.PushNotification;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.storage.DeviceCapability;
+import org.whispersystems.textsecuregcm.util.FeatureUnavailableException;
 
 public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
 
+  private final Set<PushNotification.TokenType> enabledPushTypes;
   private final AccountsManager accountsManager;
 
   public DevicesGrpcService(final AccountsManager accountsManager) {
+    this(accountsManager, EnumSet.allOf(PushNotification.TokenType.class));
+  }
+
+  public DevicesGrpcService(final AccountsManager accountsManager,
+      final Set<PushNotification.TokenType> enabledPushTypes) {
+    this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accountsManager = accountsManager;
+  }
+
+  private void requirePushProvider(final PushNotification.TokenType type) {
+    if (!enabledPushTypes.contains(type)) {
+      throw new FeatureUnavailableException(type + " push registration");
+    }
   }
 
   @Override
@@ -119,12 +135,14 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
     switch (request.getTokenRequestCase()) {
 
       case APNS_TOKEN_REQUEST -> {
+        requirePushProvider(PushNotification.TokenType.APN);
         final SetPushTokenRequest.ApnsTokenRequest apnsTokenRequest = request.getApnsTokenRequest();
         apnsToken = StringUtils.stripToNull(apnsTokenRequest.getApnsToken());
         fcmToken = null;
       }
 
       case FCM_TOKEN_REQUEST -> {
+        requirePushProvider(PushNotification.TokenType.FCM);
         final SetPushTokenRequest.FcmTokenRequest fcmTokenRequest = request.getFcmTokenRequest();
         apnsToken = null;
         fcmToken = StringUtils.stripToNull(fcmTokenRequest.getFcmToken());

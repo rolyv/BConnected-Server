@@ -39,6 +39,7 @@ import jakarta.ws.rs.core.Response;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -67,6 +68,7 @@ import org.whispersystems.textsecuregcm.limits.RateLimiters;
 import org.whispersystems.textsecuregcm.metrics.DevicePlatformUtil;
 import org.whispersystems.textsecuregcm.metrics.MetricsUtil;
 import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
+import org.whispersystems.textsecuregcm.push.PushNotification;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
@@ -78,6 +80,7 @@ import org.whispersystems.textsecuregcm.storage.PersistentTimer;
 import org.whispersystems.textsecuregcm.util.DeviceCapabilityAdapter;
 import org.whispersystems.textsecuregcm.util.EnumMapUtil;
 import org.whispersystems.textsecuregcm.util.ExceptionUtils;
+import org.whispersystems.textsecuregcm.util.FeatureUnavailableException;
 import org.whispersystems.textsecuregcm.util.LinkDeviceToken;
 import org.whispersystems.textsecuregcm.util.Pair;
 import org.whispersystems.textsecuregcm.util.ua.ClientPlatform;
@@ -90,6 +93,7 @@ public class DeviceController {
 
   static final int MAX_DEVICES = 6;
 
+  private final Set<PushNotification.TokenType> enabledPushTypes;
   private final AccountsManager accounts;
   private final RateLimiters rateLimiters;
   private final PersistentTimer persistentTimer;
@@ -118,6 +122,14 @@ public class DeviceController {
       final RateLimiters rateLimiters,
       final PersistentTimer persistentTimer) {
 
+    this(accounts, rateLimiters, persistentTimer,
+        EnumSet.allOf(PushNotification.TokenType.class));
+  }
+
+  public DeviceController(final AccountsManager accounts, final RateLimiters rateLimiters,
+      final PersistentTimer persistentTimer,
+      final Set<PushNotification.TokenType> enabledPushTypes) {
+    this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accounts = accounts;
     this.rateLimiters = rateLimiters;
     this.persistentTimer = persistentTimer;
@@ -238,6 +250,12 @@ public class DeviceController {
 
     final DeviceActivationRequest deviceActivationRequest = linkDeviceRequest.deviceActivationRequest();
     final DeviceAttributes deviceAttributes = linkDeviceRequest.deviceAttributes();
+    if (deviceActivationRequest.apnToken().isPresent()
+        && !enabledPushTypes.contains(PushNotification.TokenType.APN)
+        || deviceActivationRequest.gcmToken().isPresent()
+        && !enabledPushTypes.contains(PushNotification.TokenType.FCM)) {
+      throw new FeatureUnavailableException("Requested device push provider");
+    }
 
     rateLimiters.getVerifyDeviceLimiter().validate(account.getAccountIdentifier());
 

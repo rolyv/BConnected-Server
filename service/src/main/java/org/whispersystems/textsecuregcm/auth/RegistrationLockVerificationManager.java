@@ -183,7 +183,7 @@ public class RegistrationLockVerificationManager {
   }
 
   private @Nullable ExternalServiceCredentials svr2FailureCredentials(final StoredRegistrationLock existingRegistrationLock, final Account account) {
-    if (!existingRegistrationLock.needsFailureCredentials()) {
+    if (svr2CredentialGenerator == null || !existingRegistrationLock.needsFailureCredentials()) {
       return null;
     }
     return svr2CredentialGenerator.generateForUuid(account.getAccountIdentifier());

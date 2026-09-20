@@ -18,6 +18,10 @@ import org.whispersystems.textsecuregcm.util.SystemMapper;
 class GcpRuntimeConfigurationTest {
   private static final String PILOT = """
       runtimeMode: GCP_PILOT
+      grpc:
+        port: 8080
+        websocketPort: 8081
+        h2c: true
       postgres:
         jdbcUrl: jdbc:postgresql://127.0.0.1:5432/example
         username: example
@@ -68,15 +72,58 @@ class GcpRuntimeConfigurationTest {
     assertThat(configuration.getDynamoDbTables()).isNull();
     assertThat(configuration.getCdnConfiguration()).isNull();
     assertThat(configuration.getKeyTransparencyServiceConfiguration()).isNull();
+    assertThat(configuration.enabledPushTypes()).isEmpty();
+    assertThat(configuration.isStorageEnabled()).isFalse();
+    assertThat(configuration.isSvr2Enabled()).isFalse();
     assertThat(configuration.getMessageRetention()).isEqualTo(java.time.Duration.ofDays(7));
     assertThat(configuration.getRecoveryRetention()).isEqualTo(java.time.Duration.ofDays(1));
     try (var validation = Validation.buildDefaultValidatorFactory()) {
       for (String property : new String[] {"stripe", "braintree", "googlePlayBilling", "appleAppStore", "dynamoDbClient",
           "dynamoDbTables", "cdn", "cdn3StorageManager", "svrb", "turn", "tus", "foundationDbMessages",
-          "keyTransparencyService", "runtimeConfigurationValid"}) {
+          "keyTransparencyService", "tlsKeyStore", "apn", "fcm", "svr2", "storageService", "hlrLookup", "runtimeConfigurationValid"}) {
         assertThat(validation.getValidator().validateProperty(configuration, property)).as(property).isEmpty();
       }
     }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"apnsEnabled", "fcmEnabled", "storageEnabled", "svr2Enabled"})
+  void enabledOwnedIntegrationsRequireTheirRealConfiguration(final String capability) throws Exception {
+    final WhisperServerConfiguration configuration = read(PILOT + "\npilotIntegrations:\n  " + capability + ": true\n");
+    assertThrows(IllegalArgumentException.class, configuration::validateRuntimeConfiguration);
+  }
+
+  @Test
+  void pilotH2cNeedsNoUnusedKeystoreButTlsListenersStillRequireOne() throws Exception {
+    read(PILOT).validateRuntimeConfiguration();
+    final WhisperServerConfiguration tls = read(PILOT.replace("h2c: true", "h2c: false"));
+    assertThrows(IllegalArgumentException.class, tls::validateRuntimeConfiguration);
+    final WhisperServerConfiguration https = read(PILOT + """
+        server:
+          applicationConnectors:
+            - type: https
+              port: 8443
+        """);
+    assertThrows(IllegalArgumentException.class, https::validateRuntimeConfiguration);
+  }
+
+  @Test
+  void ownedApnsCanBeEnabledIndependently() throws Exception {
+    final WhisperServerConfiguration configuration = read(PILOT + """
+        pilotIntegrations:
+          apnsEnabled: true
+        apn:
+          teamId: secret://collation
+          keyId: secret://collation
+          signingKey: secret://collation
+          bundleId: example.pilot
+          sandbox: true
+        """);
+    configuration.validateRuntimeConfiguration();
+    assertThat(configuration.isApnsEnabled()).isTrue();
+    assertThat(configuration.isFcmEnabled()).isFalse();
+    assertThat(configuration.isStorageEnabled()).isFalse();
+    assertThat(configuration.isSvr2Enabled()).isFalse();
   }
 
   @Test

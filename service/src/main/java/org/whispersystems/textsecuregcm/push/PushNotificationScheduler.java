@@ -35,9 +35,10 @@ import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
-import org.whispersystems.textsecuregcm.util.ResilienceUtil;
+import org.whispersystems.textsecuregcm.util.FeatureUnavailableException;
 import org.whispersystems.textsecuregcm.util.Pair;
 import org.whispersystems.textsecuregcm.util.RedisClusterUtil;
+import org.whispersystems.textsecuregcm.util.ResilienceUtil;
 import org.whispersystems.textsecuregcm.util.Util;
 import reactor.core.publisher.Mono;
 
@@ -63,8 +64,8 @@ public class PushNotificationScheduler implements Managed {
   private static final String TOKEN_TYPE_TAG = "tokenType";
   private static final String ACCEPTED_TAG = "accepted";
 
-  private final APNSender apnSender;
-  private final FcmSender fcmSender;
+  private final PushNotificationSender apnSender;
+  private final PushNotificationSender fcmSender;
   private final AccountsManager accountsManager;
   private final FaultTolerantRedisClusterClient pushSchedulingCluster;
   private final ScheduledExecutorService retryExecutor;
@@ -120,19 +121,21 @@ public class PushNotificationScheduler implements Managed {
 
     @VisibleForTesting
     long processScheduledBackgroundNotifications(PushNotification.TokenType tokenType, final int slot) {
+      if (sender(tokenType).isUnavailable()) return 0;
       return processScheduledNotifications(getPendingBackgroundNotificationQueueKey(tokenType, slot),
-          (account, device) -> sendBackgroundNotification(tokenType, account, device));
+          (account, device) -> sendBackgroundNotification(tokenType, account, device), ignored -> true);
     }
 
 
     @VisibleForTesting
     long processScheduledDelayedNotifications(final int slot) {
       return processScheduledNotifications(getDelayedNotificationQueueKey(slot),
-          PushNotificationScheduler.this::sendDelayedNotification);
+          PushNotificationScheduler.this::sendDelayedNotification, PushNotificationScheduler.this::canDeliverToDevice);
     }
 
     private long processScheduledNotifications(final String queueKey,
-        final BiFunction<Account, Device, CompletableFuture<Void>> sendNotificationFunction) {
+        final BiFunction<Account, Device, CompletableFuture<Void>> sendNotificationFunction,
+        final java.util.function.Predicate<Device> canDeliver) {
 
       final long currentTimeMillis = clock.millis();
       final AtomicLong processedNotifications = new AtomicLong(0);
@@ -142,6 +145,8 @@ public class PushNotificationScheduler implements Managed {
               .flatMap(encodedAciAndDeviceId -> Mono.fromFuture(
                   () -> getAccountAndDeviceFromPairString(encodedAciAndDeviceId)), maxConcurrency)
               .flatMap(Mono::justOrEmpty)
+              // Leave disabled-provider entries untouched so enabling an owned provider can resume delivery.
+              .filter(accountAndDevice -> canDeliver.test(accountAndDevice.second()))
               .flatMap(accountAndDevice -> Mono.fromFuture(
                           () -> sendNotificationFunction.apply(accountAndDevice.first(), accountAndDevice.second()))
                       .then(Mono.defer(() -> connection.reactive().zrem(queueKey, encodeAciAndDeviceId(accountAndDevice.first(), accountAndDevice.second()))))
@@ -155,8 +160,8 @@ public class PushNotificationScheduler implements Managed {
   }
 
   public PushNotificationScheduler(final FaultTolerantRedisClusterClient pushSchedulingCluster,
-      final APNSender apnSender,
-      final FcmSender fcmSender,
+      final PushNotificationSender apnSender,
+      final PushNotificationSender fcmSender,
       final AccountsManager accountsManager,
       final int dedicatedProcessWorkerThreadCount,
       final int workerMaxConcurrency,
@@ -174,8 +179,8 @@ public class PushNotificationScheduler implements Managed {
 
   @VisibleForTesting
   PushNotificationScheduler(final FaultTolerantRedisClusterClient pushSchedulingCluster,
-      final APNSender apnSender,
-      final FcmSender fcmSender,
+      final PushNotificationSender apnSender,
+      final PushNotificationSender fcmSender,
       final AccountsManager accountsManager,
       final Clock clock,
       final int dedicatedProcessThreadCount,
@@ -207,6 +212,7 @@ public class PushNotificationScheduler implements Managed {
    * @throws IllegalArgumentException if the given device does not have a push token
    */
   public CompletionStage<Void> scheduleBackgroundNotification(final PushNotification.TokenType tokenType, final Account account, final Device device) {
+    if (sender(tokenType).isUnavailable()) return unavailable(tokenType);
     if (StringUtils.isBlank(getPushToken(tokenType, device))) {
       throw new IllegalArgumentException("Device must have an " + tokenType + " token");
     }
@@ -234,6 +240,9 @@ public class PushNotificationScheduler implements Managed {
    * @return a future that completes once the notification has been scheduled
    */
   public CompletableFuture<Void> scheduleDelayedNotification(final Account account, final Device device, final Duration minDelay) {
+    final PushNotification.TokenType type = StringUtils.isNotBlank(device.getApnId())
+        ? PushNotification.TokenType.APN : PushNotification.TokenType.FCM;
+    if (sender(type).isUnavailable()) return unavailable(type);
     final long deliveryTime = clock.instant().plus(minDelay).toEpochMilli();
 
     return ResilienceUtil.getGeneralRedisRetry(RETRY_NAME)
@@ -296,6 +305,7 @@ public class PushNotificationScheduler implements Managed {
 
   @VisibleForTesting
   CompletableFuture<Void> sendBackgroundNotification(PushNotification.TokenType tokenType, final Account account, final Device device) {
+    if (sender(tokenType).isUnavailable()) return unavailable(tokenType);
     final String pushToken = getPushToken(tokenType, device);
     if (StringUtils.isBlank(pushToken)) {
       return CompletableFuture.completedFuture(null);
@@ -342,6 +352,21 @@ public class PushNotificationScheduler implements Managed {
             TOKEN_TYPE_TAG, getTokenType(device),
             ACCEPTED_TAG, String.valueOf(response.accepted()))
             .increment());
+  }
+
+  private boolean canDeliverToDevice(final Device device) {
+    if (StringUtils.isNotBlank(device.getApnId())) return !apnSender.isUnavailable();
+    if (StringUtils.isNotBlank(device.getGcmId())) return !fcmSender.isUnavailable();
+    return true; // Preserve cleanup of obsolete queue entries for devices that no longer have tokens.
+  }
+
+  private PushNotificationSender sender(final PushNotification.TokenType type) {
+    return type == PushNotification.TokenType.APN ? apnSender : fcmSender;
+  }
+
+  private static <T> CompletableFuture<T> unavailable(final PushNotification.TokenType type) {
+    return CompletableFuture.failedFuture(new FeatureUnavailableException(
+        type + " push notifications"));
   }
 
   @VisibleForTesting

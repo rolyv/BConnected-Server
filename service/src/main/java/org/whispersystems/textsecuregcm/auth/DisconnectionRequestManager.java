@@ -30,7 +30,7 @@ import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.identity.IdentityType;
 import org.whispersystems.textsecuregcm.metrics.MetricsUtil;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantPubSubConnection;
-import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
+import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.util.ResilienceUtil;
@@ -44,7 +44,7 @@ import org.whispersystems.textsecuregcm.util.UUIDUtil;
  */
 public class DisconnectionRequestManager extends RedisPubSubAdapter<byte[], byte[]> implements Managed {
 
-  private final FaultTolerantRedisClient pubSubClient;
+  private final PubSubRedisClient pubSubClient;
   private final Executor listenerEventExecutor;
   private final ScheduledExecutorService retryExecutor;
 
@@ -70,7 +70,7 @@ public class DisconnectionRequestManager extends RedisPubSubAdapter<byte[], byte
 
   private record AccountIdentifierAndDeviceId(UUID accountIdentifier, byte deviceId) {}
 
-  public DisconnectionRequestManager(final FaultTolerantRedisClient pubSubClient,
+  public DisconnectionRequestManager(final PubSubRedisClient pubSubClient,
       final Executor listenerEventExecutor,
       final ScheduledExecutorService retryExecutor) {
 
@@ -184,8 +184,7 @@ public class DisconnectionRequestManager extends RedisPubSubAdapter<byte[], byte
         .build();
 
     return ResilienceUtil.getGeneralRedisRetry(RETRY_NAME)
-        .executeCompletionStage(retryExecutor, () -> pubSubClient.withBinaryConnection(connection ->
-                connection.async().publish(DISCONNECTION_REQUEST_CHANNEL, disconnectionRequest.toByteArray()))
+        .executeCompletionStage(retryExecutor, () -> pubSubClient.publish(DISCONNECTION_REQUEST_CHANNEL, disconnectionRequest.toByteArray())
             .toCompletableFuture())
         .thenRun(DISCONNECTION_REQUESTS_SENT_COUNTER::increment);
   }

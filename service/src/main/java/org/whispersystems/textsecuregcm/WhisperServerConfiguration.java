@@ -4,17 +4,21 @@
  */
 package org.whispersystems.textsecuregcm;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.dropwizard.core.Configuration;
+import io.dropwizard.core.server.DefaultServerFactory;
+import io.dropwizard.jetty.HttpsConnectorFactory;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
-import java.util.Collections;
-import java.util.Map;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.whispersystems.textsecuregcm.attachments.TusConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ApnConfiguration;
 import org.whispersystems.textsecuregcm.configuration.AppleAppStoreConfiguration;
@@ -41,6 +45,8 @@ import org.whispersystems.textsecuregcm.configuration.FaultTolerantRedisClusterF
 import org.whispersystems.textsecuregcm.configuration.FcmConfiguration;
 import org.whispersystems.textsecuregcm.configuration.FoundationDbMessagesConfiguration;
 import org.whispersystems.textsecuregcm.configuration.GcpAttachmentsConfiguration;
+import org.whispersystems.textsecuregcm.configuration.GcsAvatarConfiguration;
+import org.whispersystems.textsecuregcm.configuration.GcsMediaDownloadConfiguration;
 import org.whispersystems.textsecuregcm.configuration.GenericZkConfig;
 import org.whispersystems.textsecuregcm.configuration.GooglePlayBillingConfiguration;
 import org.whispersystems.textsecuregcm.configuration.GrpcConfiguration;
@@ -51,14 +57,17 @@ import org.whispersystems.textsecuregcm.configuration.LinkDeviceSecretConfigurat
 import org.whispersystems.textsecuregcm.configuration.LoginPurchaseConfiguration;
 import org.whispersystems.textsecuregcm.configuration.MessageByteLimitCardinalityEstimatorConfiguration;
 import org.whispersystems.textsecuregcm.configuration.MessageCacheConfiguration;
+import org.whispersystems.textsecuregcm.configuration.MonitoredFileObjectConfiguration;
 import org.whispersystems.textsecuregcm.configuration.OneTimeDonationConfiguration;
 import org.whispersystems.textsecuregcm.configuration.OpenTelemetryConfiguration;
 import org.whispersystems.textsecuregcm.configuration.PagedSingleUseKEMPreKeyStoreConfiguration;
 import org.whispersystems.textsecuregcm.configuration.PaymentsServiceConfiguration;
+import org.whispersystems.textsecuregcm.configuration.PilotIntegrationsConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RegistrationServiceClientFactory;
 import org.whispersystems.textsecuregcm.configuration.RemoteConfigConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ReportMessageConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RetryConfiguration;
+import org.whispersystems.textsecuregcm.configuration.RuntimeMode;
 import org.whispersystems.textsecuregcm.configuration.S3ObjectMonitorFactory;
 import org.whispersystems.textsecuregcm.configuration.SecureStorageServiceConfiguration;
 import org.whispersystems.textsecuregcm.configuration.SecureValueRecoveryConfiguration;
@@ -66,6 +75,7 @@ import org.whispersystems.textsecuregcm.configuration.ShortCodeExpanderConfigura
 import org.whispersystems.textsecuregcm.configuration.SpamFilterConfiguration;
 import org.whispersystems.textsecuregcm.configuration.StripeConfiguration;
 import org.whispersystems.textsecuregcm.configuration.SubscriptionConfiguration;
+import org.whispersystems.textsecuregcm.configuration.TelnyxRegistrationServiceConfiguration;
 import org.whispersystems.textsecuregcm.configuration.TlsKeyStoreConfiguration;
 import org.whispersystems.textsecuregcm.configuration.TotpConfiguration;
 import org.whispersystems.textsecuregcm.configuration.TurnConfiguration;
@@ -73,10 +83,7 @@ import org.whispersystems.textsecuregcm.configuration.UnidentifiedDeliveryConfig
 import org.whispersystems.textsecuregcm.configuration.VirtualThreadConfiguration;
 import org.whispersystems.textsecuregcm.configuration.WebAuthnConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ZkConfig;
-import org.whispersystems.textsecuregcm.configuration.RuntimeMode;
-import org.whispersystems.textsecuregcm.configuration.GcsAvatarConfiguration;
-import org.whispersystems.textsecuregcm.configuration.MonitoredFileObjectConfiguration;
-import org.whispersystems.textsecuregcm.configuration.TelnyxRegistrationServiceConfiguration;
+import org.whispersystems.textsecuregcm.push.PushNotification;
 import org.whispersystems.websocket.configuration.WebSocketConfiguration;
 
 // @noinspection MismatchedQueryAndUpdateOfCollection, WeakerAccess
@@ -88,9 +95,30 @@ public class WhisperServerConfiguration extends Configuration {
   @Valid @JsonProperty
   private GcsAvatarConfiguration gcpAvatars;
 
+  @Valid @NotNull @JsonProperty
+  private PilotIntegrationsConfiguration pilotIntegrations =
+      PilotIntegrationsConfiguration.DISABLED;
+
+  public boolean isApnsEnabled() { return !isGcpPilot() || pilotIntegrations.apnsEnabled(); }
+  public boolean isFcmEnabled() { return !isGcpPilot() || pilotIntegrations.fcmEnabled(); }
+  public boolean isStorageEnabled() { return !isGcpPilot() || pilotIntegrations.storageEnabled(); }
+  public boolean isSvr2Enabled() { return !isGcpPilot() || pilotIntegrations.svr2Enabled(); }
+
+  public Set<PushNotification.TokenType> enabledPushTypes() {
+    final var enabled = EnumSet.noneOf(PushNotification.TokenType.class);
+    if (isApnsEnabled()) enabled.add(PushNotification.TokenType.APN);
+    if (isFcmEnabled()) enabled.add(PushNotification.TokenType.FCM);
+    return Set.copyOf(enabled);
+  }
+
   public RuntimeMode getRuntimeMode() { return runtimeMode; }
   public boolean isGcpPilot() { return runtimeMode == RuntimeMode.GCP_PILOT; }
   public GcsAvatarConfiguration getGcpAvatars() { return gcpAvatars; }
+  @Valid @JsonProperty
+  private GcsMediaDownloadConfiguration gcpMediaDownloads;
+  public GcsMediaDownloadConfiguration getGcpMediaDownloads() {
+    return gcpMediaDownloads;
+  }
 
   public Duration getMessageRetention() {
     return postgres != null && postgres.messageRetention() != null ? postgres.messageRetention()
@@ -111,9 +139,27 @@ public class WhisperServerConfiguration extends Configuration {
     if (!errors.isEmpty()) throw new IllegalArgumentException(String.join("; ", errors));
   }
 
+  private boolean requiresTlsKeyStore() {
+    if (!isGcpPilot() || grpc == null || !grpc.h2c()) return true;
+    if (getServerFactory() instanceof DefaultServerFactory server) {
+      return java.util.stream.Stream.concat(server.getApplicationConnectors().stream(), server.getAdminConnectors().stream())
+          .anyMatch(HttpsConnectorFactory.class::isInstance);
+    }
+    return true;
+  }
+
   private List<String> runtimeConfigurationErrors() {
     final List<String> errors = new ArrayList<>();
     if (runtimeMode == null) errors.add("runtimeMode is required");
+    if (pilotIntegrations == null) {
+      errors.add("pilotIntegrations must not be null");
+      return errors;
+    }
+    if (tlsKeyStore == null && requiresTlsKeyStore()) errors.add("TLS listeners require tlsKeyStore configuration");
+    if (isApnsEnabled() && apn == null) errors.add("Enabled APNs requires apn configuration");
+    if (isFcmEnabled() && fcm == null) errors.add("Enabled FCM requires fcm configuration");
+    if (isStorageEnabled() && storageService == null) errors.add("Enabled storage requires storageService configuration");
+    if (isSvr2Enabled() && svr2 == null) errors.add("Enabled SVR2 requires svr2 configuration");
     if (isGcpPilot()) {
       if (postgres == null || postgres.messageRetention() == null || postgres.recoveryRetention() == null)
         errors.add("GCP_PILOT requires PostgreSQL with explicit messageRetention and recoveryRetention");
@@ -128,7 +174,7 @@ public class WhisperServerConfiguration extends Configuration {
       final Object[] legacy = {stripe, braintree, googlePlayBilling, appleAppStore, appleDeviceCheck, deviceCheck,
           dynamoDbClient, dynamoDbTables, cdn, cdn3StorageManager, svrb, paymentsService, subscription, oneTimeDonations,
           loginPurchase, pagedSingleUseKEMPreKeyStore, turn, tus, callQualitySurvey, foundationDbMessages,
-          callingZkConfig, callingZkConfigPreV101, keyTransparencyService};
+          callingZkConfig, callingZkConfigPreV101, keyTransparencyService, hlrLookup};
       if (java.util.Arrays.stream(legacy).anyMatch(java.util.Objects::isNull))
         errors.add("LEGACY runtime requires billing, backup, calling, CDN, DynamoDB, FoundationDB and Key Transparency configuration");
     }
@@ -143,7 +189,6 @@ public class WhisperServerConfiguration extends Configuration {
     return postgres;
   }
 
-  @NotNull
   @Valid
   @JsonProperty
   private TlsKeyStoreConfiguration tlsKeyStore;
@@ -228,7 +273,6 @@ public class WhisperServerConfiguration extends Configuration {
   @JsonProperty
   private DirectoryV2Configuration directoryV2;
 
-  @NotNull
   @Valid
   @JsonProperty
   private SecureValueRecoveryConfiguration svr2;
@@ -258,12 +302,10 @@ public class WhisperServerConfiguration extends Configuration {
   private WebSocketConfiguration webSocket = new WebSocketConfiguration();
 
   @Valid
-  @NotNull
   @JsonProperty
   private FcmConfiguration fcm;
 
   @Valid
-  @NotNull
   @JsonProperty
   private ApnConfiguration apn;
 
@@ -278,7 +320,6 @@ public class WhisperServerConfiguration extends Configuration {
   private ShortCodeExpanderConfiguration shortCode;
 
   @Valid
-  @NotNull
   @JsonProperty
   private SecureStorageServiceConfiguration storageService;
 
@@ -400,7 +441,6 @@ public class WhisperServerConfiguration extends Configuration {
   private Map<String, @Valid RetryConfiguration> retries = Collections.emptyMap();
 
   @Valid
-  @NotNull
   @JsonProperty
   private HlrLookupConfiguration hlrLookup;
 

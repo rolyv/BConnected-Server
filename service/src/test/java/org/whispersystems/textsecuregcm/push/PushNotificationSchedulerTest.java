@@ -252,6 +252,31 @@ class PushNotificationSchedulerTest {
         pushNotificationScheduler.getNextScheduledDelayedNotificationTimestamp(account, device));
   }
 
+  @Test
+  void disabledProviderKeepsHistoricalQueuesAndDoesNotBlockEnabledProvider() {
+    clock.pin(Instant.now().truncatedTo(ChronoUnit.MILLIS));
+    for (PushNotification.TokenType type : PushNotification.TokenType.values()) {
+      pushNotificationScheduler.scheduleBackgroundNotification(type, account, device).toCompletableFuture().join();
+    }
+    pushNotificationScheduler.scheduleDelayedNotification(account, device, Duration.ZERO).join();
+    final PushNotificationScheduler.NotificationWorker worker = pushNotificationScheduler.new NotificationWorker(1);
+    final int slot = SlotHash.getSlot(PushNotificationScheduler.getDelayedNotificationQueueKey(account, device));
+    when(apnSender.isUnavailable()).thenReturn(true);
+
+    assertEquals(0, worker.processScheduledBackgroundNotifications(PushNotification.TokenType.APN, slot));
+    assertEquals(0, worker.processScheduledDelayedNotifications(slot));
+    assertEquals(Optional.of(clock.instant()),
+        pushNotificationScheduler.getNextScheduledBackgroundNotificationTimestamp(PushNotification.TokenType.APN, account, device));
+    assertEquals(Optional.of(clock.instant()),
+        pushNotificationScheduler.getNextScheduledDelayedNotificationTimestamp(account, device));
+    assertEquals(1, worker.processScheduledBackgroundNotifications(PushNotification.TokenType.FCM, slot));
+    verify(apnSender, never()).sendNotification(any());
+
+    when(apnSender.isUnavailable()).thenReturn(false);
+    assertEquals(1, worker.processScheduledBackgroundNotifications(PushNotification.TokenType.APN, slot));
+    assertEquals(1, worker.processScheduledDelayedNotifications(slot));
+  }
+
   @ParameterizedTest
   @CsvSource({
       "1, true",

@@ -19,6 +19,18 @@ import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 public class RedisClusterConfiguration implements FaultTolerantRedisClusterFactory {
 
   @JsonProperty
+  @jakarta.validation.Valid
+  private GcpRedisConfiguration gcpIam;
+
+  public io.lettuce.core.RedisURI connectionUri() {
+    return gcpIam == null
+        ? org.whispersystems.textsecuregcm.redis.RedisUriUtil.createRedisUriWithTimeout(configurationUri, timeout)
+        : gcpIam.createUri(configurationUri, timeout);
+  }
+
+  public io.lettuce.core.SslOptions sslOptions() { return gcpIam == null ? null : gcpIam.sslOptions(); }
+
+  @JsonProperty
   @NotEmpty
   private String configurationUri;
 

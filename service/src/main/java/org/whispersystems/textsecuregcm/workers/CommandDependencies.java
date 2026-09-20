@@ -51,39 +51,39 @@ import org.whispersystems.textsecuregcm.push.APNSender;
 import org.whispersystems.textsecuregcm.push.FcmSender;
 import org.whispersystems.textsecuregcm.push.PushNotificationManager;
 import org.whispersystems.textsecuregcm.push.PushNotificationScheduler;
+import org.whispersystems.textsecuregcm.push.PushNotificationSender;
 import org.whispersystems.textsecuregcm.push.RedisMessageAvailabilityManager;
-import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
+import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
 import org.whispersystems.textsecuregcm.storage.AccountLockManager;
-import org.whispersystems.textsecuregcm.storage.Accounts;
 import org.whispersystems.textsecuregcm.storage.AccountStore;
+import org.whispersystems.textsecuregcm.storage.Accounts;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager;
-import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
+import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
 import org.whispersystems.textsecuregcm.storage.DynamoDbRecoveryManager;
+import org.whispersystems.textsecuregcm.storage.DynamoProfileDataStore;
 import org.whispersystems.textsecuregcm.storage.FoundationDbVersion;
 import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.KeysManager;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
 import org.whispersystems.textsecuregcm.storage.MessagesDynamoDb;
-import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
-import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
-import org.whispersystems.textsecuregcm.storage.SingleUseKEMPreKeyStorage;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordStore;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
+import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
+import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatars;
 import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
-import org.whispersystems.textsecuregcm.storage.DynamoProfileDataStore;
-import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
 import org.whispersystems.textsecuregcm.storage.Profiles;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
 import org.whispersystems.textsecuregcm.storage.ProfilesV2;
@@ -91,9 +91,10 @@ import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageDynamoDb;
-import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
+import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
 import org.whispersystems.textsecuregcm.storage.SingleUseECPreKeyStore;
+import org.whispersystems.textsecuregcm.storage.SingleUseKEMPreKeyStorage;
 import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
 import org.whispersystems.textsecuregcm.storage.Subscriptions;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FaultTolerantDatabase;
@@ -102,6 +103,7 @@ import org.whispersystems.textsecuregcm.storage.foundationdb.VersionstampUUIDCip
 import org.whispersystems.textsecuregcm.subscriptions.AppleAppStoreClient;
 import org.whispersystems.textsecuregcm.subscriptions.AppleAppStoreManager;
 import org.whispersystems.textsecuregcm.subscriptions.GooglePlayBillingManager;
+import org.whispersystems.textsecuregcm.util.FeatureUnavailableException;
 import org.whispersystems.textsecuregcm.util.ManagedAwsCrt;
 import org.whispersystems.textsecuregcm.util.ManagedExecutors;
 import reactor.core.scheduler.Scheduler;
@@ -123,8 +125,8 @@ public record CommandDependencies(
     MessagesManager messagesManager,
     KeysManager keysManager,
     PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
-    APNSender apnSender,
-    FcmSender fcmSender,
+    PushNotificationSender apnSender,
+    PushNotificationSender fcmSender,
     PushNotificationManager pushNotificationManager,
     PushNotificationExperimentSamples pushNotificationExperimentSamples,
     FaultTolerantRedisClusterClient cacheCluster,
@@ -150,6 +152,9 @@ public record CommandDependencies(
       throws IOException, GeneralSecurityException, InvalidInputException {
     configuration.getRuntimeMode().requireWorker(name);
     configuration.validateRuntimeConfiguration();
+    if (name.equals("scheduled-apn-sender") && configuration.enabledPushTypes().isEmpty()) {
+      throw new FeatureUnavailableException("Push notification worker");
+    }
     final boolean gcpPilot = configuration.isGcpPilot();
     Clock clock = Clock.systemUTC();
 
@@ -231,7 +236,7 @@ public record CommandDependencies(
         .build("main_cache", redisClientResourcesBuilder);
     FaultTolerantRedisClusterClient pushSchedulerCluster = configuration.getPushSchedulerCluster()
         .build("push_scheduler", redisClientResourcesBuilder);
-    FaultTolerantRedisClient pubsubClient =
+    PubSubRedisClient pubsubClient =
         configuration.getRedisPubSubConfiguration().build("pubsub", redisClientResourcesBuilder.build());
 
     Scheduler messageDeliveryScheduler = Schedulers.fromExecutorService(
@@ -266,10 +271,10 @@ public record CommandDependencies(
     final ScheduledExecutorService presenceRenewalExecutor =
         ScheduledExecutorServiceBuilder.of(environment, "presenceRenewal").threads(1).build();
 
-    ExternalServiceCredentialsGenerator storageCredentialsGenerator = SecureStorageController.credentialsGenerator(
-        configuration.getSecureStorageServiceConfiguration());
-    ExternalServiceCredentialsGenerator secureValueRecovery2CredentialsGenerator = SecureValueRecovery2Controller.credentialsGenerator(
-        configuration.getSvr2Configuration());
+    ExternalServiceCredentialsGenerator storageCredentialsGenerator = configuration.isStorageEnabled() ? SecureStorageController.credentialsGenerator(
+        configuration.getSecureStorageServiceConfiguration()) : null;
+    ExternalServiceCredentialsGenerator secureValueRecovery2CredentialsGenerator = configuration.isSvr2Enabled() ? SecureValueRecovery2Controller.credentialsGenerator(
+        configuration.getSvr2Configuration()) : null;
     ExternalServiceCredentialsGenerator secureValueRecoveryBCredentialsGenerator =
         gcpPilot ? null : SecureValueRecoveryBCredentialsGeneratorFactory.svrbCredentialsGenerator(configuration.getSvrbConfiguration());
 
@@ -350,7 +355,7 @@ public record CommandDependencies(
         .getRedisClusterConfiguration().build("messages", redisClientResourcesBuilder);
     FaultTolerantRedisClusterClient rateLimitersCluster = configuration.getRateLimitersCluster().build("rate_limiters",
         redisClientResourcesBuilder);
-    SecureValueRecoveryClient secureValueRecovery2Client = new SecureValueRecoveryClient(
+    SecureValueRecoveryClient secureValueRecovery2Client = !configuration.isSvr2Enabled() ? null : new SecureValueRecoveryClient(
         secureValueRecovery2CredentialsGenerator,
         secureValueRecoveryServiceExecutor,
         retryExecutor,
@@ -362,7 +367,7 @@ public record CommandDependencies(
         retryExecutor,
         configuration.getSvrbConfiguration(),
         () -> dynamicConfigurationManager.getConfiguration().getSvrbStatusCodesToIgnoreForAccountDeletion());
-    SecureStorageClient secureStorageClient = new SecureStorageClient(storageCredentialsGenerator,
+    SecureStorageClient secureStorageClient = !configuration.isStorageEnabled() ? null : new SecureStorageClient(storageCredentialsGenerator,
         storageServiceExecutor, retryExecutor, configuration.getSecureStorageServiceConfiguration());
     DisconnectionRequestManager disconnectionRequestManager = new DisconnectionRequestManager(pubsubClient,
         disconnectionRequestListenerExecutor, retryExecutor);
@@ -472,8 +477,12 @@ public record CommandDependencies(
         zkReceiptOperations,
         issuedReceiptsManager);
 
-    APNSender apnSender = new APNSender(apnSenderExecutor, Clock.systemUTC(), configuration.getApnConfiguration());
-    FcmSender fcmSender = new FcmSender(fcmSenderExecutor, configuration.getFcmConfiguration().credentials().value());
+    PushNotificationSender apnSender = configuration.isApnsEnabled()
+        ? new APNSender(apnSenderExecutor, Clock.systemUTC(), configuration.getApnConfiguration())
+        : PushNotificationSender.unavailable("APNs");
+    PushNotificationSender fcmSender = configuration.isFcmEnabled()
+        ? new FcmSender(fcmSenderExecutor, configuration.getFcmConfiguration().credentials().value())
+        : PushNotificationSender.unavailable("FCM");
     PushNotificationScheduler pushNotificationScheduler = new PushNotificationScheduler(pushSchedulerCluster,
         apnSender, fcmSender, accountsManager, 0, 0, retryExecutor);
     PushNotificationManager pushNotificationManager = new PushNotificationManager(accountsManager,
@@ -486,7 +495,7 @@ public record CommandDependencies(
     final DynamoDbRecoveryManager dynamoDbRecoveryManager =
         new DynamoDbRecoveryManager(accounts, phoneNumberIdentifiers);
 
-    environment.lifecycle().manage(apnSender);
+    if (apnSender instanceof io.dropwizard.lifecycle.Managed managedApns) environment.lifecycle().manage(managedApns);
     environment.lifecycle().manage(disconnectionRequestManager);
     environment.lifecycle().manage(redisMessageAvailabilityManager);
     if (!gcpPilot) environment.lifecycle().manage(new ManagedAwsCrt());

@@ -20,7 +20,7 @@ import java.util.function.Function;
 import org.whispersystems.textsecuregcm.configuration.RedisConfiguration;
 import org.whispersystems.textsecuregcm.util.ResilienceUtil;
 
-public class FaultTolerantRedisClient {
+public class FaultTolerantRedisClient implements PubSubRedisClient {
 
   private final String name;
 
@@ -38,11 +38,11 @@ public class FaultTolerantRedisClient {
                                   final ClientResources.Builder clientResourcesBuilder) {
 
     this(name, clientResourcesBuilder,
-        RedisUriUtil.createRedisUriWithTimeout(redisConfiguration.getUri(), redisConfiguration.getTimeout()),
+        redisConfiguration.connectionUri(),
         redisConfiguration.getTimeout(),
         redisConfiguration.getCircuitBreakerConfigurationName() != null
             ? ResilienceUtil.getCircuitBreakerRegistry().circuitBreaker(getCircuitBreakerName(name), redisConfiguration.getCircuitBreakerConfigurationName())
-            : ResilienceUtil.getCircuitBreakerRegistry().circuitBreaker(getCircuitBreakerName(name)));
+            : ResilienceUtil.getCircuitBreakerRegistry().circuitBreaker(getCircuitBreakerName(name)), redisConfiguration.sslOptions());
   }
 
   private static String getCircuitBreakerName(final String name) {
@@ -56,6 +56,13 @@ public class FaultTolerantRedisClient {
                            final Duration commandTimeout,
                            final CircuitBreaker circuitBreaker) {
 
+    this(name, clientResourcesBuilder, redisUri, commandTimeout, circuitBreaker, null);
+  }
+
+  private FaultTolerantRedisClient(String name, final ClientResources.Builder clientResourcesBuilder,
+      final RedisURI redisUri, final Duration commandTimeout, final CircuitBreaker circuitBreaker,
+      final io.lettuce.core.SslOptions sslOptions) {
+
     this.name = name;
 
     this.redisClient = RedisClient.create(clientResourcesBuilder.build(), redisUri);
@@ -68,6 +75,7 @@ public class FaultTolerantRedisClient {
             .build())
         .publishOnScheduler(true);
 
+    if (sslOptions != null) clientOptionsBuilder.sslOptions(sslOptions);
     NettyUtil.setSocketTimeoutsIfApplicable(clientOptionsBuilder);
 
     this.redisClient.setOptions(clientOptionsBuilder.build());
@@ -76,6 +84,27 @@ public class FaultTolerantRedisClient {
     this.binaryConnection = redisClient.connect(ByteArrayCodec.INSTANCE);
 
     this.circuitBreaker = circuitBreaker;
+  }
+
+  @Override
+  public java.util.concurrent.CompletableFuture<String> get(final String key) {
+    return withConnection(connection -> connection.async().get(key).toCompletableFuture());
+  }
+
+  @Override
+  public java.util.concurrent.CompletableFuture<String> set(final String key, final String value,
+      final io.lettuce.core.SetArgs args) {
+    return withConnection(connection -> connection.async().set(key, value, args).toCompletableFuture());
+  }
+
+  @Override
+  public java.util.concurrent.CompletableFuture<Long> publish(final byte[] channel, final byte[] value) {
+    return withBinaryConnection(connection -> connection.async().publish(channel, value).toCompletableFuture());
+  }
+
+  @Override
+  public long publishToChannel(final byte[] channel, final byte[] value) {
+    return withBinaryConnection(connection -> connection.sync().publish(channel, value));
   }
 
   public void shutdown() {

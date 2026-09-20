@@ -26,14 +26,16 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Response.Status;
+import jakarta.ws.rs.core.Response;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import javax.annotation.Nullable;
@@ -58,16 +60,18 @@ import org.whispersystems.textsecuregcm.identity.AciServiceIdentifier;
 import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.limits.RateLimitedByIp;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
+import org.whispersystems.textsecuregcm.push.PushNotification;
 import org.whispersystems.textsecuregcm.storage.Account;
+import org.whispersystems.textsecuregcm.storage.AccountMutation;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.UsernameHashNotAvailableException;
 import org.whispersystems.textsecuregcm.storage.UsernameReservationNotFoundException;
+import org.whispersystems.textsecuregcm.util.FeatureUnavailableException;
 import org.whispersystems.textsecuregcm.util.HeaderUtils;
 import org.whispersystems.textsecuregcm.util.UsernameHashZkProofVerifier;
 import org.whispersystems.textsecuregcm.util.Util;
-import org.whispersystems.textsecuregcm.storage.AccountMutation;
 
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 @Path("/v1/accounts")
@@ -77,6 +81,7 @@ public class AccountController {
   public static final int USERNAME_HASH_LENGTH = 32;
   public static final int MAXIMUM_USERNAME_CIPHERTEXT_LENGTH = 128;
 
+  private final Set<PushNotification.TokenType> enabledPushTypes;
   private final AccountsManager accounts;
   private final RateLimiters rateLimiters;
   private final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager;
@@ -87,10 +92,25 @@ public class AccountController {
       RateLimiters rateLimiters,
       PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
       UsernameHashZkProofVerifier usernameHashZkProofVerifier) {
+    this(accounts, rateLimiters, phoneNumberRecoveryPasswordsManager, usernameHashZkProofVerifier,
+        EnumSet.allOf(PushNotification.TokenType.class));
+  }
+
+  public AccountController(final AccountsManager accounts, final RateLimiters rateLimiters,
+      final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
+      final UsernameHashZkProofVerifier usernameHashZkProofVerifier,
+      final Set<PushNotification.TokenType> enabledPushTypes) {
+    this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accounts = accounts;
     this.rateLimiters = rateLimiters;
     this.phoneNumberRecoveryPasswordsManager = phoneNumberRecoveryPasswordsManager;
     this.usernameHashZkProofVerifier = usernameHashZkProofVerifier;
+  }
+
+  private void requirePushProvider(final PushNotification.TokenType type) {
+    if (!enabledPushTypes.contains(type)) {
+      throw new FeatureUnavailableException(type + " push registration");
+    }
   }
 
   @PUT
@@ -100,6 +120,7 @@ public class AccountController {
   public void setGcmRegistrationId(@Auth AuthenticatedDevice auth,
       @NotNull @Valid GcmRegistrationId registrationId) {
 
+    requirePushProvider(PushNotification.TokenType.FCM);
     final String currentGcmId = accounts.getByAccountIdentifier(auth.accountIdentifier())
         .flatMap(account -> account.getDevice(auth.deviceId()))
         .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED))
@@ -133,6 +154,7 @@ public class AccountController {
   public void setApnRegistrationId(@Auth AuthenticatedDevice auth,
       @NotNull @Valid ApnRegistrationId registrationId) {
 
+    requirePushProvider(PushNotification.TokenType.APN);
     // Unlike FCM tokens, we need current "last updated" timestamps for APNs tokens and so update device records
     // unconditionally
     accounts.updateDevice(auth.accountIdentifier(), auth.deviceId(), d -> {

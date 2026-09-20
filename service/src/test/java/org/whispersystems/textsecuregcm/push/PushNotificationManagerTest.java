@@ -213,7 +213,8 @@ class PushNotificationManagerTest {
       verify(sender).sendNotification(pushNotification);
       verifyNoInteractions(pushNotificationScheduler);
     } else {
-      verifyNoInteractions(sender);
+      verify(sender).isUnavailable();
+      verify(sender, never()).sendNotification(any());
       verify(pushNotificationScheduler).scheduleBackgroundNotification(tokenType, account, device);
     }
   }

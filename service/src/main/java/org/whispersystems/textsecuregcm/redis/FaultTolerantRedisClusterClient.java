@@ -55,10 +55,9 @@ public class FaultTolerantRedisClusterClient {
       final ClientResources.Builder clientResourcesBuilder) {
 
     this(name, clientResourcesBuilder,
-        Collections.singleton(RedisUriUtil.createRedisUriWithTimeout(clusterConfiguration.getConfigurationUri(),
-            clusterConfiguration.getTimeout())),
+        Collections.singleton(clusterConfiguration.connectionUri()),
         clusterConfiguration.getTimeout(),
-        clusterConfiguration.getCircuitBreakerConfigurationName());
+        clusterConfiguration.getCircuitBreakerConfigurationName(), clusterConfiguration.sslOptions());
 
   }
 
@@ -67,6 +66,13 @@ public class FaultTolerantRedisClusterClient {
       final Iterable<RedisURI> redisUris,
       final Duration commandTimeout,
       @Nullable final String circuitBreakerConfigurationName) {
+
+    this(name, clientResourcesBuilder, redisUris, commandTimeout, circuitBreakerConfigurationName, null);
+  }
+
+  private FaultTolerantRedisClusterClient(final String name, final ClientResources.Builder clientResourcesBuilder,
+      final Iterable<RedisURI> redisUris, final Duration commandTimeout,
+      @Nullable final String circuitBreakerConfigurationName, @Nullable final io.lettuce.core.SslOptions sslOptions) {
 
     this.name = name;
 
@@ -83,6 +89,7 @@ public class FaultTolerantRedisClusterClient {
         .validateClusterNodeMembership(false)
         .topologyRefreshOptions(ClusterTopologyRefreshOptions.builder()
             .enableAllAdaptiveRefreshTriggers()
+            .enablePeriodicRefresh(Duration.ofSeconds(30))
             .build())
         // for asynchronous commands
         .timeoutOptions(TimeoutOptions.builder()
@@ -91,6 +98,7 @@ public class FaultTolerantRedisClusterClient {
         .publishOnScheduler(true)
         .maintNotificationsConfig(MaintNotificationsConfig.disabled());
 
+    if (sslOptions != null) clusterClientOptionsBuilder.sslOptions(sslOptions);
     NettyUtil.setSocketTimeoutsIfApplicable(clusterClientOptionsBuilder);
 
     this.clusterClient.setOptions(clusterClientOptionsBuilder.build());
