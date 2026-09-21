@@ -23,16 +23,13 @@ import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.Nullable;
-import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.configuration.dynamic.DynamicConfiguration;
 import org.whispersystems.textsecuregcm.entities.MessageProtos;
 import org.whispersystems.textsecuregcm.identity.IdentityType;
 import org.whispersystems.textsecuregcm.metrics.DevicePlatformUtil;
-import org.whispersystems.textsecuregcm.util.UUIDUtil;
 import org.whispersystems.textsecuregcm.util.Util;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -40,7 +37,6 @@ import reactor.core.scheduler.Scheduler;
 import reactor.util.function.Tuples;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
-import software.amazon.awssdk.services.dynamodb.model.ItemCollectionSizeLimitExceededException;
 
 public class MessagePersister implements Managed {
 
@@ -66,13 +62,10 @@ public class MessagePersister implements Managed {
 
   private static final String INSPECTED_QUEUE_COUNTER_NAME = name(MessagePersister.class, "inspectedQueue");
 
-  private static final String OVERSIZED_QUEUE_COUNTER_NAME = name(MessagePersister.class, "persistQueueOversized");
   private static final String PERSISTED_MESSAGE_COUNTER_NAME = name(MessagePersister.class, "persistMessage");
   private static final String PERSISTED_BYTES_COUNTER_NAME = name(MessagePersister.class, "persistBytes");
 
   private static final Timer PERSIST_QUEUE_TIMER = Metrics.timer(name(MessagePersister.class, "persistQueue"));
-  private static final Counter TRIMMED_MESSAGE_COUNTER = Metrics.counter(name(MessagePersister.class, "trimmedMessage"));
-  private static final Counter TRIMMED_MESSAGE_BYTES_COUNTER = Metrics.counter(name(MessagePersister.class, "trimmedMessageBytes"));
 
   private static final Counter PERSIST_NODE_COUNTER = Metrics.counter(name(MessagePersister.class, "persistNodeCount"));
   private static final LongTaskTimer PERSIST_NODE_TIMER = Metrics.more().longTaskTimer(name(MessagePersister.class, "persistNode"));
@@ -244,9 +237,7 @@ public class MessagePersister implements Managed {
 
             return persistQueue(account, device, tags)
                 .thenReturn(1)
-                .retryWhen(retryBackoffSpec
-                    // Don't retry with backoff for persistence exceptions
-                    .filter(e -> !(e instanceof MessagePersistenceException)))
+                .retryWhen(retryBackoffSpec)
                 .onErrorResume(e -> {
                   logger.warn("Failed to persist queue {}::{} ({}); will schedule for retry",
                       account.getAccountIdentifier(), device.getId(), node.getUri().getHost(), e);
@@ -299,24 +290,6 @@ public class MessagePersister implements Managed {
                   .thenReturn(messages.size());
             }, 1)
             .reduce(0, Integer::sum)
-            .onErrorResume(ItemCollectionSizeLimitExceededException.class, _ -> {
-              final boolean isPrimary = deviceId == Device.PRIMARY_ID;
-              Metrics.counter(OVERSIZED_QUEUE_COUNTER_NAME, "primary", String.valueOf(isPrimary)).increment();
-              // may throw, in which case we'll retry later by the usual mechanism
-              if (isPrimary) {
-                logger.warn("Failed to persist queue {}::{} due to overfull queue; will trim oldest messages",
-                    account.getAccountIdentifier(), deviceId);
-
-                return trimQueue(account, device)
-                    .then(Mono.error(new MessagePersistenceException("Could not persist due to an overfull queue. Trimmed primary queue, a subsequent retry may succeed")));
-              } else {
-                logger.warn("Failed to persist queue {}::{} due to overfull queue; will unlink device", accountUuid, deviceId);
-
-                return Mono.fromRunnable(() -> accountsManager.removeDevice(accountUuid, deviceId))
-                    .subscribeOn(persistQueueScheduler)
-                    .then(Mono.empty());
-              }
-            })
             .doOnSuccess(messagesPersisted -> {
               if (messagesPersisted != null) {
                 DistributionSummary.builder(QUEUE_SIZE_DISTRIBUTION_SUMMARY_NAME)
@@ -327,64 +300,6 @@ public class MessagePersister implements Managed {
             })
             .doOnTerminate(() -> sample.stop(PERSIST_QUEUE_TIMER)),
         _ -> messagesCache.unlockQueueForPersistence(accountUuid, deviceId))
-        .then();
-  }
-
-  private Mono<Void> trimQueue(final Account account, final Device device) {
-    final UUID aci = account.getAccountIdentifier();
-    final byte deviceId = device.getId();
-
-    final double extraRoomRatio = this.dynamicConfigurationManager.getConfiguration()
-        .getMessagePersisterConfiguration()
-        .getTrimOversizedQueueExtraRoomRatio();
-
-    final AtomicLong oldestMessage = new AtomicLong(0L);
-    final AtomicLong newestMessage = new AtomicLong(0L);
-    final AtomicLong bytesDeleted = new AtomicLong(0L);
-
-    final AtomicLong cachedMessageBytes = new AtomicLong(0L);
-    final AtomicLong targetDeleteBytes = new AtomicLong(0L);
-
-    return Mono.fromFuture(() -> messagesCache.estimatePersistedQueueSizeBytes(aci, deviceId))
-        .flatMap(estimatedPersistedQueueSize -> {
-          cachedMessageBytes.set(estimatedPersistedQueueSize);
-          targetDeleteBytes.set(Math.round(estimatedPersistedQueueSize * extraRoomRatio));
-
-          return Flux.from(messagesManager.getMessagesForDevice(aci, device))
-              .concatMap(envelope -> {
-                if (bytesDeleted.getAndAdd(envelope.getSerializedSize()) >= targetDeleteBytes.get()) {
-                  return Mono.just(Optional.<MessageProtos.Envelope>empty());
-                }
-                oldestMessage.compareAndSet(0L, envelope.getServerTimestamp());
-                newestMessage.set(envelope.getServerTimestamp());
-                return Mono.just(Optional.of(envelope));
-              })
-              .takeWhile(Optional::isPresent)
-              .flatMap(maybeEnvelope -> {
-                // We know this must be present because we `takeWhile` values are present
-                final MessageProtos.Envelope envelope = maybeEnvelope.orElseThrow(AssertionError::new);
-                TRIMMED_MESSAGE_COUNTER.increment();
-                TRIMMED_MESSAGE_BYTES_COUNTER.increment(envelope.getSerializedSize());
-                return Mono
-                    .fromCompletionStage(() -> messagesManager
-                        .delete(aci, device, UUIDUtil.fromByteString(envelope.getServerGuid()), envelope.getServerTimestamp()))
-                    .retryWhen(retryBackoffSpec)
-                    .map(Optional::isPresent);
-              })
-              .reduce(Pair.of(0L, 0L), (acc, deleted) -> deleted
-                  ? Pair.of(acc.getLeft() + 1, acc.getRight())
-                  : Pair.of(acc.getLeft(), acc.getRight() + 1));
-        })
-        .doOnSuccess(outcomes -> {
-          if (outcomes != null) {
-            logger.warn(
-                "Finished trimming {}:{}. Oldest message = {}, newest message = {}. Attempted to delete {} persisted bytes to make room for {} cached message bytes.  Delete outcomes: {} present, {} missing.",
-                aci, deviceId,
-                Instant.ofEpochMilli(oldestMessage.get()), Instant.ofEpochMilli(newestMessage.get()),
-                targetDeleteBytes, cachedMessageBytes,
-                outcomes.getLeft(), outcomes.getRight());
-          }
-        })
         .then();
   }
 

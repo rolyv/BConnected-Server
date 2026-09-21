@@ -129,9 +129,6 @@ dynamoDbTables:
     tableName: paged_pq_keys_test
   pqLastResortKeys:
     tableName: repeated_use_signed_kem_pre_keys_test
-  messages:
-    tableName: messages_test
-    expiration: P30D # Duration of time until rows expire
   onetimeDonations:
     tableName: onetime_donations_test
     expiration: P90D

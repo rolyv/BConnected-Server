@@ -276,7 +276,6 @@ import org.whispersystems.textsecuregcm.storage.FoundationDbVersion;
 import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.KeysManager;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
-import org.whispersystems.textsecuregcm.storage.MessagesDynamoDb;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.OneTimeDonationsManager;
 import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
@@ -621,10 +620,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             config.getPagedSingleUseKEMPreKeyStore().bucket()),
         postgres != null ? postgres.signedEcKeys() : new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
         postgres != null ? postgres.signedKemKeys() : new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getKemLastResortKeys().getTableName()));
-    PersistentMessageStore messagesDynamoDb = postgres != null ? postgres.messages() : new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
-        config.getDynamoDbTables().getMessages().getTableName(),
-        config.getMessageRetention(),
-        messageDeletionAsyncExecutor);
+    PersistentMessageStore messageStore = postgres.messages();
     RemoteConfigStore remoteConfigs = postgres.remoteConfigs();
     PushChallengeStore pushChallengeStore = postgres.pushChallenges();
     ReportMessageStore reportMessageStore = postgres.reportMessages();
@@ -834,7 +830,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     RedisMessageAvailabilityManager redisMessageAvailabilityManager =
         new RedisMessageAvailabilityManager(messagesCluster, clientEventExecutor, asyncOperationQueueingExecutor);
     MessagesManager messagesManager =
-        new MessagesManager(messagesDynamoDb, messagesCache, foundationDbMessageStore, redisMessageAvailabilityManager,
+        new MessagesManager(messageStore, messagesCache, foundationDbMessageStore, redisMessageAvailabilityManager,
             reportMessageManager, messageDeletionAsyncExecutor, Clock.systemUTC(), experimentEnrollmentManager);
     final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods = postgres != null ? postgres.waitingPeriods() : new ChangeNumberWaitingPeriods(
         config.getDynamoDbTables().getChangeNumberWaitingPeriods().getTableName(), dynamoDbClient);

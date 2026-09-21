@@ -57,7 +57,7 @@ import reactor.core.publisher.Mono;
 
 class MessagesManagerTest {
 
-  private MessagesDynamoDb messagesDynamoDb;
+  private PersistentMessageStore messageStore;
   private MessagesCache messagesCache;
   private FoundationDbMessageStore foundationDbMessageStore;
   private ReportMessageManager reportMessageManager;
@@ -69,7 +69,7 @@ class MessagesManagerTest {
 
   @BeforeEach
   void setUp() {
-    messagesDynamoDb = mock(MessagesDynamoDb.class);
+    messageStore = mock(PersistentMessageStore.class);
     messagesCache = mock(MessagesCache.class);
     foundationDbMessageStore = mock(FoundationDbMessageStore.class);
     reportMessageManager = mock(ReportMessageManager.class);
@@ -77,7 +77,7 @@ class MessagesManagerTest {
 
     when(messagesCache.insert(any(), any(), anyByte(), any())).thenReturn(CompletableFuture.completedFuture(true));
 
-    messagesManager = new MessagesManager(messagesDynamoDb, messagesCache, foundationDbMessageStore,
+    messagesManager = new MessagesManager(messageStore, messagesCache, foundationDbMessageStore,
         mock(RedisMessageAvailabilityManager.class), reportMessageManager, Executors.newSingleThreadExecutor(), CLOCK,
         experimentEnrollmentManager);
   }
@@ -340,11 +340,11 @@ class MessagesManagerTest {
     when(messagesCache.hasMessagesAsync(accountIdentifier, Device.PRIMARY_ID))
         .thenReturn(CompletableFuture.completedFuture(hasCachedMessages));
 
-    when(messagesDynamoDb.mayHaveMessages(accountIdentifier, device))
+    when(messageStore.mayHaveMessages(accountIdentifier, device))
         .thenReturn(CompletableFuture.completedFuture(hasPersistedMessages));
 
     if (hasCachedMessages) {
-      verifyNoInteractions(messagesDynamoDb);
+      verifyNoInteractions(messageStore);
     }
 
     assertEquals(expectMayHaveMessages, messagesManager.mayHaveMessages(accountIdentifier, device).join());
@@ -365,7 +365,7 @@ class MessagesManagerTest {
 
     when(messagesCache.getEarliestUndeliveredTimestamp(accountIdentifier, Device.PRIMARY_ID))
         .thenReturn(oldestCached == null ? Mono.empty() : Mono.just(oldestCached));
-    when(messagesDynamoDb.load(accountIdentifier, device, 1))
+    when(messageStore.load(accountIdentifier, device, 1))
         .thenReturn(oldestPersisted == null
             ? Mono.empty()
             : Mono.just(Envelope.newBuilder().setServerTimestamp(oldestPersisted).build()));

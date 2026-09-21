@@ -24,6 +24,10 @@ The broader re-registration flow also clears one-time keys, messages and profile
 
 `MessagesPostgres` stores serialized encrypted envelopes, preserving account/device-generation isolation, atomic batches, duplicate-key behavior, ordered keyset pagination and acknowledgement through `DELETE ... RETURNING`. Reads exclude expired envelopes; a bounded worker physically removes them later. The storage layer never decrypts message contents or changes Signal cryptography. Routing identifiers and queue timestamps remain database-visible metadata.
 
+The DynamoDB message implementation and table configuration have been removed. The persister also no longer contains the DynamoDB item-collection overflow path that trimmed primary queues or unlinked secondary devices. Persistence failures propagate through the normal retry path; cached envelopes stay queued until SQL commits successfully. Native integration tests cover a real read-only SQL failure and subsequent successful retry. The store retains upstream unsigned UUID ordering and device-generation encoding.
+
+The retained publisher/stream classes still have historical `RedisDynamoDb...` names, but depend only on `PersistentMessageStore`. Their integration fixtures now use real PostgreSQL with Redis, as do automatic persister, WebSocket delivery and gRPC dispatcher tests. Each test deletes only the randomly assigned account queues it wrote in the disposable PostgreSQL container; none uses an operator database or truncates shared message tables.
+
 `RemoteConfigsPostgres` preserves percentages, UUID enrollment and nullable configuration fields. `remote-config.json` remains an input specification; it is not automatically imported.
 
 `SingleUseECPreKeysPostgres` and `SingleUseKEMPreKeysPostgres` preserve the original public-key encodings and KEM signatures. Their transactions coordinate bulk replacement, consumption and account/device deletion across store instances. Invalid writes roll back complete batches; malformed stored keys fail without consuming them. KEM exhaustion falls back to the repeated-use signed KEM store through `KeysManager`. The native one-time KEM path creates no S3 client and skips orphan-page pruning.
@@ -143,6 +147,8 @@ docker stop bconnected-postgres-test
 ```
 
 The metadata AWS cleanup checkpoint on 2026-09-20 passed a **clean reactor build and 272 tests with zero failures, errors or skips** (`.local/aws-metadata-cleanup-final-tests.log` in the root workspace). This includes four native metadata stores, retained managers, configuration guards, account transaction fixtures, the complete local server HTTP/WebSocket/gRPC fixture, and 11 concurrent admission-outbox tests from parallel work. The obsolete metadata classes are absent from clean build outputs; compiled CLI help still exposes the server and message-persister commands. This is local source validation, not a deployment update.
+
+The subsequent message-store cleanup passed **103 selected tests with zero failures, errors or skips** (`.local/aws-messages-cleanup-tests.log`) at `2026-09-20T22:11:43-04:00`. These include native store pagination/backpressure, Redis streams/publishing, automatic persistence, real SQL failure/retry, WebSocket and gRPC delivery, runtime guards and the full local server fixture. A subsequent clean production compile succeeded (`.local/aws-messages-clean-compile.log`), compiled CLI help passed, and deleted message/metadata bytecode was absent. AWS imports remain in 42 production Java files, and all 38 inherited AWS jars remain pending later dependency cleanup. No cloud deployment was changed by this checkpoint.
 
 ## Remaining release work
 

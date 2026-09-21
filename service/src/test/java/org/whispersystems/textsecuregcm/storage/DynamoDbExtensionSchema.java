@@ -248,14 +248,6 @@ public final class DynamoDbExtensionSchema {
             .build()),
         List.of(), List.of()),
 
-    MESSAGES("messages_test",
-        MessagesDynamoDb.KEY_PARTITION,
-        MessagesDynamoDb.KEY_SORT,
-        List.of(
-            AttributeDefinition.builder().attributeName(MessagesDynamoDb.KEY_PARTITION).attributeType(ScalarAttributeType.B).build(),
-            AttributeDefinition.builder().attributeName(MessagesDynamoDb.KEY_SORT).attributeType(ScalarAttributeType.B).build()),
-        List.of(), List.of()),
-
     ONETIME_DONATIONS("onetime_donations_test",
         OneTimeDonationsManager.KEY_PAYMENT_ID,
         null,

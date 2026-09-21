@@ -7,13 +7,12 @@ package org.whispersystems.textsecuregcm.storage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.protobuf.ByteString;
-import com.google.protobuf.InvalidProtocolBufferException;
 import io.micrometer.core.instrument.Tags;
 import java.time.Clock;
 import java.time.Duration;
@@ -28,6 +27,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import javax.sql.DataSource;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,19 +42,16 @@ import org.whispersystems.textsecuregcm.identity.AciServiceIdentifier;
 import org.whispersystems.textsecuregcm.push.MessageAvailabilityListener;
 import org.whispersystems.textsecuregcm.push.RedisMessageAvailabilityManager;
 import org.whispersystems.textsecuregcm.redis.RedisClusterExtension;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema.Tables;
-import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDbMessageStore;
 import org.whispersystems.textsecuregcm.tests.util.DevicesHelper;
 import org.whispersystems.textsecuregcm.util.UUIDUtil;
+import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
-import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
-import software.amazon.awssdk.services.dynamodb.model.ScanRequest;
 
 class MessagePersisterIntegrationTest {
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(Tables.MESSAGES);
+  static final PostgresMessageStoreExtension POSTGRES = new PostgresMessageStoreExtension();
 
   @RegisterExtension
   static final RedisClusterExtension REDIS_CLUSTER_EXTENSION = RedisClusterExtension.builder().build();
@@ -63,6 +61,8 @@ class MessagePersisterIntegrationTest {
   private ExecutorService messageDeletionExecutorService;
   private ExecutorService websocketConnectionEventExecutor;
   private ExecutorService asyncOperationQueueingExecutor;
+  private PersistentMessageStore messageStore;
+  private final AtomicBoolean rejectWrites = new AtomicBoolean();
   private MessagesCache messagesCache;
   private RedisMessageAvailabilityManager redisMessageAvailabilityManager;
   private MessagePersister messagePersister;
@@ -87,17 +87,22 @@ class MessagePersisterIntegrationTest {
     messageDeliveryScheduler = Schedulers.newBoundedElastic(10, 10_000, "messageDelivery");
     persistQueueScheduler = Schedulers.newBoundedElastic(10, 10_000, "persistQueue");
     messageDeletionExecutorService = Executors.newSingleThreadExecutor();
-    final MessagesDynamoDb messagesDynamoDb = new MessagesDynamoDb(DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(), Tables.MESSAGES.tableName(), Duration.ofDays(14),
-        messageDeletionExecutorService);
+    rejectWrites.set(false);
+    final DataSource source = mock(DataSource.class);
+    when(source.getConnection()).thenAnswer(_ -> {
+      final var connection = POSTGRES.dataSource().getConnection();
+      connection.setReadOnly(rejectWrites.get());
+      return connection;
+    });
+    messageStore = POSTGRES.track(new MessagesPostgres(source, Duration.ofDays(14), messageDeletionExecutorService));
     final AccountsManager accountsManager = mock(AccountsManager.class);
 
     messagesCache = new MessagesCache(REDIS_CLUSTER_EXTENSION.getRedisCluster(),
         messageDeliveryScheduler, messageDeletionExecutorService, mock(ScheduledExecutorService.class), Clock.systemUTC());
 
-    final MessagesManager messagesManager = new MessagesManager(messagesDynamoDb,
+    final MessagesManager messagesManager = new MessagesManager(messageStore,
         messagesCache,
-        mock(FoundationDbMessageStore.class),
+        null,
         mock(RedisMessageAvailabilityManager.class),
         mock(ReportMessageManager.class),
         messageDeletionExecutorService,
@@ -138,6 +143,9 @@ class MessagePersisterIntegrationTest {
   @SuppressWarnings("ResultOfMethodCallIgnored")
   @AfterEach
   void tearDown() throws Exception {
+    messagePersister.stop();
+    redisMessageAvailabilityManager.stop();
+
     messageDeletionExecutorService.shutdown();
     messageDeletionExecutorService.awaitTermination(15, TimeUnit.SECONDS);
 
@@ -150,7 +158,6 @@ class MessagePersisterIntegrationTest {
     messageDeliveryScheduler.dispose();
     persistQueueScheduler.dispose();
 
-    redisMessageAvailabilityManager.stop();
   }
 
   @Test
@@ -196,19 +203,9 @@ class MessagePersisterIntegrationTest {
 
     messagePersister.stop();
 
-    final DynamoDbClient dynamoDB = DYNAMO_DB_EXTENSION.getDynamoDbClient();
-
-    final List<MessageProtos.Envelope> persistedMessages =
-        dynamoDB.scan(ScanRequest.builder().tableName(Tables.MESSAGES.tableName()).build()).items().stream()
-            .map(item -> {
-              try {
-                return MessagesDynamoDb.convertItemToEnvelope(item);
-              } catch (InvalidProtocolBufferException e) {
-                fail("Could not parse stored message", e);
-                return null;
-              }
-            })
-            .toList();
+    final List<MessageProtos.Envelope> persistedMessages = Flux.from(messageStore.load(
+        account.getAccountIdentifier(), account.getDevice(Device.PRIMARY_ID).orElseThrow(), 37))
+        .collectList().block(Duration.ofSeconds(5));
 
     assertEquals(expectedMessages, persistedMessages);
   }
@@ -243,22 +240,33 @@ class MessagePersisterIntegrationTest {
 
     messagePersister.persistQueue(account, account.getDevice(Device.PRIMARY_ID).orElseThrow(), Tags.empty()).block();
 
-    final DynamoDbClient dynamoDB = DYNAMO_DB_EXTENSION.getDynamoDbClient();
-
-    final List<MessageProtos.Envelope> persistedMessages =
-        dynamoDB.scan(ScanRequest.builder().tableName(Tables.MESSAGES.tableName()).build()).items().stream()
-            .map(item -> {
-              try {
-                return MessagesDynamoDb.convertItemToEnvelope(item);
-              } catch (InvalidProtocolBufferException e) {
-                fail("Could not parse stored message", e);
-                return null;
-              }
-            })
-            .toList();
+    final List<MessageProtos.Envelope> persistedMessages = Flux.from(messageStore.load(
+        account.getAccountIdentifier(), account.getDevice(Device.PRIMARY_ID).orElseThrow(), 37))
+        .collectList().block(Duration.ofSeconds(5));
 
     assertEquals(expectedMessages, persistedMessages);
     assertFalse(messagesCache.hasMessagesAsync(account.getAccountIdentifier(), Device.PRIMARY_ID).join());
+  }
+
+  @Test
+  void nativeSqlFailureKeepsCachedMessagesUntilSuccessfulRetry() {
+    final long timestamp = System.currentTimeMillis() - PERSIST_DELAY.multipliedBy(2).toMillis();
+    final MessageProtos.Envelope expected = generateRandomMessage(UUID.randomUUID(), timestamp, false);
+    final UUID accountId = account.getAccountIdentifier();
+    final Device device = account.getDevice(Device.PRIMARY_ID).orElseThrow();
+    messagesCache.insert(UUIDUtil.fromByteString(expected.getServerGuid()), accountId, device.getId(), expected).join();
+
+    rejectWrites.set(true);
+    assertThrows(IllegalStateException.class,
+        () -> messagePersister.persistQueue(account, device, Tags.empty()).block(Duration.ofSeconds(5)));
+    assertTrue(messagesCache.hasMessagesAsync(accountId, device.getId()).join());
+    assertFalse(messageStore.mayHaveMessages(accountId, device).join());
+
+    rejectWrites.set(false);
+    messagePersister.persistQueue(account, device, Tags.empty()).block(Duration.ofSeconds(5));
+    assertFalse(messagesCache.hasMessagesAsync(accountId, device.getId()).join());
+    assertEquals(List.of(expected), Flux.from(messageStore.load(accountId, device, 1))
+        .collectList().block(Duration.ofSeconds(5)));
   }
 
   private MessageProtos.Envelope generateRandomMessage(final UUID messageGuid, final long serverTimestamp, final boolean ephemeral) {

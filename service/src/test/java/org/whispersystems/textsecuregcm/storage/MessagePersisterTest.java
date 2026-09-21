@@ -6,8 +6,9 @@
 package org.whispersystems.textsecuregcm.storage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyByte;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -16,6 +17,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -41,9 +43,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,7 +66,6 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 import reactor.util.retry.Retry;
-import software.amazon.awssdk.services.dynamodb.model.ItemCollectionSizeLimitExceededException;
 
 @Timeout(value = 15, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class MessagePersisterTest {
@@ -79,7 +78,7 @@ class MessagePersisterTest {
   private Scheduler messageDeliveryScheduler;
   private Scheduler persistQueueScheduler;
   private MessagesCache messagesCache;
-  private MessagesDynamoDb messagesDynamoDb;
+  private PersistentMessageStore messageStore;
   private MessagePersister messagePersister;
   private AccountsManager accountsManager;
   private MessagesManager messagesManager;
@@ -107,7 +106,7 @@ class MessagePersisterTest {
     @SuppressWarnings("unchecked") final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager =
         mock(DynamicConfigurationManager.class);
 
-    messagesDynamoDb = mock(MessagesDynamoDb.class);
+    messageStore = mock(PersistentMessageStore.class);
     accountsManager = mock(AccountsManager.class);
     destinationAccount = mock(Account.class);
 
@@ -150,7 +149,7 @@ class MessagePersisterTest {
       final Device destinationDevice = invocation.getArgument(1);
       final List<MessageProtos.Envelope> messages = invocation.getArgument(2);
 
-      messagesDynamoDb.store(messages, destinationUuid, destinationDevice);
+      messageStore.store(messages, destinationUuid, destinationDevice);
 
       for (final MessageProtos.Envelope message : messages) {
         messagesCache.remove(destinationUuid, destinationDevice.getId(), UUIDUtil.fromByteString(message.getServerGuid())).get();
@@ -189,7 +188,7 @@ class MessagePersisterTest {
     @SuppressWarnings("unchecked") final ArgumentCaptor<List<MessageProtos.Envelope>> messagesCaptor =
         ArgumentCaptor.forClass(List.class);
 
-    verify(messagesDynamoDb, atLeastOnce())
+    verify(messageStore, atLeastOnce())
         .store(messagesCaptor.capture(), eq(DESTINATION_ACCOUNT_UUID), eq(DESTINATION_DEVICE));
 
     assertEquals(messageCount, messagesCaptor.getAllValues().stream().mapToInt(List::size).sum());
@@ -215,7 +214,7 @@ class MessagePersisterTest {
     @SuppressWarnings("unchecked") final ArgumentCaptor<List<MessageProtos.Envelope>> messagesCaptor =
         ArgumentCaptor.forClass(List.class);
 
-    verify(messagesDynamoDb, atLeastOnce())
+    verify(messageStore, atLeastOnce())
         .store(messagesCaptor.capture(), eq(DESTINATION_ACCOUNT_UUID), eq(DESTINATION_DEVICE));
 
     assertEquals(messageCount, messagesCaptor.getAllValues().stream().mapToInt(List::size).sum());
@@ -230,7 +229,7 @@ class MessagePersisterTest {
     assertEquals(0, messagePersister.persistNode(
         getNodeWithKey(MessagesCache.getMessageQueueKey(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID))));
 
-    verify(messagesDynamoDb, never()).store(any(), any(), any());
+    verify(messageStore, never()).store(any(), any(), any());
   }
 
   @Test
@@ -273,7 +272,7 @@ class MessagePersisterTest {
     @SuppressWarnings("unchecked") final ArgumentCaptor<List<MessageProtos.Envelope>> messagesCaptor =
         ArgumentCaptor.forClass(List.class);
 
-    verify(messagesDynamoDb, atLeastOnce()).store(messagesCaptor.capture(), any(UUID.class), any());
+    verify(messageStore, atLeastOnce()).store(messagesCaptor.capture(), any(UUID.class), any());
     assertEquals(queueCount * messagesPerQueue, messagesCaptor.getAllValues().stream().mapToInt(List::size).sum());
   }
 
@@ -290,7 +289,7 @@ class MessagePersisterTest {
     assertEquals(0, messagePersister.persistNode(
         getNodeWithKey(MessagesCache.getMessageQueueKey(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID))));
 
-    verify(messagesDynamoDb, never()).store(any(), any(), any());
+    verify(messageStore, never()).store(any(), any(), any());
   }
 
   @Test
@@ -306,7 +305,7 @@ class MessagePersisterTest {
     assertEquals(0, messagePersister.persistNode(
         getNodeWithKey(MessagesCache.getMessageQueueKey(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID))));
 
-    verify(messagesDynamoDb, never()).store(any(), any(), any());
+    verify(messageStore, never()).store(any(), any(), any());
   }
 
   @Test
@@ -326,7 +325,7 @@ class MessagePersisterTest {
     @SuppressWarnings("unchecked") final ArgumentCaptor<List<MessageProtos.Envelope>> messagesCaptor =
         ArgumentCaptor.forClass(List.class);
 
-    verify(messagesDynamoDb, atLeastOnce())
+    verify(messageStore, atLeastOnce())
         .store(messagesCaptor.capture(), eq(DESTINATION_ACCOUNT_UUID), eq(DESTINATION_DEVICE));
 
     assertEquals(messageCount, messagesCaptor.getAllValues().stream().mapToInt(List::size).sum());
@@ -345,7 +344,7 @@ class MessagePersisterTest {
     assertEquals(0, messagePersister.persistNode(
         getNodeWithKey(MessagesCache.getMessageQueueKey(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID))));
 
-    verify(messagesDynamoDb, never()).store(any(), any(), any());
+    verify(messageStore, never()).store(any(), any(), any());
   }
 
   @Test
@@ -361,7 +360,7 @@ class MessagePersisterTest {
     assertEquals(0, messagePersister.persistNode(
         getNodeWithKey(MessagesCache.getMessageQueueKey(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID))));
 
-    verify(messagesDynamoDb, never()).store(any(), any(), any());
+    verify(messageStore, never()).store(any(), any(), any());
   }
 
   @Test
@@ -381,7 +380,7 @@ class MessagePersisterTest {
     @SuppressWarnings("unchecked") final ArgumentCaptor<List<MessageProtos.Envelope>> messagesCaptor =
         ArgumentCaptor.forClass(List.class);
 
-    verify(messagesDynamoDb, atLeastOnce())
+    verify(messageStore, atLeastOnce())
         .store(messagesCaptor.capture(), eq(DESTINATION_ACCOUNT_UUID), eq(DESTINATION_DEVICE));
 
     assertEquals(messageCount, messagesCaptor.getAllValues().stream().mapToInt(List::size).sum());
@@ -400,7 +399,7 @@ class MessagePersisterTest {
     assertEquals(0, messagePersister.persistNode(
         getNodeWithKey(MessagesCache.getMessageQueueKey(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID))));
 
-    verify(messagesDynamoDb, never()).store(any(), any(), any());
+    verify(messageStore, never()).store(any(), any(), any());
   }
 
   @Test
@@ -420,140 +419,32 @@ class MessagePersisterTest {
     @SuppressWarnings("unchecked") final ArgumentCaptor<List<MessageProtos.Envelope>> messagesCaptor =
         ArgumentCaptor.forClass(List.class);
 
-    verify(messagesDynamoDb, atLeastOnce())
+    verify(messageStore, atLeastOnce())
         .store(messagesCaptor.capture(), eq(DESTINATION_ACCOUNT_UUID), eq(DESTINATION_DEVICE));
 
     assertEquals(messageCount, messagesCaptor.getAllValues().stream().mapToInt(List::size).sum());
   }
 
-  @Test
-  void testUnlinkOnFullQueue() {
-    final int messageCount = 1;
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(bytes = {1, 7})
+  void persistenceFailureRetainsQueueAndDeviceForRetry(final byte deviceId) {
+    final Device device = DevicesHelper.createDevice(deviceId);
+    when(destinationAccount.getDevice(deviceId)).thenReturn(Optional.of(device));
+    insertMessages(DESTINATION_ACCOUNT_UUID, deviceId, 3, CLOCK.instant().minus(PERSIST_DELAY.plusSeconds(1)));
+    final IllegalStateException storageFailure = new IllegalStateException("PostgreSQL unavailable");
+    doThrow(storageFailure).doNothing().when(messageStore).store(anyList(), eq(DESTINATION_ACCOUNT_UUID), eq(device));
 
-    insertMessages(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID, messageCount, CLOCK.instant().minus(PERSIST_DELAY.plusSeconds(1)));
+    StepVerifier.create(messagePersister.persistQueue(destinationAccount, device, Tags.empty()))
+        .expectErrorMatches(error -> error == storageFailure)
+        .verify(Duration.ofSeconds(5));
+    assertTrue(messagesCache.hasMessagesAsync(DESTINATION_ACCOUNT_UUID, deviceId).join());
+    verify(accountsManager, never()).removeDevice(any(), anyByte());
+    verify(messagesManager, never()).delete(any(), any(), any(), anyLong());
 
-    final Device primary = mock(Device.class);
-    when(primary.getId()).thenReturn((byte) 1);
-    when(primary.isPrimary()).thenReturn(true);
-    when(primary.getFetchesMessages()).thenReturn(true);
-
-    final Device activeA = mock(Device.class);
-    when(activeA.getId()).thenReturn((byte) 2);
-    when(activeA.getFetchesMessages()).thenReturn(true);
-
-    final Device inactiveB = mock(Device.class);
-    final byte inactiveId = 3;
-    when(inactiveB.getId()).thenReturn(inactiveId);
-
-    final Device inactiveC = mock(Device.class);
-    when(inactiveC.getId()).thenReturn((byte) 4);
-
-    final Device activeD = mock(Device.class);
-    when(activeD.getId()).thenReturn((byte) 5);
-    when(activeD.getFetchesMessages()).thenReturn(true);
-
-    final Device destination = mock(Device.class);
-    when(destination.getId()).thenReturn(DESTINATION_DEVICE_ID);
-
-    when(destinationAccount.getDevices())
-        .thenReturn(List.of(primary, activeA, inactiveB, inactiveC, activeD, destination));
-
-    when(messagesManager.persistMessages(any(), any(), any()))
-        .thenThrow(ItemCollectionSizeLimitExceededException.builder().build());
-
-    assertTimeoutPreemptively(Duration.ofSeconds(1), () ->
-        messagePersister.persistQueue(destinationAccount, DESTINATION_DEVICE, Tags.empty()).block());
-
-    verify(accountsManager, exactly()).removeDevice(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID);
-  }
-
-  @Test
-  void testTrimOnFullPrimaryQueue() {
-    final List<MessageProtos.Envelope> cachedMessages = Stream.generate(() -> generateMessage(
-            DESTINATION_ACCOUNT_UUID, UUID.randomUUID(), CLOCK.instant().getEpochSecond(), ThreadLocalRandom.current().nextInt(100)))
-        .limit(10)
-        .toList();
-    final long cacheSize = cachedMessages.stream().mapToLong(MessageProtos.Envelope::getSerializedSize).sum();
-    for (final MessageProtos.Envelope envelope : cachedMessages) {
-      messagesCache.insert(UUIDUtil.fromByteString(envelope.getServerGuid()), DESTINATION_ACCOUNT_UUID, Device.PRIMARY_ID, envelope).join();
-    }
-
-    final long expectedClearedBytes = (long) (cacheSize * EXTRA_ROOM_RATIO);
-
-    final int persistedMessageCount = 100;
-    final List<MessageProtos.Envelope> persistedMessages = new ArrayList<>(persistedMessageCount);
-    final List<UUID> expectedClearedGuids = new ArrayList<>();
-    long total = 0L;
-    for (int i = 0; i < 100; i++) {
-      final UUID guid = UUID.randomUUID();
-      final MessageProtos.Envelope envelope = generateMessage(DESTINATION_ACCOUNT_UUID, guid, CLOCK.instant().getEpochSecond(), 13);
-      persistedMessages.add(envelope);
-      if (total < expectedClearedBytes) {
-        total += envelope.getSerializedSize();
-        expectedClearedGuids.add(guid);
-      }
-    }
-
-    final Device primary = mock(Device.class);
-    when(primary.getId()).thenReturn((byte) 1);
-    when(primary.isPrimary()).thenReturn(true);
-    when(primary.getFetchesMessages()).thenReturn(true);
-    when(destinationAccount.getDevice(Device.PRIMARY_ID)).thenReturn(Optional.of(primary));
-
-    when(messagesManager.persistMessages(any(UUID.class), any(), anyList()))
-        .thenThrow(ItemCollectionSizeLimitExceededException.builder().build());
-    when(messagesManager.getMessagesForDevice(DESTINATION_ACCOUNT_UUID, primary))
-        .thenReturn(Flux.concat(
-            Flux.fromIterable(persistedMessages),
-            Flux.fromIterable(cachedMessages)));
-    when(messagesManager.delete(any(), any(), any(), anyLong()))
-        .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
-
-    StepVerifier.create(messagePersister.persistQueue(destinationAccount, primary, Tags.empty()))
-        .expectError(MessagePersistenceException.class)
-        .verify();
-
-    verify(messagesManager, times(expectedClearedGuids.size()))
-        .delete(eq(DESTINATION_ACCOUNT_UUID), eq(primary), argThat(expectedClearedGuids::contains), anyLong());
-    verify(messagesManager, never())
-        .delete(any(), any(), argThat(guid -> !expectedClearedGuids.contains(guid)), anyLong());
-  }
-
-  @Test
-  void testFailedUnlinkOnFullQueueThrowsForRetry() {
-    final int messageCount = 1;
-
-    insertMessages(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID, messageCount, CLOCK.instant().minus(PERSIST_DELAY.plusSeconds(1)));
-
-    final Device primary = mock(Device.class);
-    when(primary.getId()).thenReturn((byte) 1);
-    when(primary.isPrimary()).thenReturn(true);
-    when(primary.getFetchesMessages()).thenReturn(true);
-
-    final Device activeA = mock(Device.class);
-    when(activeA.getId()).thenReturn((byte) 2);
-    when(activeA.getFetchesMessages()).thenReturn(true);
-
-    final Device inactiveB = mock(Device.class);
-    final byte inactiveId = 3;
-    when(inactiveB.getId()).thenReturn(inactiveId);
-
-    final Device inactiveC = mock(Device.class);
-    when(inactiveC.getId()).thenReturn((byte) 4);
-
-    final Device activeD = mock(Device.class);
-    when(activeD.getId()).thenReturn((byte) 5);
-    when(activeD.getFetchesMessages()).thenReturn(true);
-
-    final Device destination = mock(Device.class);
-    when(destination.getId()).thenReturn(DESTINATION_DEVICE_ID);
-
-    when(destinationAccount.getDevices()).thenReturn(List.of(primary, activeA, inactiveB, inactiveC, activeD, destination));
-
-    when(messagesManager.persistMessages(any(UUID.class), any(), anyList())).thenThrow(ItemCollectionSizeLimitExceededException.builder().build());
-    when(accountsManager.removeDevice(DESTINATION_ACCOUNT_UUID, DESTINATION_DEVICE_ID)).thenThrow(new RuntimeException());
-
-    assertThrows(RuntimeException.class, () -> messagePersister.persistQueue(destinationAccount, DESTINATION_DEVICE, Tags.empty()).block());
+    messagePersister.persistQueue(destinationAccount, device, Tags.empty()).block(Duration.ofSeconds(5));
+    assertFalse(messagesCache.hasMessagesAsync(DESTINATION_ACCOUNT_UUID, deviceId).join());
+    verify(messageStore, times(2)).store(anyList(), eq(DESTINATION_ACCOUNT_UUID), eq(device));
+    verify(accountsManager, never()).removeDevice(any(), anyByte());
   }
 
   private static RedisClusterNode getNodeWithKey(final byte[] key) {

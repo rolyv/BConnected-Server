@@ -70,7 +70,6 @@ import org.whispersystems.textsecuregcm.storage.FoundationDbVersion;
 import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.KeysManager;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
-import org.whispersystems.textsecuregcm.storage.MessagesDynamoDb;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
@@ -343,10 +342,7 @@ public record CommandDependencies(
             configuration.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
         postgres != null ? postgres.signedKemKeys() : new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
             configuration.getDynamoDbTables().getKemLastResortKeys().getTableName()));
-    PersistentMessageStore messagesDynamoDb = postgres != null ? postgres.messages() : new MessagesDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
-        configuration.getDynamoDbTables().getMessages().getTableName(),
-        configuration.getMessageRetention(),
-        messageDeletionExecutor);
+    PersistentMessageStore messageStore = postgres.messages();
     FaultTolerantRedisClusterClient messagesCluster = configuration.getMessageCacheConfiguration()
         .getRedisClusterConfiguration().build("messages", redisClientResourcesBuilder);
     FaultTolerantRedisClusterClient rateLimitersCluster = configuration.getRateLimitersCluster().build("rate_limiters",
@@ -392,7 +388,7 @@ public record CommandDependencies(
     RedisMessageAvailabilityManager redisMessageAvailabilityManager =
         new RedisMessageAvailabilityManager(messagesCluster, clientEventExecutor, asyncOperationQueueingExecutor);
     final MessagesManager messagesManager =
-        new MessagesManager(messagesDynamoDb, messagesCache, foundationDbMessageStore, redisMessageAvailabilityManager,
+        new MessagesManager(messageStore, messagesCache, foundationDbMessageStore, redisMessageAvailabilityManager,
             reportMessageManager, messageDeletionExecutor, Clock.systemUTC(), experimentEnrollmentManager);
     AccountLockManager accountLockManager = postgres != null ? postgres.accountLocks() : new AccountLockManager(dynamoDbClient,
         configuration.getDynamoDbTables().getDeletedAccountsLock().getTableName());

@@ -56,13 +56,11 @@ import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseManager;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtension;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema.Tables;
+import org.whispersystems.textsecuregcm.storage.PostgresMessageStoreExtension;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
-import org.whispersystems.textsecuregcm.storage.MessagesDynamoDb;
+import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
-import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDbMessageStore;
 import org.whispersystems.textsecuregcm.util.UUIDUtil;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -74,7 +72,7 @@ import reactor.test.publisher.TestPublisher;
 class MessageDispatcherIntegrationTest {
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(Tables.MESSAGES);
+  static final PostgresMessageStoreExtension POSTGRES = new PostgresMessageStoreExtension();
 
   @RegisterExtension
   static final RedisClusterExtension REDIS_CLUSTER_EXTENSION = RedisClusterExtension.builder().build();
@@ -82,7 +80,7 @@ class MessageDispatcherIntegrationTest {
   private static ExecutorService sharedExecutorService;
   private static Scheduler messageDeliveryScheduler;
 
-  private MessagesDynamoDb messagesDynamoDb;
+  private PersistentMessageStore messageStore;
   private MessagesCache messagesCache;
   private RedisMessageAvailabilityManager redisMessageAvailabilityManager;
   private ReportMessageManager reportMessageManager;
@@ -109,9 +107,7 @@ class MessageDispatcherIntegrationTest {
 
     messagesCache = new MessagesCache(REDIS_CLUSTER_EXTENSION.getRedisCluster(),
         messageDeliveryScheduler, sharedExecutorService, mock(ScheduledExecutorService.class), Clock.systemUTC());
-    messagesDynamoDb = new MessagesDynamoDb(DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(), Tables.MESSAGES.tableName(), Duration.ofDays(7),
-        sharedExecutorService);
+    messageStore = POSTGRES.store(Duration.ofDays(7), sharedExecutorService);
     redisMessageAvailabilityManager = new RedisMessageAvailabilityManager(REDIS_CLUSTER_EXTENSION.getRedisCluster(),
         sharedExecutorService, sharedExecutorService);
     reportMessageManager = mock(ReportMessageManager.class);
@@ -127,7 +123,7 @@ class MessageDispatcherIntegrationTest {
 
     messageDispatcher = new MessageDispatcher(
         mock(ReceiptSender.class),
-        new MessagesManager(messagesDynamoDb, messagesCache, mock(FoundationDbMessageStore.class), redisMessageAvailabilityManager, reportMessageManager,
+        new MessagesManager(messageStore, messagesCache, null, redisMessageAvailabilityManager, reportMessageManager,
             sharedExecutorService, Clock.systemUTC(), mock(ExperimentEnrollmentManager.class)),
         new MessageMetrics(),
         mock(PushNotificationManager.class),
@@ -233,7 +229,7 @@ class MessageDispatcherIntegrationTest {
       final Envelope envelope = generateRandomMessage(UUID.randomUUID());
       expectedMessages.add(envelope);
     }
-    messagesDynamoDb.store(expectedMessages, account.getAccountIdentifier(), device);
+    messageStore.store(expectedMessages, account.getAccountIdentifier(), device);
 
     for (int i = 0; i < cachedMessageCount; i++) {
       final UUID messageGuid = UUID.randomUUID();
