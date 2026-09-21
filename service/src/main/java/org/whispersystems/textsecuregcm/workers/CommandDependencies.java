@@ -65,7 +65,6 @@ import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
-import org.whispersystems.textsecuregcm.storage.DynamoDbRecoveryManager;
 import org.whispersystems.textsecuregcm.storage.DynamoProfileDataStore;
 import org.whispersystems.textsecuregcm.storage.FoundationDbVersion;
 import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
@@ -141,7 +140,6 @@ public record CommandDependencies(
     DynamoDbAsyncClient dynamoDbAsyncClient,
     DynamoDbClient dynamoDbClient,
     PhoneNumberIdentifierStore phoneNumberIdentifiers,
-    DynamoDbRecoveryManager dynamoDbRecoveryManager,
     FDB fdb,
     AccountLockManager accountLockManager) {
 
@@ -492,9 +490,6 @@ public record CommandDependencies(
             configuration.getDynamoDbTables().getPushNotificationExperimentSamples().getTableName(),
             Clock.systemUTC());
 
-    final DynamoDbRecoveryManager dynamoDbRecoveryManager =
-        new DynamoDbRecoveryManager(accounts, phoneNumberIdentifiers);
-
     if (apnSender instanceof io.dropwizard.lifecycle.Managed managedApns) environment.lifecycle().manage(managedApns);
     environment.lifecycle().manage(disconnectionRequestManager);
     environment.lifecycle().manage(redisMessageAvailabilityManager);
@@ -524,7 +519,6 @@ public record CommandDependencies(
         dynamoDbAsyncClient,
         dynamoDbClient,
         phoneNumberIdentifiers,
-        dynamoDbRecoveryManager,
         fdb,
         accountLockManager);
   }
