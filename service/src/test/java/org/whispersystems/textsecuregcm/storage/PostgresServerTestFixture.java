@@ -19,8 +19,12 @@ public final class PostgresServerTestFixture {
 
   public static synchronized String jdbcUrl() {
     if (jdbcUrl != null) return jdbcUrl;
+    final String major = System.getenv().getOrDefault("BCONNECTED_TEST_POSTGRES_MAJOR", "17");
+    if (!List.of("17", "18").contains(major)) {
+      throw new IllegalArgumentException("Disposable PostgreSQL tests support only major versions 17 or 18");
+    }
     final String password = UUID.randomUUID().toString();
-    container = new GenericContainer<>(DockerImageName.parse("postgres:17"))
+    container = new GenericContainer<>(DockerImageName.parse("postgres:" + major))
         .withEnv("POSTGRES_DB", "signal_server_test")
         .withEnv("POSTGRES_USER", "postgres")
         .withEnv("POSTGRES_PASSWORD", password)
@@ -33,6 +37,12 @@ public final class PostgresServerTestFixture {
           container.getHost(), container.getMappedPort(5432), password);
       try (var connection = DriverManager.getConnection(url, "postgres", password);
           var statement = connection.createStatement()) {
+        try (var result = statement.executeQuery("SHOW server_version_num")) {
+          if (!result.next() || result.getInt(1) / 10000 != Integer.parseInt(major)) {
+            throw new IllegalStateException("Disposable PostgreSQL server major differs from requested version");
+          }
+          System.out.println("BConnected disposable PostgreSQL server_version_num=" + result.getInt(1));
+        }
         for (String migration : List.of("001-postgres.sql", "002-ec-prekeys.sql", "003-accounts.sql",
             "004-registration.sql", "005-kem-prekeys.sql", "006-profiles.sql", "007-report-message.sql",
             "008-push-challenges.sql", "009-apple-device-checks.sql", "010-client-releases.sql")) {
