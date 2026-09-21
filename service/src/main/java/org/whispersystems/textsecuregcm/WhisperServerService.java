@@ -271,7 +271,6 @@ import org.whispersystems.textsecuregcm.storage.ClientReleaseStore;
 import org.whispersystems.textsecuregcm.storage.DonationPermits;
 import org.whispersystems.textsecuregcm.storage.DonationPermitsManager;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
-import org.whispersystems.textsecuregcm.storage.DynamoProfileDataStore;
 import org.whispersystems.textsecuregcm.storage.FoundationDbVersion;
 import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.KeysManager;
@@ -288,11 +287,8 @@ import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
-import org.whispersystems.textsecuregcm.storage.ProfileAvatars;
 import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
-import org.whispersystems.textsecuregcm.storage.Profiles;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
-import org.whispersystems.textsecuregcm.storage.ProfilesV2;
 import org.whispersystems.textsecuregcm.storage.PushChallengeStore;
 import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigStore;
@@ -598,11 +594,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres != null ? postgres.phoneNumbers() : new PhoneNumberIdentifiers(dynamoDbAsyncClient,
         config.getDynamoDbTables().getPhoneNumberIdentifiers().getTableName());
 
-    ProfileDataStore profileStore = postgres != null ? postgres.profiles() : new DynamoProfileDataStore(
-        new Profiles(dynamoDbClient, dynamoDbAsyncClient, config.getDynamoDbTables().getProfilesV1().getTableName()),
-        new ProfilesV2(dynamoDbClient, dynamoDbAsyncClient, config.getDynamoDbTables().getProfilesV2().getTableName()));
-    ProfileAvatarStore profileAvatars = postgres != null ? postgres.profileAvatars() : new ProfileAvatars(dynamoDbClient,
-        config.getDynamoDbTables().getProfileAvatars().getTableName(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, clock);
+    ProfileDataStore profileStore = postgres.profiles();
+    ProfileAvatarStore profileAvatars = postgres.profileAvatars();
 
     S3AsyncClient asyncKeysS3Client = postgres != null ? null : S3AsyncClient.builder()
         .credentialsProvider(awsCredentialsProvider)
@@ -807,10 +800,9 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     if (mediaDownloads != null) environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
       @Override public void stop() throws Exception { mediaDownloads.close(); }
     });
-    ProfilesManager profilesManager = gcpPilot
-        ? new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, gcsAvatars)
-        : new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
-            config.getCdnConfiguration().bucket());
+    ProfilesManager profilesManager = new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor,
+        gcpPilot ? gcsAvatars : new org.whispersystems.textsecuregcm.avatars.S3AvatarObjectStorage(
+            asyncCdnS3Client, config.getCdnConfiguration().bucket()));
     MessagesCache messagesCache = new MessagesCache(messagesCluster, messageDeliveryScheduler,
         messageDeletionAsyncExecutor, retryExecutor, clock);
     final FoundationDbMessageStore foundationDbMessageStore = postgres != null ? null : new FoundationDbMessageStore(messageDatabasesByEpoch,

@@ -257,43 +257,6 @@ public final class DynamoDbExtensionSchema {
             .build()),
         List.of(), List.of()),
 
-    PROFILES("profiles_test",
-        Profiles.KEY_ACCOUNT_UUID,
-        Profiles.ATTR_VERSION,
-        List.of(
-            AttributeDefinition.builder()
-                .attributeName(Profiles.KEY_ACCOUNT_UUID)
-                .attributeType(ScalarAttributeType.B)
-                .build(),
-            AttributeDefinition.builder()
-                .attributeName(Profiles.ATTR_VERSION)
-                .attributeType(ScalarAttributeType.S)
-                .build()),
-        List.of(), List.of()),
-
-    PROFILE_AVATARS("profileAvatars_test",
-        ProfileAvatars.KEY_IDENTITY,
-        null,
-        List.of(AttributeDefinition.builder()
-            .attributeName(ProfileAvatars.KEY_IDENTITY)
-            .attributeType(ScalarAttributeType.B)
-            .build()),
-        List.of(), List.of()),
-
-    PROFILES_V2("profilesV2_test",
-        ProfilesV2.KEY_ACCOUNT_UUID,
-        ProfilesV2.KEY_VERSION,
-        List.of(
-            AttributeDefinition.builder()
-                .attributeName(ProfilesV2.KEY_ACCOUNT_UUID)
-                .attributeType(ScalarAttributeType.B)
-                .build(),
-            AttributeDefinition.builder()
-                .attributeName(ProfilesV2.KEY_VERSION)
-                .attributeType(ScalarAttributeType.B)
-                .build()),
-        List.of(), List.of()),
-
     REDEEMED_RECEIPTS("redeemed_receipts_test",
         RedeemedReceiptsManager.KEY_SERIAL,
         null,

@@ -129,12 +129,6 @@ dynamoDbTables:
     expiration: P90D
   phoneNumberIdentifiers:
     tableName: Example_PhoneNumberIdentifiers
-  profileAvatars:
-    tableName: Example_ProfileAvatars
-  profiles:
-    tableName: Example_Profiles
-  profilesV2:
-    tableName: Example_ProfilesV2
   pushNotificationExperimentSamples:
     tableName: Example_PushNotificationExperimentSamples
   redeemedReceipts:

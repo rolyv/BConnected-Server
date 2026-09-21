@@ -25,7 +25,6 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.avatars.AvatarObjectStorage;
-import org.whispersystems.textsecuregcm.avatars.S3AvatarObjectStorage;
 import org.whispersystems.textsecuregcm.redis.ClusterLuaScript;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 import org.whispersystems.textsecuregcm.util.ResilienceUtil;
@@ -33,7 +32,6 @@ import org.whispersystems.textsecuregcm.util.SystemMapper;
 import org.whispersystems.textsecuregcm.util.Util;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
-import software.amazon.awssdk.services.s3.S3AsyncClient;
 
 public class ProfilesManager {
 
@@ -55,42 +53,6 @@ public class ProfilesManager {
   private static final String RETRY_NAME = ResilienceUtil.name(ProfilesManager.class);
 
   private static final String DELETE_AVATAR_COUNTER_NAME = name(ProfilesManager.class, "deleteAvatar");
-
-  public ProfilesManager(final Profiles profilesV1,
-      final ProfilesV2 profilesV2,
-      final ProfileAvatars profileAvatars,
-      final FaultTolerantRedisClusterClient cacheCluster,
-      final ScheduledExecutorService retryExecutor,
-      final S3AsyncClient s3Client,
-      final String bucket) throws IOException {
-    this(profilesV1, profilesV2, profileAvatars, cacheCluster, retryExecutor, s3Client, bucket,
-        ClusterLuaScript.fromResource(cacheCluster, "lua/profile_set.lua", ScriptOutputType.STATUS));
-  }
-
-  @VisibleForTesting
-  ProfilesManager(final Profiles profilesV1,
-      final ProfilesV2 profilesV2,
-      final ProfileAvatars profileAvatars,
-      final FaultTolerantRedisClusterClient cacheCluster,
-      final ScheduledExecutorService retryExecutor,
-      final S3AsyncClient s3Client,
-      final String bucket,
-      final ClusterLuaScript setLuaScript) {
-    this(new DynamoProfileDataStore(profilesV1, profilesV2), profileAvatars, cacheCluster, retryExecutor, s3Client, bucket, setLuaScript);
-  }
-
-  public ProfilesManager(final ProfileDataStore profiles, final ProfileAvatarStore profileAvatars,
-      final FaultTolerantRedisClusterClient cacheCluster, final ScheduledExecutorService retryExecutor,
-      final S3AsyncClient s3Client, final String bucket) throws IOException {
-    this(profiles, profileAvatars, cacheCluster, retryExecutor, s3Client, bucket,
-        ClusterLuaScript.fromResource(cacheCluster, "lua/profile_set.lua", ScriptOutputType.STATUS));
-  }
-
-  private ProfilesManager(final ProfileDataStore profiles, final ProfileAvatarStore profileAvatars,
-      final FaultTolerantRedisClusterClient cacheCluster, final ScheduledExecutorService retryExecutor,
-      final S3AsyncClient s3Client, final String bucket, final ClusterLuaScript setLuaScript) {
-    this(profiles, profileAvatars, cacheCluster, retryExecutor, new S3AvatarObjectStorage(s3Client, bucket), setLuaScript);
-  }
 
   public ProfilesManager(final ProfileDataStore profiles, final ProfileAvatarStore profileAvatars,
       final FaultTolerantRedisClusterClient cacheCluster, final ScheduledExecutorService retryExecutor,

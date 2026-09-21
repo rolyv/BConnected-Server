@@ -70,6 +70,79 @@ class ProfilesPostgresTest {
     assertThat(profiles.getV2(account, new byte[] {4})).isEmpty();
   }
 
+  @Test void initialAndConditionalWritesRequireTheCorrectPriorState() throws Exception {
+    var noCommitment = new VersionedProfile(version, new byte[] {2}, VersionedProfile.hash(new byte[] {2}),
+        null, null, null);
+    assertThrows(IllegalArgumentException.class, () -> profiles.setBoth(account, v1("bad"), noCommitment, null));
+    assertThrows(WriteConflictException.class, () -> profiles.setBoth(account, v1("bad"), v2(1), new byte[] {1}));
+    assertThat(profiles.getV1(account, "010203")).isEmpty();
+    assertThat(profiles.getV2(account, version)).isEmpty();
+  }
+
+  @Test void versionsAreIndependentAndDeleteRemovesAllVersions() throws Exception {
+    var otherV1 = new VersionedProfileV1("040506", new byte[] {3}, null, null, null, null, null, commitment);
+    var otherV2 = new VersionedProfile(new byte[] {4, 5, 6}, new byte[] {4}, null, commitment);
+    profiles.setBoth(account, v1("first"), v2(1), null);
+    profiles.setBoth(account, otherV1, otherV2, null);
+    profiles.setBoth(account, v1("updated"), v2(2), v2(1).dataHash());
+    assertThat(profiles.getV1(account, "010203")).contains(v1("updated"));
+    assertThat(profiles.getV1(account, "040506")).contains(otherV1);
+    assertThat(profiles.getV2(account, otherV2.version())).contains(otherV2);
+    assertThat(profiles.deleteV1(account).join()).containsExactly("avatars/test");
+    profiles.deleteV2(account).join();
+    assertThat(profiles.getV1(account, "010203")).isEmpty();
+    assertThat(profiles.getV1(account, "040506")).isEmpty();
+    assertThat(profiles.getV2(account, version)).isEmpty();
+    assertThat(profiles.getV2(account, otherV2.version())).isEmpty();
+    assertThat(profiles.deleteV1(account).join()).isEmpty();
+  }
+
+  @Test void avatarOnlyInsertAndUpdatePreserveEncryptedFieldsAndCommitment() {
+    var inserted = profiles.setV1Avatar(account, "new-version", "first", commitment);
+    assertThat(inserted.avatar()).isEqualTo("first");
+    assertThat(inserted.name()).isNull();
+    assertThat(inserted.commitment()).isEqualTo(commitment);
+    profiles.setV1(account, v1("encrypted"));
+    var updated = profiles.setV1Avatar(account, "010203", "replacement", new byte[] {1});
+    assertThat(updated.avatar()).isEqualTo("replacement");
+    assertThat(updated.name()).isEqualTo(v1("encrypted").name());
+    assertThat(updated.about()).isEqualTo(v1("encrypted").about());
+    assertThat(updated.aboutEmoji()).isEqualTo(v1("encrypted").aboutEmoji());
+    assertThat(updated.paymentAddress()).isEqualTo(v1("encrypted").paymentAddress());
+    assertThat(updated.phoneNumberSharing()).isEqualTo(v1("encrypted").phoneNumberSharing());
+    assertThat(updated.commitment()).isEqualTo(commitment);
+  }
+
+  @Test void paymentAddressCanBeAddedReplacedAndRemovedWithItsHash() throws Exception {
+    var original = new VersionedProfile(version, new byte[] {1}, null, commitment);
+    profiles.setBoth(account, v1("first"), original, null);
+    assertThat(profiles.getV2(account, version).orElseThrow().paymentAddress()).isNull();
+    var added = new VersionedProfile(version, new byte[] {2}, new byte[] {3}, commitment);
+    profiles.setBoth(account, v1("added"), added, original.dataHash());
+    assertThat(profiles.getV2(account, version)).contains(added);
+    var replaced = new VersionedProfile(version, new byte[] {4}, new byte[] {5}, commitment);
+    profiles.setBoth(account, v1("replaced"), replaced, added.dataHash());
+    assertThat(profiles.getV2(account, version)).contains(replaced);
+    var removed = new VersionedProfile(version, new byte[] {6}, null, commitment);
+    profiles.setBoth(account, v1("removed"), removed, replaced.dataHash());
+    var saved = profiles.getV2(account, version).orElseThrow();
+    assertThat(saved.paymentAddress()).isNull();
+    assertThat(saved.paymentAddressHash()).isNull();
+  }
+
+  @Test void deletionAllowsAReplacementCommitmentForTheSameVersion() throws Exception {
+    profiles.setBoth(account, v1("first"), v2(1), null);
+    profiles.deleteV1(account).join();
+    profiles.deleteV2(account).join();
+    byte[] replacement = commitment.clone();
+    replacement[0] = 1;
+    var freshV1 = new VersionedProfileV1("010203", null, null, null, null, null, null, replacement);
+    var freshV2 = new VersionedProfile(version, new byte[] {2}, null, replacement);
+    profiles.setBoth(account, freshV1, freshV2, null);
+    assertThat(profiles.getV1(account, "010203")).contains(freshV1);
+    assertThat(profiles.getV2(account, version)).contains(freshV2);
+  }
+
   @Test void v1UpdatesKeepOriginalCommitmentAndRemoveNullFields() throws Exception {
     profiles.setV1(account, v1("first"));
     var update = new VersionedProfileV1("010203", null, "  ", null, null, null, null, new byte[] {123});

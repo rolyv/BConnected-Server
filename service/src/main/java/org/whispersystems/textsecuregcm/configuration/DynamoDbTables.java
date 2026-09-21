@@ -62,9 +62,6 @@ public class DynamoDbTables {
   private final Table pagedKemKeys;
   private final TableWithExpiration onetimeDonations;
   private final Table phoneNumberIdentifiers;
-  private final Table profileAvatars;
-  private final Table profiles;
-  private final Table profilesV2;
   private final Table pushNotificationExperimentSamples;
   private final Table redeemedReceipts;
   private final TableWithExpiration registrationRecovery;
@@ -88,9 +85,6 @@ public class DynamoDbTables {
       @JsonProperty("pagedPqKeys") final Table pagedKemKeys,
       @JsonProperty("onetimeDonations") final TableWithExpiration onetimeDonations,
       @JsonProperty("phoneNumberIdentifiers") final Table phoneNumberIdentifiers,
-      @JsonProperty("profileAvatars") final Table profileAvatars,
-      @JsonProperty("profiles") final Table profiles,
-      @JsonProperty("profilesV2") final Table profilesV2,
       @JsonProperty("pushNotificationExperimentSamples") final Table pushNotificationExperimentSamples,
       @JsonProperty("redeemedReceipts") final Table redeemedReceipts,
       @JsonProperty("registrationRecovery") final TableWithExpiration registrationRecovery,
@@ -113,9 +107,6 @@ public class DynamoDbTables {
     this.kemLastResortKeys = kemLastResortKeys;
     this.onetimeDonations = onetimeDonations;
     this.phoneNumberIdentifiers = phoneNumberIdentifiers;
-    this.profileAvatars = profileAvatars;
-    this.profiles = profiles;
-    this.profilesV2 = profilesV2;
     this.pushNotificationExperimentSamples = pushNotificationExperimentSamples;
     this.redeemedReceipts = redeemedReceipts;
     this.registrationRecovery = registrationRecovery;
@@ -212,24 +203,6 @@ public class DynamoDbTables {
   @Valid
   public Table getPhoneNumberIdentifiers() {
     return phoneNumberIdentifiers;
-  }
-
-  @NotNull
-  @Valid
-  public Table getProfileAvatars() {
-    return profileAvatars;
-  }
-
-  @NotNull
-  @Valid
-  public Table getProfilesV1() {
-    return profiles;
-  }
-
-  @NotNull
-  @Valid
-  public Table getProfilesV2() {
-    return profilesV2;
   }
 
   @NotNull

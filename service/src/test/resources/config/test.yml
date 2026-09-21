@@ -134,12 +134,6 @@ dynamoDbTables:
     expiration: P90D
   phoneNumberIdentifiers:
     tableName: pni_test
-  profileAvatars:
-    tableName: profileAvatars_test
-  profiles:
-    tableName: profiles_test
-  profilesV2:
-    tableName: profilesV2_test
   pushNotificationExperimentSamples:
     tableName: Example_PushNotificationExperimentSamples
   redeemedReceipts:

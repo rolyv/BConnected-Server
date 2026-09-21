@@ -44,10 +44,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.ArgumentCaptor;
 import org.signal.libsignal.protocol.ServiceId;
 import org.signal.libsignal.zkgroup.InvalidInputException;
 import org.signal.libsignal.zkgroup.profiles.ProfileKey;
+import org.whispersystems.textsecuregcm.avatars.AvatarObjectStorage;
 import org.whispersystems.textsecuregcm.redis.ClusterLuaScript;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 import org.whispersystems.textsecuregcm.redis.RedisClusterExtension;
@@ -56,29 +56,18 @@ import org.whispersystems.textsecuregcm.tests.util.ProfileTestHelper;
 import org.whispersystems.textsecuregcm.tests.util.RedisClusterHelper;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
 import org.whispersystems.textsecuregcm.util.TestRandomUtil;
-import software.amazon.awssdk.services.dynamodb.model.DynamoDbException;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
-import software.amazon.awssdk.services.s3.S3AsyncClient;
-import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
-import software.amazon.awssdk.services.s3.model.CopyObjectResponse;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
-import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
-import software.amazon.awssdk.services.s3.model.S3Exception;
 
 @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 public class ProfilesManagerTest {
 
-  private Profiles profilesV1;
-  private ProfilesV2 profilesV2;
-  private ProfileAvatars profileAvatars;
+  private ProfileDataStore profiles;
+  private ProfileAvatarStore profileAvatars;
   private RedisAdvancedClusterCommands<byte[], byte[]> commands;
   private RedisAdvancedClusterAsyncCommands<byte[], byte[]> asyncCommands;
-  private S3AsyncClient s3Client;
+  private AvatarObjectStorage avatarStorage;
   private ClusterLuaScript setLuaScript;
 
   private ProfilesManager profilesManager;
-
-  private static final String BUCKET = "bucket";
 
   @BeforeEach
   void setUp() throws Exception {
@@ -91,14 +80,15 @@ public class ProfilesManagerTest {
         .binaryAsyncCommands(asyncCommands)
         .build();
 
-    profilesV1 = mock(Profiles.class);
-    profilesV2 = mock(ProfilesV2.class);
-    profileAvatars = mock(ProfileAvatars.class);
-    s3Client = mock(S3AsyncClient.class);
+    profiles = mock(ProfileDataStore.class);
+    profileAvatars = mock(ProfileAvatarStore.class);
+    avatarStorage = mock(AvatarObjectStorage.class);
+    when(avatarStorage.delete(anyString())).thenReturn(CompletableFuture.completedFuture(null));
+    when(avatarStorage.refresh(anyString())).thenReturn(CompletableFuture.completedFuture(true));
     setLuaScript = mock(ClusterLuaScript.class);
 
-    profilesManager = new ProfilesManager(profilesV1, profilesV2, profileAvatars, cacheCluster, mock(ScheduledExecutorService.class),
-        s3Client, BUCKET, setLuaScript);
+    profilesManager = new ProfilesManager(profiles, profileAvatars, cacheCluster, mock(ScheduledExecutorService.class),
+        avatarStorage, setLuaScript);
   }
 
   @Test
@@ -124,7 +114,7 @@ public class ProfilesManagerTest {
 
     verify(commands, times(1)).hget(eq(ProfilesManager.getCacheKeyV1(uuid)), aryEq(versionHex.getBytes()));
     verifyNoMoreInteractions(commands);
-    verifyNoMoreInteractions(profilesV1);
+    verifyNoMoreInteractions(profiles);
   }
 
   @Test
@@ -137,7 +127,7 @@ public class ProfilesManagerTest {
         null, null, "somecommitment".getBytes());
 
     when(commands.hget(eq(ProfilesManager.getCacheKeyV1(uuid)), aryEq(versionHex.getBytes()))).thenReturn(null);
-    when(profilesV1.get(eq(uuid), eq(versionHex))).thenReturn(Optional.of(profile));
+    when(profiles.getV1(eq(uuid), eq(versionHex))).thenReturn(Optional.of(profile));
 
     Optional<VersionedProfileV1> retrieved = profilesManager.getV1(uuid, versionHex);
 
@@ -160,8 +150,8 @@ public class ProfilesManagerTest {
     verifyNoMoreInteractions(commands);
     verifyNoMoreInteractions(setLuaScript);
 
-    verify(profilesV1, times(1)).get(eq(uuid), eq(versionHex));
-    verifyNoMoreInteractions(profilesV1);
+    verify(profiles, times(1)).getV1(eq(uuid), eq(versionHex));
+    verifyNoMoreInteractions(profiles);
   }
 
   @ParameterizedTest
@@ -179,7 +169,7 @@ public class ProfilesManagerTest {
       when(commands.hset(eq(ProfilesManager.getCacheKeyV1(uuid)), eq(versionHex.getBytes()), any(byte[].class)))
         .thenThrow(new RedisException("Connection lost"));
     }
-    when(profilesV1.get(eq(uuid), eq(versionHex))).thenReturn(Optional.of(profile));
+    when(profiles.getV1(eq(uuid), eq(versionHex))).thenReturn(Optional.of(profile));
 
     Optional<VersionedProfileV1> retrieved = profilesManager.getV1(uuid, versionHex);
 
@@ -198,8 +188,8 @@ public class ProfilesManagerTest {
     verifyNoMoreInteractions(commands);
     verifyNoMoreInteractions(setLuaScript);
 
-    verify(profilesV1, times(1)).get(eq(uuid), eq(versionHex));
-    verifyNoMoreInteractions(profilesV1);
+    verify(profiles, times(1)).getV1(eq(uuid), eq(versionHex));
+    verifyNoMoreInteractions(profiles);
   }
 
   @Test
@@ -226,10 +216,10 @@ public class ProfilesManagerTest {
                 && args.get(3).length == 0));
     verifyNoMoreInteractions(setLuaScript);
 
-    verify(profilesV1, times(1)).set(eq(uuid), eq(profile));
-    verifyNoMoreInteractions(profilesV1);
+    verify(profiles, times(1)).setV1(eq(uuid), eq(profile));
+    verify(profiles).deleteV2(uuid);
+    verifyNoMoreInteractions(profiles);
     verify(commands).del(aryEq(ProfilesManager.getCacheKeyV1(uuid)), aryEq(ProfilesManager.getCacheKeyV2(uuid)));
-    verify(profilesV2).deleteAll(uuid);
   }
 
   @ParameterizedTest
@@ -239,29 +229,23 @@ public class ProfilesManagerTest {
 
     final String avatarOne = "avatar1";
     final String avatarTwo = "avatar2";
-    when(profilesV1.deleteAll(uuid)).thenReturn(CompletableFuture.completedFuture(List.of(avatarOne, avatarTwo)));
-    when(profilesV2.deleteAll(uuid)).thenReturn(CompletableFuture.completedFuture(null));
+    when(profiles.deleteV1(uuid)).thenReturn(CompletableFuture.completedFuture(List.of(avatarOne, avatarTwo)));
+    when(profiles.deleteV2(uuid)).thenReturn(CompletableFuture.completedFuture(null));
     when(asyncCommands.del(ProfilesManager.getCacheKeyV1(uuid), ProfilesManager.getCacheKeyV2(uuid))).thenReturn(MockRedisFuture.completedFuture(null));
-    when(s3Client.deleteObject(any(DeleteObjectRequest.class)))
+    when(avatarStorage.delete(anyString()))
         .thenReturn(CompletableFuture.completedFuture(null))
         .thenReturn(CompletableFuture.failedFuture(new RuntimeException("some error")));
 
     profilesManager.deleteAll(uuid, includeAvatar).join();
 
-    verify(profilesV1).deleteAll(uuid);
-    verify(profilesV2).deleteAll(uuid);
+    verify(profiles).deleteV1(uuid);
+    verify(profiles).deleteV2(uuid);
     verify(asyncCommands).del(ProfilesManager.getCacheKeyV1(uuid), ProfilesManager.getCacheKeyV2(uuid));
     if (includeAvatar) {
-      verify(s3Client).deleteObject(DeleteObjectRequest.builder()
-          .bucket(BUCKET)
-          .key(avatarOne)
-          .build());
-      verify(s3Client).deleteObject(DeleteObjectRequest.builder()
-          .bucket(BUCKET)
-          .key(avatarTwo)
-          .build());
+      verify(avatarStorage).delete(avatarOne);
+      verify(avatarStorage).delete(avatarTwo);
     } else {
-      verifyNoInteractions(s3Client);
+      verifyNoInteractions(avatarStorage);
     }
   }
 
@@ -304,7 +288,7 @@ public class ProfilesManagerTest {
 
     verify(commands, times(1)).hget(aryEq(ProfilesManager.getCacheKeyV2(uuid)), aryEq(version));
     verifyNoMoreInteractions(commands);
-    verifyNoMoreInteractions(profilesV2);
+    verifyNoMoreInteractions(profiles);
   }
 
   @Test
@@ -316,7 +300,7 @@ public class ProfilesManagerTest {
         TestRandomUtil.nextBytes(32), TestRandomUtil.nextBytes(32));
 
     when(commands.hget(aryEq(ProfilesManager.getCacheKeyV2(uuid)), aryEq(version))).thenReturn(null);
-    when(profilesV2.get(eq(uuid), aryEq(version))).thenReturn(Optional.of(profile));
+    when(profiles.getV2(eq(uuid), aryEq(version))).thenReturn(Optional.of(profile));
 
     final Optional<VersionedProfile> retrieved = profilesManager.get(uuid, version);
 
@@ -337,8 +321,8 @@ public class ProfilesManagerTest {
                 && Arrays.equals(args.get(3), v2ProfileBytes)));
     verifyNoMoreInteractions(commands);
 
-    verify(profilesV2, times(1)).get(eq(uuid), aryEq(version));
-    verifyNoMoreInteractions(profilesV2);
+    verify(profiles, times(1)).getV2(eq(uuid), aryEq(version));
+    verifyNoMoreInteractions(profiles);
   }
 
   @ParameterizedTest
@@ -355,7 +339,7 @@ public class ProfilesManagerTest {
       when(commands.hset(aryEq(ProfilesManager.getCacheKeyV2(uuid)), aryEq(version), any(byte[].class)))
           .thenThrow(new RedisException("Connection lost"));
     }
-    when(profilesV2.get(eq(uuid), aryEq(version))).thenReturn(Optional.of(profile));
+    when(profiles.getV2(eq(uuid), aryEq(version))).thenReturn(Optional.of(profile));
 
     final Optional<VersionedProfile> retrieved = profilesManager.get(uuid, version);
 
@@ -375,8 +359,8 @@ public class ProfilesManagerTest {
                 && Arrays.equals(args.get(2), version)
                 && Arrays.equals(args.get(3), v2ProfileBytes)));    verifyNoMoreInteractions(commands);
 
-    verify(profilesV2, times(1)).get(eq(uuid), aryEq(version));
-    verifyNoMoreInteractions(profilesV2);
+    verify(profiles, times(1)).getV2(eq(uuid), aryEq(version));
+    verifyNoMoreInteractions(profiles);
   }
 
   @Test
@@ -393,9 +377,6 @@ public class ProfilesManagerTest {
     final VersionedProfile profileV2 = new VersionedProfile(version, TestRandomUtil.nextBytes(128),
         TestRandomUtil.nextBytes(32), TestRandomUtil.nextBytes(64),
         TestRandomUtil.nextBytes(32), commitment);
-
-    final TransactWriteItem v1Item = TransactWriteItem.builder().build();
-    when(profilesV1.getTransactWriteItem(eq(uuid), eq(profileV1))).thenReturn(v1Item);
 
     profilesManager.set(uuid, profileV1, profileV2, expectedCurrentDataHash);
 
@@ -415,11 +396,8 @@ public class ProfilesManagerTest {
     verifyNoMoreInteractions(commands);
     verifyNoMoreInteractions(setLuaScript);
 
-    verify(profilesV1).getTransactWriteItem(eq(uuid), eq(profileV1));
-    verifyNoMoreInteractions(profilesV1);
-
-    verify(profilesV2).set(eq(uuid), aryEq(version), aryEq(profileV2.data()), aryEq(profileV2.dataHash()), aryEq(profileV2.commitment()), aryEq(profileV2.paymentAddress()), aryEq(profileV2.paymentAddressHash()), aryEq(expectedCurrentDataHash), eq(v1Item));
-    verifyNoMoreInteractions(profilesV2);
+    verify(profiles).setBoth(eq(uuid), eq(profileV1), eq(profileV2), aryEq(expectedCurrentDataHash));
+    verifyNoMoreInteractions(profiles);
   }
 
   @ParameterizedTest
@@ -438,13 +416,9 @@ public class ProfilesManagerTest {
         TestRandomUtil.nextBytes(32), TestRandomUtil.nextBytes(64),
         TestRandomUtil.nextBytes(32), commitment);
 
-    final TransactWriteItem v1Item = TransactWriteItem.builder().build();
-    when(profilesV1.getTransactWriteItem(eq(uuid), eq(profileV1))).thenReturn(v1Item);
-
     when(asyncCommands.del(ProfilesManager.getCacheKeyV1(uuid), ProfilesManager.getCacheKeyV2(uuid))).thenReturn(MockRedisFuture.completedFuture(null));
 
-    doThrow(exceptionClass).when(profilesV2).set(eq(uuid), aryEq(version), aryEq(profileV2.data()), aryEq(profileV2.dataHash()), aryEq(profileV2.commitment()),
-        aryEq(profileV2.paymentAddress()), aryEq(profileV2.paymentAddressHash()), aryEq(wrongHash), eq(v1Item));
+    doThrow(exceptionClass).when(profiles).setBoth(eq(uuid), eq(profileV1), eq(profileV2), aryEq(wrongHash));
 
     assertThrows(exceptionClass, () -> profilesManager.set(uuid, profileV1, profileV2, wrongHash));
     
@@ -454,7 +428,7 @@ public class ProfilesManagerTest {
   static Collection<Arguments> testSetExceptionCleansUpCache() {
     return List.of(
         Arguments.of(WriteConflictException.class),
-        Arguments.of(DynamoDbException.class)
+        Arguments.of(IllegalStateException.class)
     );
   }
 
@@ -469,7 +443,7 @@ public class ProfilesManagerTest {
     profilesManager.setAvatarForIdentity(identity, url1);
 
     verify(profileAvatars).setAvatarUrl(identity, url1);
-    verifyNoInteractions(s3Client);
+    verifyNoInteractions(avatarStorage);
 
     when(profileAvatars.setAvatarUrl(any(byte[].class), anyString()))
         .thenReturn(Optional.of(url1));
@@ -478,7 +452,7 @@ public class ProfilesManagerTest {
     profilesManager.setAvatarForIdentity(identity, url2);
 
     verify(profileAvatars).setAvatarUrl(identity, url2);
-    verify(s3Client).deleteObject(argThat((DeleteObjectRequest r) -> url1.equals(r.key())));
+    verify(avatarStorage).delete(url1);
   }
 
   @Test
@@ -488,11 +462,7 @@ public class ProfilesManagerTest {
 
     assertEquals(Optional.of(avatarPath), profilesManager.extendAvatarTtlForIdentity(new byte[1]));
 
-    final ArgumentCaptor<CopyObjectRequest> copyObjectRequestArgumentCaptor = ArgumentCaptor.forClass(CopyObjectRequest.class);
-    verify(s3Client).copyObject(copyObjectRequestArgumentCaptor.capture());
-
-    assertEquals(avatarPath, copyObjectRequestArgumentCaptor.getValue().sourceKey());
-    assertEquals(avatarPath, copyObjectRequestArgumentCaptor.getValue().destinationKey());
+    verify(avatarStorage).refresh(avatarPath);
   }
 
   @Test
@@ -501,35 +471,35 @@ public class ProfilesManagerTest {
 
     assertTrue(profilesManager.extendAvatarTtlForIdentity(new byte[1]).isEmpty());
 
-    verifyNoInteractions(s3Client);
+    verifyNoInteractions(avatarStorage);
   }
 
   @Test
-  void extendAvatarTtlForIdentityS3NoSuchKey() {
+  void extendAvatarTtlForIdentityMissingObject() {
     final String avatarPath = "somePath";
     when(profileAvatars.updateAvatarTtl(any(byte[].class))).thenReturn(Optional.of(avatarPath));
 
-    when(s3Client.copyObject(any(CopyObjectRequest.class)))
-        .thenReturn(CompletableFuture.failedFuture(NoSuchKeyException.builder().build()));
+    when(avatarStorage.refresh(anyString()))
+        .thenReturn(CompletableFuture.completedFuture(false));
 
     assertTrue(profilesManager.extendAvatarTtlForIdentity(new byte[1]).isEmpty());
 
-    verify(s3Client).copyObject(any(CopyObjectRequest.class));
+    verify(avatarStorage).refresh(avatarPath);
     verify(profileAvatars).deleteAvatarUrl(any(byte[].class));
   }
 
   @Test
-  void extendAvatarTtlForIdentityS3Retry() {
+  void extendAvatarTtlForIdentityStorageRetry() {
     final String avatarPath = "somePath";
     when(profileAvatars.updateAvatarTtl(any(byte[].class))).thenReturn(Optional.of(avatarPath));
 
-    when(s3Client.copyObject(any(CopyObjectRequest.class)))
-        .thenReturn(CompletableFuture.failedFuture(S3Exception.builder().build()))
-        .thenReturn(CompletableFuture.completedFuture(mock(CopyObjectResponse.class)));
+    when(avatarStorage.refresh(anyString()))
+        .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("synthetic storage failure")))
+        .thenReturn(CompletableFuture.completedFuture(true));
 
     assertEquals(Optional.of(avatarPath), profilesManager.extendAvatarTtlForIdentity(new byte[1]));
 
-    verify(s3Client, times(2)).copyObject(any(CopyObjectRequest.class));
+    verify(avatarStorage, times(2)).refresh(avatarPath);
 
     verify(profileAvatars, never()).deleteAvatarUrl(any(byte[].class));
   }
@@ -541,10 +511,7 @@ public class ProfilesManagerTest {
 
     profilesManager.deleteAvatarForIdentity(new byte[1]);
 
-    final ArgumentCaptor<DeleteObjectRequest> deleteObjectRequestArgumentCaptor = ArgumentCaptor.forClass(
-        DeleteObjectRequest.class);
-    verify(s3Client).deleteObject(deleteObjectRequestArgumentCaptor.capture());
-    assertEquals(avatarPath, deleteObjectRequestArgumentCaptor.getValue().key());
+    verify(avatarStorage).delete(avatarPath);
   }
 
   @Test
@@ -553,7 +520,7 @@ public class ProfilesManagerTest {
 
     profilesManager.deleteAvatarForIdentity(new byte[1]);
 
-    verifyNoInteractions(s3Client);
+    verifyNoInteractions(avatarStorage);
   }
 
   @Test
@@ -568,13 +535,13 @@ public class ProfilesManagerTest {
     when(profile.commitment()).thenReturn(commitment);
     when(profile.avatar()).thenReturn(avatar);
 
-    when(profilesV1.setAvatar(any(UUID.class), anyString(), anyString(), any(byte[].class)))
+    when(profiles.setV1Avatar(any(UUID.class), anyString(), anyString(), any(byte[].class)))
         .thenReturn(profile);
 
     profilesManager.setV1Avatar(uuid, version, avatar, commitment);
 
     verify(commands).del(aryEq(ProfilesManager.getCacheKeyV1(uuid)));
-    verify(profilesV1).setAvatar(uuid, version, avatar, commitment);
+    verify(profiles).setV1Avatar(uuid, version, avatar, commitment);
     verify(setLuaScript).executeBinary(
         argThat(keys ->
             Arrays.equals(keys.get(0), ProfilesManager.getCacheKeyV1(uuid))),
@@ -591,8 +558,8 @@ public class ProfilesManagerTest {
 
     @BeforeEach
     void setUp() throws Exception {
-      profilesManager = new ProfilesManager(profilesV1, profilesV2, profileAvatars, REDIS_CLUSTER_EXTENSION.getRedisCluster(), mock(ScheduledExecutorService.class),
-          s3Client, BUCKET);
+      profilesManager = new ProfilesManager(profiles, profileAvatars, REDIS_CLUSTER_EXTENSION.getRedisCluster(), mock(ScheduledExecutorService.class),
+          avatarStorage);
     }
 
     @ParameterizedTest
