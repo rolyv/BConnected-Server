@@ -58,6 +58,30 @@ public final class TelnyxRegistrationService implements RegistrationService {
   public RegistrationServiceSession createRegistrationSession(final Phonenumber.PhoneNumber phoneNumber,
       final String sourceHost, final boolean accountExistsWithPhoneNumber, @Nullable final String clientMcc,
       @Nullable final String clientMnc, final Duration timeout) throws RateLimitExceededException {
+    try {
+      return transaction(connection -> createSession(connection, phoneNumber, sourceHost, timeout, () -> {}));
+    } catch (Rejected e) {
+      throw new RateLimitExceededException(e.retryAfter);
+    }
+  }
+
+  /** Native SQL only: the caller owns commit/rollback of the explicit transaction. */
+  public RegistrationServiceSession createRegistrationSessionInTransaction(final Connection connection,
+      final Phonenumber.PhoneNumber phoneNumber, final String sourceHost, final Duration timeout,
+      final Runnable admissionGuard) throws SQLException, RateLimitExceededException {
+    if (connection.getAutoCommit()) {
+      throw new IllegalArgumentException("Explicit registration transaction required");
+    }
+    try {
+      return createSession(connection, phoneNumber, sourceHost, timeout, Objects.requireNonNull(admissionGuard));
+    } catch (Rejected e) {
+      throw new RateLimitExceededException(e.retryAfter);
+    }
+  }
+
+  private RegistrationServiceSession createSession(final Connection connection,
+      final Phonenumber.PhoneNumber phoneNumber, final String sourceHost, final Duration timeout,
+      final Runnable admissionGuard) throws SQLException {
     validateTimeout(timeout);
     if (sourceHost == null || sourceHost.isBlank() || !PhoneNumberUtil.getInstance().isPossibleNumber(phoneNumber)) {
       throw new IllegalArgumentException("A valid phone number and trusted source address are required");
@@ -65,24 +89,21 @@ public final class TelnyxRegistrationService implements RegistrationService {
     final String number = PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164);
     final byte[] id = new byte[SESSION_ID_LENGTH];
     RANDOM.nextBytes(id);
-    try {
-      return transaction(connection -> {
-        final long now = clock.millis();
-        quota(connection, "create:number", number, policy.maxSessionsPerNumber(), now, null);
-        quota(connection, "create:source", sourceHost, policy.maxSessionsPerSource(), now, null);
-        try (var statement = connection.prepareStatement("""
-            INSERT INTO signal.registration_sessions (id, number, expires_ms) VALUES (?, ?, ?)
-            """)) {
-          statement.setBytes(1, id);
-          statement.setString(2, number);
-          statement.setLong(3, Math.addExact(now, policy.sessionLifetime().toMillis()));
-          statement.executeUpdate();
-        }
-        return snapshot(load(connection, id, false).orElseThrow(), now);
-      });
-    } catch (Rejected e) {
-      throw new RateLimitExceededException(e.retryAfter);
+    admissionGuard.run();
+    final long now = clock.millis();
+    quota(connection, "create:number", number, policy.maxSessionsPerNumber(), now, null);
+    quota(connection, "create:source", sourceHost, policy.maxSessionsPerSource(), now, null);
+    admissionGuard.run(); // Quota rows may have blocked while approval became stale.
+    try (var statement = connection.prepareStatement("""
+        INSERT INTO signal.registration_sessions (id, number, expires_ms) VALUES (?, ?, ?)
+        """)) {
+      statement.setBytes(1, id);
+      statement.setString(2, number);
+      statement.setLong(3, Math.addExact(clock.millis(), policy.sessionLifetime().toMillis()));
+      statement.executeUpdate();
     }
+    admissionGuard.run();
+    return snapshot(load(connection, id, false).orElseThrow(), clock.millis());
   }
 
   @Override
@@ -101,6 +122,14 @@ public final class TelnyxRegistrationService implements RegistrationService {
       final ClientType clientType, @Nullable final String acceptLanguage, @Nullable final String senderOverride,
       final Duration timeout) throws VerificationSessionRateLimitExceededException, RegistrationServiceException,
       RegistrationServiceSenderException {
+    return sendVerificationCode(sessionId, transport, clientType, acceptLanguage, senderOverride, timeout, () -> {});
+  }
+
+  public RegistrationServiceSession sendVerificationCode(final byte[] sessionId, final MessageTransport transport,
+      final ClientType clientType, @Nullable final String acceptLanguage, @Nullable final String senderOverride,
+      final Duration timeout, final Runnable admissionGuard) throws VerificationSessionRateLimitExceededException,
+      RegistrationServiceException, RegistrationServiceSenderException {
+    Objects.requireNonNull(admissionGuard);
     validateTimeout(timeout);
     if (transport != MessageTransport.SMS) {
       throw new TransportNotAllowedException(getSession(sessionId, timeout).orElse(null));
@@ -117,6 +146,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
       throw new AssertionError();
     }
 
+    admissionGuard.run(); // Reservation has committed: do not refund quota on stale approval.
     try {
       final TelnyxVerifyClient.Verification sent = provider.sendSms(reservation.number, timeout);
       if (!reservation.number.equals(sent.phoneNumber()) || sent.timeoutSeconds() < 1) {
@@ -143,6 +173,13 @@ public final class TelnyxRegistrationService implements RegistrationService {
   @Override
   public RegistrationServiceSession checkVerificationCode(final byte[] sessionId, final String verificationCode,
       final Duration timeout) throws VerificationSessionRateLimitExceededException, RegistrationServiceException {
+    return checkVerificationCode(sessionId, verificationCode, timeout, () -> {});
+  }
+
+  public RegistrationServiceSession checkVerificationCode(final byte[] sessionId, final String verificationCode,
+      final Duration timeout, final Runnable admissionGuard)
+      throws VerificationSessionRateLimitExceededException, RegistrationServiceException {
+    Objects.requireNonNull(admissionGuard);
     validateTimeout(timeout);
     if (verificationCode == null || !verificationCode.matches("[0-9]{4,10}")) {
       throw new IllegalArgumentException("Invalid verification code format");
@@ -154,6 +191,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
       throwRejected(e);
       throw new AssertionError();
     }
+    admissionGuard.run(); // Reservation has committed: stale approval never reaches the provider.
     try {
       final boolean accepted = provider.verify(reservation.providerId, reservation.number, verificationCode, timeout);
       return complete(reservation, null, 0, accepted);

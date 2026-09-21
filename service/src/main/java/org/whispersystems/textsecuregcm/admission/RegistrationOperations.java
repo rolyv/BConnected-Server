@@ -88,7 +88,8 @@ public final class RegistrationOperations {
       return row.expires;
     }
 
-    // Future account construction must use this original verifier, rather than generating another
+    // Future account construction must use this original verifier, rather than generating
+    // another
     // salt.
     void applyAuthenticationTo(Device device) {
       row.authentication.applyTo(device);
@@ -174,9 +175,9 @@ public final class RegistrationOperations {
       String userAgent) {
     requireUuid(memberId);
     byte[] attempt = hash("bconnected.registration-attempt.v1", decodeNonce(attemptNonce));
-    decodeNonce(
-        bindingChallenge); // Validate canonical encoding; community hashes the encoded challenge
-                           // text.
+    decodeNonce(bindingChallenge); // Validate canonical encoding; community hashes the encoded
+    // challenge
+    // text.
     byte[] challenge = hash(null, bindingChallenge.getBytes(StandardCharsets.US_ASCII));
     try (var canonical =
         CanonicalRegistrationRequest.beforeVerification(
@@ -185,19 +186,21 @@ public final class RegistrationOperations {
       try {
         return transaction(
             connection -> {
-              // A known operation can authenticate an exact retry after its own account commit.
-              // A new operation for any pre-existing account is a recovery flow and is closed here.
+              // A known operation can authenticate an exact retry after its own
+              // account commit.
+              // A new operation for any pre-existing account is a recovery flow and
+              // is closed here.
               try (var existing =
                   connection.prepareStatement(
-                      "SELECT 1 FROM signal.registration_operations WHERE member_id=? AND"
-                          + " registration_attempt_hash=?")) {
+                      "SELECT 1 FROM signal.registration_operations WHERE"
+                          + " member_id=? AND registration_attempt_hash=?")) {
                 existing.setObject(1, memberId);
                 existing.setBytes(2, attempt);
                 try (var rows = existing.executeQuery()) {
                   if (!rows.next()) {
                     try (var account =
                         connection.prepareStatement(
-                            "SELECT 1 FROM signal.accounts WHERE number = ANY(?)")) {
+                            "SELECT 1 FROM signal.accounts WHERE number" + " = ANY(?)")) {
                       var alternatives =
                           connection.createArrayOf(
                               "text",
@@ -214,7 +217,8 @@ public final class RegistrationOperations {
                   }
                 }
               }
-              // New salts are never substituted on retry. Only the inserted winner's verifier is
+              // New salts are never substituted on retry. Only the inserted winner's
+              // verifier is
               // authoritative.
               var proposedAuthentication = RegistrationAuthentication.create(password);
               byte[] proposedCommitment = requestCommitment(encoded, proposedAuthentication);
@@ -243,8 +247,9 @@ public final class RegistrationOperations {
               Stored stored;
               try (var statement =
                   connection.prepareStatement(
-                      "SELECT * FROM signal.registration_operations WHERE member_id=? AND"
-                          + " registration_attempt_hash=? FOR UPDATE")) {
+                      "SELECT * FROM signal.registration_operations WHERE"
+                          + " member_id=? AND registration_attempt_hash=? FOR"
+                          + " UPDATE")) {
                 statement.setObject(1, memberId);
                 statement.setBytes(2, attempt);
                 try (var rows = statement.executeQuery()) {
@@ -267,11 +272,168 @@ public final class RegistrationOperations {
     }
   }
 
+  @FunctionalInterface
+  interface NativeSessionCreator {
+    org.whispersystems.textsecuregcm.entities.RegistrationServiceSession create(
+        Connection connection)
+        throws SQLException,
+            org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
+  }
+
+  /** One SQL transaction for claim binding, native quota/session creation and association. */
+  byte[] getOrCreateClaimedSession(
+      AuthenticatedOperation operation,
+      AdmissionServiceClient.FreshClaim claim,
+      NativeSessionCreator creator)
+      throws org.whispersystems.textsecuregcm.controllers.RateLimitExceededException {
+    try {
+      return transaction(
+          connection -> {
+            Stored stored = lock(connection, operation);
+            requireClaim(connection, stored, operation, claim, true);
+            if (stored.session != null) return requireSession(connection, stored, false);
+            final org.whispersystems.textsecuregcm.entities.RegistrationServiceSession created;
+            try {
+              created = creator.create(connection);
+            } catch (org.whispersystems.textsecuregcm.controllers.RateLimitExceededException e) {
+              throw new CreationLimited(e);
+            }
+            claim.requireOperation(operation);
+            requireActive(stored);
+            if (created == null
+                || created.id() == null
+                || created.id().length != 32
+                || created.verified()
+                || !stored.number.equals(created.number())) throw new OperationRejectedException();
+            byte[] id = created.id().clone();
+            long expires;
+            try (var query =
+                connection.prepareStatement(
+                    "SELECT number,expires_ms,verified FROM"
+                        + " signal.registration_sessions WHERE id=? FOR"
+                        + " SHARE")) {
+              query.setBytes(1, id);
+              try (var row = query.executeQuery()) {
+                if (!row.next()
+                    || row.getBoolean("verified")
+                    || !stored.number.equals(row.getString("number"))
+                    || row.getLong("expires_ms") <= clock.millis())
+                  throw new OperationRejectedException();
+                expires = row.getLong("expires_ms");
+              }
+            }
+            claim.requireOperation(operation);
+            requireActive(stored);
+            try (var update =
+                connection.prepareStatement(
+                    """
+                    UPDATE signal.registration_operations SET verification_session_id=?,verification_session_hash=?,verification_session_expires_ms=?
+                    WHERE operation_id=? AND verification_session_id IS NULL
+                    """)) {
+              update.setBytes(1, id);
+              update.setBytes(2, hash("bconnected.verification-session.v1", id));
+              update.setLong(3, expires);
+              update.setObject(4, stored.id);
+              if (update.executeUpdate() != 1) throw new OperationRejectedException();
+            }
+            claim.requireOperation(operation);
+            requireActive(stored);
+            return id;
+          });
+    } catch (CreationLimited e) {
+      throw e.limited;
+    }
+  }
+
+  byte[] requireClaimedSession(
+      AuthenticatedOperation operation, AdmissionServiceClient.FreshClaim claim) {
+    return transaction(
+        connection -> {
+          Stored stored = lock(connection, operation);
+          requireClaim(connection, stored, operation, claim, false);
+          byte[] id = requireSession(connection, stored, false);
+          claim.requireOperation(operation);
+          requireActive(stored);
+          return id;
+        });
+  }
+
+  private void requireClaim(
+      Connection connection,
+      Stored stored,
+      AuthenticatedOperation operation,
+      AdmissionServiceClient.FreshClaim claim,
+      boolean allowNew)
+      throws SQLException {
+    claim.requireOperation(operation);
+    requireActive(stored);
+    if (claim.expiresAtMillis() > stored.expires || claim.expiresAtMillis() <= clock.millis())
+      throw new OperationRejectedException();
+    try (var query =
+        connection.prepareStatement(
+            "SELECT claim_approval_epoch,claim_expires_ms FROM"
+                + " signal.registration_operations WHERE operation_id=?")) {
+      query.setObject(1, stored.id);
+      try (var row = query.executeQuery()) {
+        if (!row.next()) throw new OperationRejectedException();
+        Long epoch = row.getObject(1, Long.class), expires = row.getObject(2, Long.class);
+        if (epoch == null) {
+          if (!allowNew || stored.session != null) throw new OperationRejectedException();
+          try (var update =
+              connection.prepareStatement(
+                  "UPDATE signal.registration_operations SET"
+                      + " claim_approval_epoch=?,claim_expires_ms=? WHERE"
+                      + " operation_id=?")) {
+            update.setLong(1, claim.approvalEpoch());
+            update.setLong(2, claim.expiresAtMillis());
+            update.setObject(3, stored.id);
+            update.executeUpdate();
+          }
+        } else if (epoch != claim.approvalEpoch()
+            || expires == null
+            || expires != claim.expiresAtMillis()) {
+          throw new OperationRejectedException();
+        }
+      }
+    }
+    claim.requireOperation(operation);
+  }
+
+  private byte[] requireSession(Connection connection, Stored stored, boolean requireVerified)
+      throws SQLException {
+    if (stored.session == null) throw new OperationRejectedException();
+    try (var query =
+        connection.prepareStatement(
+            "SELECT number,expires_ms,verified FROM signal.registration_sessions WHERE"
+                + " id=? FOR SHARE")) {
+      query.setBytes(1, stored.session);
+      try (var row = query.executeQuery()) {
+        if (!row.next()
+            || !stored.number.equals(row.getString("number"))
+            || row.getLong("expires_ms") <= clock.millis()
+            || !Objects.equals(stored.sessionExpires, row.getLong("expires_ms"))
+            || (requireVerified && !row.getBoolean("verified")))
+          throw new OperationRejectedException();
+      }
+    }
+    requireActive(stored);
+    return stored.session.clone();
+  }
+
+  private static final class CreationLimited extends RuntimeException {
+    final org.whispersystems.textsecuregcm.controllers.RateLimitExceededException limited;
+
+    CreationLimited(
+        org.whispersystems.textsecuregcm.controllers.RateLimitExceededException limited) {
+      super("Registration quota exhausted", null, false, false);
+      this.limited = limited;
+    }
+  }
+
   /**
-   * Internal future coordinator boundary only. It must first obtain private approval, create a
-   * fresh session itself and pass that result here. Never wire a client-selected session ID into
-   * this method. No public/session-creation API exists here until the approved-claim coordinator is
-   * implemented.
+   * Legacy package-private storage boundary retained for association tests. The admission
+   * coordinator uses getOrCreateClaimedSession so native creation and claim/session binding are
+   * atomic. Never expose this method through a client-selected session identifier.
    */
   void attachServerCreatedSession(
       AuthenticatedOperation authenticated, byte[] serverCreatedSessionId) {
@@ -282,8 +444,8 @@ public final class RegistrationOperations {
           var stored = lock(connection, authenticated);
           try (var statement =
               connection.prepareStatement(
-                  "SELECT number,expires_ms,verified FROM signal.registration_sessions WHERE id=?"
-                      + " FOR SHARE")) {
+                  "SELECT number,expires_ms,verified FROM"
+                      + " signal.registration_sessions WHERE id=? FOR SHARE")) {
             statement.setBytes(1, session);
             try (var rows = statement.executeQuery()) {
               if (!rows.next()
@@ -298,7 +460,8 @@ public final class RegistrationOperations {
                 requireActive(stored);
                 return null;
               }
-              // A newly associated session must still be unverified; verified sessions cannot be
+              // A newly associated session must still be unverified; verified
+              // sessions cannot be
               // imported.
               if (rows.getBoolean("verified")) throw new OperationRejectedException();
               try (var update =
@@ -339,8 +502,8 @@ public final class RegistrationOperations {
           if (stored.session == null) throw new OperationRejectedException();
           try (var statement =
               connection.prepareStatement(
-                  "SELECT number,expires_ms,verified FROM signal.registration_sessions WHERE id=?"
-                      + " FOR SHARE")) {
+                  "SELECT number,expires_ms,verified FROM"
+                      + " signal.registration_sessions WHERE id=? FOR SHARE")) {
             statement.setBytes(1, stored.session);
             try (var rows = statement.executeQuery()) {
               long now = clock.millis();
@@ -363,7 +526,7 @@ public final class RegistrationOperations {
     Objects.requireNonNull(authenticated);
     try (var statement =
         connection.prepareStatement(
-            "SELECT * FROM signal.registration_operations WHERE operation_id=? FOR UPDATE")) {
+            "SELECT * FROM signal.registration_operations WHERE operation_id=? FOR" + " UPDATE")) {
       statement.setObject(1, authenticated.row.id);
       try (var rows = statement.executeQuery()) {
         if (!rows.next()) throw new OperationRejectedException();

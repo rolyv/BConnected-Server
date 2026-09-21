@@ -13,11 +13,13 @@ import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -191,6 +193,184 @@ public final class AdmissionServiceClient implements AutoCloseable {
     }
   }
 
+  /** Eligibility for one immutable operation, not permission to create or activate an account. */
+  public static final class FreshClaim {
+    private final UUID memberId, operationId;
+    private final long approvalEpoch, expiresAt, startNanos;
+    private final LongSupplier monotonic;
+    private final Clock clock;
+
+    private FreshClaim(
+        UUID memberId,
+        UUID operationId,
+        long approvalEpoch,
+        long expiresAt,
+        long startNanos,
+        LongSupplier monotonic,
+        Clock clock) {
+      this.memberId = memberId;
+      this.operationId = operationId;
+      this.approvalEpoch = approvalEpoch;
+      this.expiresAt = expiresAt;
+      this.startNanos = startNanos;
+      this.monotonic = monotonic;
+      this.clock = clock;
+    }
+
+    public UUID memberId() {
+      return memberId;
+    }
+
+    public UUID operationId() {
+      return operationId;
+    }
+
+    public long approvalEpoch() {
+      return approvalEpoch;
+    }
+
+    public long expiresAtMillis() {
+      return expiresAt;
+    }
+
+    public void requireFresh() {
+      long elapsed = monotonic.getAsLong() - startNanos;
+      if (elapsed < 0 || elapsed >= TimeUnit.SECONDS.toNanos(4) || clock.millis() >= expiresAt)
+        throw failure(Failure.EXPIRED);
+    }
+
+    void requireOperation(RegistrationOperations.AuthenticatedOperation operation) {
+      if (!memberId.equals(operation.memberId()) || !operationId.equals(operation.operationId()))
+        throw failure(Failure.INVALID_RESPONSE);
+      requireFresh();
+    }
+
+    @Override
+    public String toString() {
+      return "FreshClaim[redacted]";
+    }
+  }
+
+  public FreshClaim claim(
+      RegistrationOperations.AuthenticatedOperation operation, String challenge) {
+    Objects.requireNonNull(operation);
+    try {
+      if (AdmissionPermitVerifier.decode(challenge, 32).length != 32
+          || !HexFormat.of()
+              .formatHex(
+                  MessageDigest.getInstance("SHA-256")
+                      .digest(challenge.getBytes(StandardCharsets.US_ASCII)))
+              .equals(operation.challengeHash())) throw failure(Failure.DENIED);
+      var response =
+          exchange(
+              "claims",
+              Map.of(
+                  "memberId",
+                  operation.memberId().toString(),
+                  "signalOperationId",
+                  operation.operationId().toString(),
+                  "bindingChallenge",
+                  challenge,
+                  "registrationAttemptHash",
+                  operation.registrationAttemptHash(),
+                  "deviceKeyCommitment",
+                  operation.deviceKeyCommitment(),
+                  "serverRequestCommitment",
+                  operation.serverRequestCommitment()));
+      JsonNode json = response.json();
+      exact(
+          json,
+          Set.of(
+              "signalOperationId",
+              "memberId",
+              "approvalEpoch",
+              "expiresAt",
+              "status",
+              "registrationAuthorized"));
+      if (!text(json, "signalOperationId").equals(operation.operationId().toString())
+          || !text(json, "memberId").equals(operation.memberId().toString())
+          || !text(json, "status").equals("claimed")
+          || !json.get("registrationAuthorized").isBoolean()
+          || json.get("registrationAuthorized").booleanValue())
+        throw failure(Failure.INVALID_RESPONSE);
+      long expires = integer(json, "expiresAt");
+      if (expires > operation.expiresAtMillis()) throw failure(Failure.INVALID_RESPONSE);
+      var claim =
+          new FreshClaim(
+              operation.memberId(),
+              operation.operationId(),
+              integer(json, "approvalEpoch"),
+              expires,
+              response.startNanos(),
+              monotonic,
+              clock);
+      claim.requireFresh();
+      return claim;
+    } catch (AdmissionServiceException e) {
+      throw e;
+    } catch (Exception ignored) {
+      throw failure(Failure.INVALID_RESPONSE);
+    }
+  }
+
+  public AdmissionPermitVerifier.VerifiedPermit attest(
+      RegistrationOperations.AuthenticatedOperation operation,
+      FreshClaim claim,
+      RegistrationOperations.VerifiedPhone phone,
+      String phoneBinding,
+      AdmissionPermitVerifier verifier) {
+    Objects.requireNonNull(operation);
+    Objects.requireNonNull(claim);
+    Objects.requireNonNull(phone);
+    claim.requireOperation(operation);
+    if (!operation.operationId().equals(phone.operationId())
+        || !operation.requestedNumber().equals(phone.canonicalNumber())
+        || phone.observedAtMillis() < clock.millis() - 30000
+        || phone.observedAtMillis() > clock.millis() + 5000
+        || phone.sessionExpiresAtMillis() <= clock.millis()) throw failure(Failure.DENIED);
+    var expected =
+        new AdmissionPermitVerifier.ExpectedBinding(
+            operation.memberId(),
+            claim.approvalEpoch(),
+            operation.operationId(),
+            operation.registrationAttemptHash(),
+            phone.serverVerificationSessionHash(),
+            operation.deviceKeyCommitment(),
+            phoneBinding,
+            operation.serverRequestCommitment(),
+            phone.canonicalNumber());
+    var response =
+        exchange(
+            "attestations",
+            Map.of(
+                "memberId",
+                operation.memberId().toString(),
+                "signalOperationId",
+                operation.operationId().toString(),
+                "registrationAttemptHash",
+                operation.registrationAttemptHash(),
+                "deviceKeyCommitment",
+                operation.deviceKeyCommitment(),
+                "serverRequestCommitment",
+                operation.serverRequestCommitment(),
+                "serverVerificationSessionHash",
+                phone.serverVerificationSessionHash(),
+                "phoneBinding",
+                phoneBinding,
+                "sessionExpiresAt",
+                phone.sessionExpiresAtMillis(),
+                "observedAt",
+                phone.observedAtMillis()));
+    exact(response.json(), Set.of("assertion", "permitId", "expiresAt"));
+    var permit = verifier.verify(text(response.json(), "assertion"), expected);
+    long expires = integer(response.json(), "expiresAt");
+    if (!text(response.json(), "permitId").equals(permit.permitId())
+        || expires != Math.multiplyExact(permit.expiresAt(), 1000)
+        || expires > claim.expiresAtMillis()
+        || expires > phone.sessionExpiresAtMillis()) throw failure(Failure.INVALID_RESPONSE);
+    return permit;
+  }
+
   public static AdmissionServiceClient applicationDefault(
       AdmissionServiceConfiguration configuration) {
     try {
@@ -247,12 +427,69 @@ public final class AdmissionServiceClient implements AutoCloseable {
 
   private FreshEntitlement request(String path, ReceiptPurpose purpose, Binding binding) {
     Objects.requireNonNull(binding);
-    // Include credential lookup/refresh in the maximum freshness budget, never just HTTP body time.
-    long startNanos = monotonic.getAsLong(), startMillis = clock.millis();
-    long timeoutNanos = configuration.requestTimeout().toNanos();
     byte[] nonceBytes = new byte[32];
     random.nextBytes(nonceBytes);
     String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
+    var response =
+        exchange(
+            path,
+            Map.of(
+                "memberId",
+                binding.memberId.toString(),
+                "approvalEpoch",
+                binding.approvalEpoch,
+                "signalOperationId",
+                binding.signalOperationId.toString(),
+                "jti",
+                binding.permitId,
+                "aci",
+                binding.aci.toString(),
+                "requestNonce",
+                nonce));
+    JsonNode json = response.json();
+    exact(json, FIELDS);
+    if (!text(json, "memberId").equals(binding.memberId.toString())
+        || integer(json, "approvalEpoch") != binding.approvalEpoch
+        || !text(json, "signalOperationId").equals(binding.signalOperationId.toString())
+        || !text(json, "jti").equals(binding.permitId)
+        || !text(json, "aci").equals(binding.aci.toString())
+        || !text(json, "requestNonce").equals(nonce)
+        || !text(json, "status").equals("confirmed")) throw failure(Failure.INVALID_RESPONSE);
+    long confirmed = integer(json, "confirmedAt"),
+        checked = integer(json, "checkedAt"),
+        valid = integer(json, "validUntil"),
+        now = clock.millis();
+    if (confirmed > checked || valid <= checked || valid - checked > 4000 || checked > now + 5000)
+      throw failure(Failure.INVALID_RESPONSE);
+    if (valid <= now || valid <= response.startMillis()) throw failure(Failure.EXPIRED);
+    long budget =
+        TimeUnit.MILLISECONDS.toNanos(
+            Math.min(4000, Math.min(valid - checked, valid - response.startMillis())));
+    var receipt =
+        new FreshEntitlement(
+            binding,
+            purpose,
+            confirmed,
+            checked,
+            valid,
+            response.startNanos(),
+            budget,
+            monotonic,
+            clock);
+    receipt.requireFresh();
+    return receipt;
+  }
+
+  private record Exchange(JsonNode json, long startNanos, long startMillis) {
+    @Override
+    public String toString() {
+      return "AdmissionExchange[redacted]";
+    }
+  }
+
+  private Exchange exchange(String path, Map<String, Object> requestBody) {
+    long startNanos = monotonic.getAsLong(), startMillis = clock.millis();
+    long timeoutNanos = configuration.requestTimeout().toNanos();
     Future<String> tokenFuture = null;
     CompletableFuture<HttpResponse<byte[]>> responseFuture = null;
     try {
@@ -271,21 +508,7 @@ public final class AdmissionServiceClient implements AutoCloseable {
           || token.length() > 4096
           || !token.matches("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"))
         throw failure(Failure.CREDENTIALS);
-      byte[] body =
-          JSON.writeValueAsBytes(
-              Map.of(
-                  "memberId",
-                  binding.memberId.toString(),
-                  "approvalEpoch",
-                  binding.approvalEpoch,
-                  "signalOperationId",
-                  binding.signalOperationId.toString(),
-                  "jti",
-                  binding.permitId,
-                  "aci",
-                  binding.aci.toString(),
-                  "requestNonce",
-                  nonce));
+      byte[] body = JSON.writeValueAsBytes(requestBody);
       var uri = configuration.origin().resolve("/internal/v1/admission/" + path);
       var request =
           HttpRequest.newBuilder(uri)
@@ -323,29 +546,7 @@ public final class AdmissionServiceClient implements AutoCloseable {
               .decode(ByteBuffer.wrap(response.body()))
               .toString();
       JsonNode json = JSON.readTree(text);
-      exact(json);
-      if (!text(json, "memberId").equals(binding.memberId.toString())
-          || integer(json, "approvalEpoch") != binding.approvalEpoch
-          || !text(json, "signalOperationId").equals(binding.signalOperationId.toString())
-          || !text(json, "jti").equals(binding.permitId)
-          || !text(json, "aci").equals(binding.aci.toString())
-          || !text(json, "requestNonce").equals(nonce)
-          || !text(json, "status").equals("confirmed")) throw failure(Failure.INVALID_RESPONSE);
-      long confirmed = integer(json, "confirmedAt"),
-          checked = integer(json, "checkedAt"),
-          valid = integer(json, "validUntil"),
-          now = clock.millis();
-      if (confirmed > checked || valid <= checked || valid - checked > 4000 || checked > now + 5000)
-        throw failure(Failure.INVALID_RESPONSE);
-      if (valid <= now || valid <= startMillis) throw failure(Failure.EXPIRED);
-      long budget =
-          TimeUnit.MILLISECONDS.toNanos(
-              Math.min(4000, Math.min(valid - checked, valid - startMillis)));
-      var receipt =
-          new FreshEntitlement(
-              binding, purpose, confirmed, checked, valid, startNanos, budget, monotonic, clock);
-      receipt.requireFresh();
-      return receipt;
+      return new Exchange(json, startNanos, startMillis);
     } catch (AdmissionServiceException failure) {
       throw failure;
     } catch (InterruptedException ignored) {
@@ -369,11 +570,11 @@ public final class AdmissionServiceClient implements AutoCloseable {
     return budget - elapsed;
   }
 
-  private static void exact(JsonNode value) {
+  private static void exact(JsonNode value, Set<String> expected) {
     if (value == null || !value.isObject()) throw failure(Failure.INVALID_RESPONSE);
     var fields = new HashSet<String>();
     value.fieldNames().forEachRemaining(fields::add);
-    if (!fields.equals(FIELDS)) throw failure(Failure.INVALID_RESPONSE);
+    if (!fields.equals(expected)) throw failure(Failure.INVALID_RESPONSE);
   }
 
   private static String text(JsonNode object, String field) {
