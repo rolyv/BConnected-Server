@@ -166,6 +166,12 @@ public final class AdmissionServiceClient implements AutoCloseable {
       requireFresh();
     }
 
+    /** Confirmation can activate a pending account, but cannot grant current membership. */
+    public void requireFreshCurrentEntitlement() {
+      if (purpose != ReceiptPurpose.CURRENT_ENTITLEMENT) throw failure(Failure.DENIED);
+      requireFresh();
+    }
+
     public long confirmedAtMillis() {
       return confirmedAt;
     }
