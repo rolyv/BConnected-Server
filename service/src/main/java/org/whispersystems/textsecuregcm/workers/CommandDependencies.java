@@ -223,7 +223,7 @@ public record CommandDependencies(
 
     DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager =
         new DynamicConfigurationManager<>(
-            configuration.getDynamicConfig().build(awsCredentialsProvider, dynamicConfigurationExecutor), DynamicConfiguration.class);
+            configuration.getDynamicConfig().build(dynamicConfigurationExecutor), DynamicConfiguration.class);
     dynamicConfigurationManager.start();
     ExperimentEnrollmentManager experimentEnrollmentManager =
         new ExperimentEnrollmentManager(dynamicConfigurationManager);

@@ -137,8 +137,8 @@ class GcpRuntimeConfigurationTest {
   void pilotRejectsMissingNativeRetentionAndAwsMonitorSelection() throws Exception {
     final WhisperServerConfiguration noRetention = read(PILOT.replace("  messageRetention: PT168H\n", ""));
     assertThrows(IllegalArgumentException.class, noRetention::validateRuntimeConfiguration);
-    final WhisperServerConfiguration s3Monitor = read(PILOT.replace("type: file", "type: default"));
-    assertThrows(IllegalArgumentException.class, s3Monitor::validateRuntimeConfiguration);
+    assertThrows(com.fasterxml.jackson.databind.exc.InvalidTypeIdException.class,
+        () -> read(PILOT.replace("type: file", "type: default")));
   }
 
   @Test

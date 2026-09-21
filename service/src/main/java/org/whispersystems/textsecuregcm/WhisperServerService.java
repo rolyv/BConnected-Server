@@ -250,7 +250,7 @@ import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 import org.whispersystems.textsecuregcm.registration.RegistrationService;
 import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
-import org.whispersystems.textsecuregcm.s3.S3MonitoringSupplier;
+import org.whispersystems.textsecuregcm.monitoring.MonitoringSupplier;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
 import org.whispersystems.textsecuregcm.spam.ChallengeConstraintChecker;
@@ -465,7 +465,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager =
         new DynamicConfigurationManager<>(
-            config.getDynamicConfig().build(awsCredentialsProvider, dynamicConfigurationExecutor), DynamicConfiguration.class);
+            config.getDynamicConfig().build(dynamicConfigurationExecutor), DynamicConfiguration.class);
     dynamicConfigurationManager.start();
 
     MetricsUtil.configureRegistries(config, environment, dynamicConfigurationManager);
@@ -768,9 +768,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     ExternalServiceCredentialsGenerator svrbCredentialsGenerator =
         gcpPilot ? null : SecureValueRecoveryBCredentialsGeneratorFactory.svrbCredentialsGenerator(config.getSvrbConfiguration());
 
-    final S3MonitoringSupplier<AsnInfoProvider> asnInfoProviderSupplier = new S3MonitoringSupplier<>(
+    final MonitoringSupplier<AsnInfoProvider> asnInfoProviderSupplier = new MonitoringSupplier<>(
         recurringJobExecutor,
-        awsCredentialsProvider,
         config.getAsnTableConfiguration(),
         AsnInfoProviderImpl::fromTsvGz,
         AsnInfoProvider.EMPTY,

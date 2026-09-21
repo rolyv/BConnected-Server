@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-package org.whispersystems.textsecuregcm.s3;
+package org.whispersystems.textsecuregcm.monitoring;
 
 import io.dropwizard.lifecycle.Managed;
 import java.util.function.Supplier;

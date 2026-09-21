@@ -533,11 +533,9 @@ grpc:
   h2c: true
 
 asnTable:
-  s3Region: a-region
-  s3Bucket: a-bucket
-  objectKey: asn.tsv
-  maxSize: 100000
-  refreshInterval: PT10S
+  type: static
+  object: ""
+  gzip: true
 
 callQualitySurvey:
   pubSubPublisher:

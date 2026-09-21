@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-package org.whispersystems.textsecuregcm.s3;
+package org.whispersystems.textsecuregcm.monitoring;
 
 import static java.util.Objects.requireNonNull;
 import static org.whispersystems.textsecuregcm.metrics.MetricsUtil.name;
@@ -18,11 +18,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.whispersystems.textsecuregcm.configuration.S3ObjectMonitorFactory;
-import org.whispersystems.textsecuregcm.s3.ManagedSupplier;
-import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import org.whispersystems.textsecuregcm.configuration.ObjectMonitorFactory;
 
-public class S3MonitoringSupplier<T> implements ManagedSupplier<T> {
+public class MonitoringSupplier<T> implements ManagedSupplier<T> {
 
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
@@ -37,18 +35,17 @@ public class S3MonitoringSupplier<T> implements ManagedSupplier<T> {
   private final Function<InputStream, T> parser;
 
 
-  public S3MonitoringSupplier(
+  public MonitoringSupplier(
       final ScheduledExecutorService executor,
-      final AwsCredentialsProvider awsCredentialsProvider,
-      final S3ObjectMonitorFactory cfg,
+      final ObjectMonitorFactory cfg,
       final Function<InputStream, T> parser,
       final T initial,
       final String name) {
-    this.refreshTimer = Metrics.timer(name(S3MonitoringSupplier.class, name, "refresh"));
-    this.refreshErrors = Metrics.counter(name(S3MonitoringSupplier.class, name, "refreshErrors"));
+    this.refreshTimer = Metrics.timer(name(MonitoringSupplier.class, name, "refresh"));
+    this.refreshErrors = Metrics.counter(name(MonitoringSupplier.class, name, "refreshErrors"));
     this.holder = new AtomicReference<>(initial);
     this.parser = requireNonNull(parser);
-    this.monitor = cfg.build(awsCredentialsProvider, executor);
+    this.monitor = cfg.build(executor);
   }
 
   @Override

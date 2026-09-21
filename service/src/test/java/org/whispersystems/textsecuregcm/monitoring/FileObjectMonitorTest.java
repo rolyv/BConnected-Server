@@ -1,5 +1,5 @@
 // Copyright 2026 BConnected contributors. SPDX-License-Identifier: AGPL-3.0-only
-package org.whispersystems.textsecuregcm.s3;
+package org.whispersystems.textsecuregcm.monitoring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -10,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.timeout;
 
 import jakarta.validation.constraints.Min;
 import java.io.IOException;
@@ -22,8 +23,10 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,11 +35,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.whispersystems.textsecuregcm.asn.AsnInfoProvider;
 import org.whispersystems.textsecuregcm.asn.AsnInfoProviderImpl;
 import org.whispersystems.textsecuregcm.configuration.MonitoredFileObjectConfiguration;
-import org.whispersystems.textsecuregcm.configuration.MonitoredS3ObjectConfiguration;
-import org.whispersystems.textsecuregcm.configuration.S3ObjectMonitorFactory;
+import org.whispersystems.textsecuregcm.configuration.ObjectMonitorFactory;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
-import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 
 class FileObjectMonitorTest {
   @TempDir Path directory;
@@ -163,8 +164,7 @@ class FileObjectMonitorTest {
     try (var output = new GZIPOutputStream(Files.newOutputStream(file))) {
       output.write("1.1.1.0\t1.1.1.255\t13335\tUS\tSynthetic test\n".getBytes(StandardCharsets.UTF_8));
     }
-    AwsCredentialsProvider unusedCredentials = mock(AwsCredentialsProvider.class);
-    var supplier = new S3MonitoringSupplier<AsnInfoProvider>(scheduler, unusedCredentials,
+    var supplier = new MonitoringSupplier<AsnInfoProvider>(scheduler,
         new MonitoredFileObjectConfiguration(file.toString(), 1024L, Duration.ofSeconds(1)),
         AsnInfoProviderImpl::fromTsvGz, null, "file-monitor-test");
     supplier.start();
@@ -175,30 +175,46 @@ class FileObjectMonitorTest {
     refresh.get().run();
     assertThat(supplier.get()).isSameAs(valid);
     supplier.stop();
-    verifyNoInteractions(unusedCredentials);
   }
 
   @Test
-  void fileFactoryIsDiscoveredAndLegacyDefaultRemainsS3() throws Exception {
-    S3ObjectMonitorFactory file = SystemMapper.yamlMapper().readValue("""
+  void fileFactoryIsDiscoveredAndObsoleteS3ConfigurationIsRejected() throws Exception {
+    ObjectMonitorFactory file = SystemMapper.yamlMapper().readValue("""
         type: file
         path: /mounted/config.yml
         maxSize: 1024
         refreshInterval: PT1S
-        """, S3ObjectMonitorFactory.class);
+        """, ObjectMonitorFactory.class);
     assertThat(file).isInstanceOf(MonitoredFileObjectConfiguration.class);
-    assertThat(file.build(null, scheduler)).isInstanceOf(FileObjectMonitor.class);
-    S3ObjectMonitorFactory legacy = SystemMapper.yamlMapper().readValue("""
-        s3Region: us-east-1
-        s3Bucket: legacy-test
-        objectKey: config.yml
-        """, S3ObjectMonitorFactory.class);
-    assertThat(legacy).isInstanceOf(MonitoredS3ObjectConfiguration.class);
+    assertThat(file.build(scheduler)).isInstanceOf(FileObjectMonitor.class);
+    for (String legacy : new String[] {
+        "s3Region: us-east-1\ns3Bucket: obsolete\nobjectKey: config.yml\n",
+        "type: default\ns3Region: us-east-1\ns3Bucket: obsolete\nobjectKey: config.yml\n",
+        "type: s3\ns3Region: us-east-1\ns3Bucket: obsolete\nobjectKey: config.yml\n",
+        "path: /mounted/config.yml\n"}) {
+      assertThrows(IOException.class, () -> SystemMapper.yamlMapper().readValue(legacy, ObjectMonitorFactory.class));
+    }
     assertThrows(IllegalArgumentException.class,
         () -> new MonitoredFileObjectConfiguration("", null, null));
     assertThrows(IllegalArgumentException.class,
         () -> new MonitoredFileObjectConfiguration("/config", 0L, Duration.ofSeconds(1)));
     assertThrows(IllegalArgumentException.class,
         () -> new MonitoredFileObjectConfiguration("/config", 1024L, Duration.ZERO));
+  }
+
+  @Test
+  void invalidInitialDynamicFileDoesNotBecomeReadyUntilAValidRefresh() throws Exception {
+    Path file = Files.writeString(directory.resolve("initial-invalid.yml"), "value: 0");
+    var manager = new DynamicConfigurationManager<>(monitor(file, 1024), TestConfiguration.class);
+    CompletableFuture<Void> starting = CompletableFuture.runAsync(manager::start);
+    try {
+      verify(scheduler, timeout(1000)).scheduleWithFixedDelay(any(Runnable.class), anyLong(), anyLong(), any());
+      assertThat(starting).isNotDone();
+    } finally {
+      Files.writeString(file, "value: 1");
+      if (refresh.get() != null) refresh.get().run();
+    }
+    starting.get(1, TimeUnit.SECONDS);
+    assertThat(manager.getConfiguration().value()).isEqualTo(1);
   }
 }

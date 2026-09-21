@@ -1,5 +1,5 @@
 // Copyright 2026 BConnected contributors. SPDX-License-Identifier: AGPL-3.0-only
-package org.whispersystems.textsecuregcm.s3;
+package org.whispersystems.textsecuregcm.monitoring;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;

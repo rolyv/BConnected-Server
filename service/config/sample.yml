@@ -329,9 +329,8 @@ groupsZkConfig:
   serverSecret: secret://zkConfig-libsignal-0.42.serverSecret
 
 dynamicConfig:
-  s3Region: a-region
-  s3Bucket: a-bucket
-  objectKey: dynamic-config.yaml
+  type: file
+  path: /config/dynamic-config.yaml
   maxSize: 100000
   refreshInterval: PT10S
 
@@ -526,9 +525,8 @@ grpc:
   websocketPort: 8080
 
 asnTable:
-  s3Region: a-region
-  s3Bucket: a-bucket
-  objectKey: asn.tsv
+  type: file
+  path: /config/asn.tsv.gz
   maxSize: 100000
   refreshInterval: PT10S
 

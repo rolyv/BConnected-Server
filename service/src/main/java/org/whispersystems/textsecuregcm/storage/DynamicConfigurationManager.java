@@ -20,7 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.whispersystems.textsecuregcm.s3.ObjectMonitor;
+import org.whispersystems.textsecuregcm.monitoring.ObjectMonitor;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
 
 public class DynamicConfigurationManager<T> {

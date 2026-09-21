@@ -68,7 +68,7 @@ import org.whispersystems.textsecuregcm.configuration.RemoteConfigConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ReportMessageConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RetryConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RuntimeMode;
-import org.whispersystems.textsecuregcm.configuration.S3ObjectMonitorFactory;
+import org.whispersystems.textsecuregcm.configuration.ObjectMonitorFactory;
 import org.whispersystems.textsecuregcm.configuration.SecureStorageServiceConfiguration;
 import org.whispersystems.textsecuregcm.configuration.SecureValueRecoveryConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ShortCodeExpanderConfiguration;
@@ -353,7 +353,7 @@ public class WhisperServerConfiguration extends Configuration {
   @Valid
   @NotNull
   @JsonProperty
-  private S3ObjectMonitorFactory dynamicConfig;
+  private ObjectMonitorFactory dynamicConfig;
 
   @Valid
   @NotNull
@@ -457,7 +457,7 @@ public class WhisperServerConfiguration extends Configuration {
   @Valid
   @NotNull
   @JsonProperty
-  private S3ObjectMonitorFactory asnTable;
+  private ObjectMonitorFactory asnTable;
 
   @Valid
   @JsonProperty
@@ -630,7 +630,7 @@ public class WhisperServerConfiguration extends Configuration {
     return remoteConfig;
   }
 
-  public S3ObjectMonitorFactory getDynamicConfig() {
+  public ObjectMonitorFactory getDynamicConfig() {
     return dynamicConfig;
   }
 
@@ -722,7 +722,7 @@ public class WhisperServerConfiguration extends Configuration {
     return grpc;
   }
 
-  public S3ObjectMonitorFactory getAsnTableConfiguration() {
+  public ObjectMonitorFactory getAsnTableConfiguration() {
     return asnTable;
   }
 

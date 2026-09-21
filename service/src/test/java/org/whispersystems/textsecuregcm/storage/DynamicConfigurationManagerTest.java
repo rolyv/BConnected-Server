@@ -20,7 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.AdditionalAnswers;
 import org.whispersystems.textsecuregcm.configuration.dynamic.DynamicConfiguration;
-import org.whispersystems.textsecuregcm.s3.S3ObjectMonitor;
+import org.whispersystems.textsecuregcm.monitoring.ObjectMonitor;
 
 class DynamicConfigurationManagerTest {
 
@@ -32,11 +32,11 @@ class DynamicConfigurationManagerTest {
   private static final ExecutorService BACKGROUND_THREAD = Executors.newSingleThreadExecutor();
 
   private DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager;
-  private S3ObjectMonitor configMonitor;
+  private ObjectMonitor configMonitor;
 
   @BeforeEach
   void setup() {
-    this.configMonitor = mock(S3ObjectMonitor.class);
+    this.configMonitor = mock(ObjectMonitor.class);
     this.dynamicConfigurationManager = new DynamicConfigurationManager<>(configMonitor, DynamicConfiguration.class);
   }
 
