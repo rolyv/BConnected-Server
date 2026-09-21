@@ -89,7 +89,6 @@ import org.whispersystems.textsecuregcm.storage.ProfilesV2;
 import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
-import org.whispersystems.textsecuregcm.storage.ReportMessageDynamoDb;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
 import org.whispersystems.textsecuregcm.storage.SingleUseECPreKeyStore;
@@ -294,8 +293,7 @@ public record CommandDependencies(
         .build();
 
 
-    final PostgresPersistence postgres = configuration.getPostgresConfiguration() == null ? null
-        : PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
+    final PostgresPersistence postgres = PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
             configuration.getMessageRetention(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, configuration.getRecoveryRetention(), configuration.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionExecutor);
     PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres != null ? postgres.recoveryPasswords() : new PhoneNumberRecoveryPasswords(
         configuration.getDynamoDbTables().getRegistrationRecovery().getTableName(),
@@ -388,10 +386,8 @@ public record CommandDependencies(
         ? new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, gcsAvatars)
         : new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor, asyncCdnS3Client,
             configuration.getCdnConfiguration().bucket());
-    ReportMessageStore reportMessageDynamoDb = postgres != null ? postgres.reportMessages() : new ReportMessageDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
-        configuration.getDynamoDbTables().getReportMessage().getTableName(),
-        configuration.getReportMessageConfiguration().getReportTtl());
-    ReportMessageManager reportMessageManager = new ReportMessageManager(reportMessageDynamoDb, rateLimitersCluster,
+    ReportMessageStore reportMessageStore = postgres.reportMessages();
+    ReportMessageManager reportMessageManager = new ReportMessageManager(reportMessageStore, rateLimitersCluster,
         configuration.getReportMessageConfiguration().getCounterTtl());
     RedisMessageAvailabilityManager redisMessageAvailabilityManager =
         new RedisMessageAvailabilityManager(messagesCluster, clientEventExecutor, asyncOperationQueueingExecutor);

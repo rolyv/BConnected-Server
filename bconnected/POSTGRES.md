@@ -1,8 +1,8 @@
 # PostgreSQL persistence for BConnected
 
-This fork implements native PostgreSQL storage for the pilot's account, key, message, profile, registration-support, reporting, challenge, Apple DeviceCheck and client-release paths. Selecting the optional `postgres` configuration uses those implementations in the server and worker dependency factories. Omitting it preserves the legacy backend.
+This fork implements native PostgreSQL storage for the pilot's account, key, message, profile, registration-support, reporting, challenge, Apple DeviceCheck and client-release paths. The `postgres` configuration is required in all server and worker runtime modes, including `LEGACY`. Its native implementations supply the selected core stores. The `LEGACY` runtime still constructs optional inherited AWS products; PostgreSQL configuration alone does not select the GCP deployment mode.
 
-**The Signal messaging server is not deployed and full server startup is not verified.** The explicit `GCP_PILOT` mode removes inherited AWS initialization from the selected server and supported worker paths for a GCP-only deployment. PostgreSQL selection alone remains distinct from that mode. Local storage tests and schema provisioning do not demonstrate working phone registration or encrypted messaging between devices.
+**Source status and deployment evidence are separate.** For the current private startup, worker and deployment checks, use the root BConnected workspace deployment documentation; the historical validation notes below are not a complete current deployment inventory. The explicit `GCP_PILOT` mode removes inherited AWS initialization from the selected server and supported worker paths for a GCP-only deployment. PostgreSQL selection alone remains distinct from that mode. Local storage tests and schema provisioning do not demonstrate working phone registration or encrypted messaging between devices.
 
 ## Accounts and their transaction boundary
 
@@ -35,6 +35,8 @@ The broader re-registration flow also clears one-time keys, messages and profile
 `ReportMessagePostgres` and `PushChallengePostgres` preserve the upstream consumption and expiry rules. `AppleDeviceChecksPostgres` shares the existing certificate/CBOR codec and preserves global public-key ownership, equal-or-increasing assertion counters and atomic rollback when a public key belongs to another account. This is an attestation storage port, not configuration of Apple credentials or a deployed attestation test.
 
 `ClientReleasesPostgres` reads operator-maintained client-release metadata used for metrics labels. Malformed rows are skipped; database failures propagate so the manager retains its last successful snapshot. The runtime requires SELECT only on `client_releases`.
+
+The obsolete DynamoDB implementations of remote configuration, client release metadata, push challenges and report-message records have been removed, together with their table configuration and exclusive backend fixtures. Manager/API behavior tests use the storage interfaces; native PostgreSQL tests retain concurrency, expiry, enrollment and malformed-row coverage. The full local server fixture starts a separate disposable PostgreSQL container and applies core migrations 001–010; it does not connect to the operator database. Other DynamoDB/S3 implementations and AWS SDK dependencies remain for later cleanup.
 
 ## Runtime selection
 
@@ -89,7 +91,7 @@ cloud-sql-proxy --auto-iam-authn --address=127.0.0.1 --port=5432 \
   roly-dev:us-east1:bconnected-postgres
 ```
 
-Add this top-level YAML block after applying the schema and grants. Retention values below are examples that must match the pilot's selected policy; `GCP_PILOT` requires them explicitly:
+Add this top-level YAML block after applying the schema and grants. Retention values below are examples that must match the pilot's selected policy; every runtime mode requires them explicitly:
 
 ```yaml
 postgres:
@@ -139,6 +141,8 @@ The earlier storage suites are `PostgresPersistenceTest`, `SingleUseECPreKeysPos
 ```sh
 docker stop bconnected-postgres-test
 ```
+
+The metadata AWS cleanup checkpoint on 2026-09-20 passed a **clean reactor build and 272 tests with zero failures, errors or skips** (`.local/aws-metadata-cleanup-final-tests.log` in the root workspace). This includes four native metadata stores, retained managers, configuration guards, account transaction fixtures, the complete local server HTTP/WebSocket/gRPC fixture, and 11 concurrent admission-outbox tests from parallel work. The obsolete metadata classes are absent from clean build outputs; compiled CLI help still exposes the server and message-persister commands. This is local source validation, not a deployment update.
 
 ## Remaining release work
 

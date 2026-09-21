@@ -1,3 +1,11 @@
+postgres:
+  jdbcUrl: jdbc:postgresql://127.0.0.1:5432/bconnected
+  username: bconnected
+  passwordEnvironmentVariable: BCONNECTED_POSTGRES_PASSWORD
+  maximumPoolSize: 5
+  messageRetention: P30D
+  recoveryRetention: P30D
+
 # Example, relatively minimal, configuration that passes validation (see `io.dropwizard.cli.CheckCommand`)
 #
 # `unset` values will need to be set to work properly.
@@ -93,8 +101,6 @@ dynamoDbTables:
     tableName: Example_Backups
   changeNumberWaitingPeriods:
     tableName: Example_ChangeNumberWaitingPeriods
-  clientReleases:
-    tableName: Example_ClientReleases
   deletedAccounts:
     tableName: Example_DeletedAccounts
   deletedAccountsLock:
@@ -132,8 +138,6 @@ dynamoDbTables:
     tableName: Example_Profiles
   profilesV2:
     tableName: Example_ProfilesV2
-  pushChallenge:
-    tableName: Example_PushChallenge
   pushNotificationExperimentSamples:
     tableName: Example_PushNotificationExperimentSamples
   redeemedReceipts:
@@ -141,10 +145,6 @@ dynamoDbTables:
   registrationRecovery:
     tableName: Example_RegistrationRecovery
     expiration: P300D # Duration of time until rows expire
-  remoteConfig:
-    tableName: Example_RemoteConfig
-  reportMessage:
-    tableName: Example_ReportMessage
   scheduledJobs:
     tableName: Example_ScheduledJobs
     expiration: P7D

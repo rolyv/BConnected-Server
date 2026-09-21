@@ -25,7 +25,7 @@ import org.whispersystems.textsecuregcm.redis.RedisClusterExtension;
 
 class ReportMessageManagerTest {
 
-  private ReportMessageDynamoDb reportMessageDynamoDb;
+  private ReportMessageStore reportMessageDynamoDb;
 
   private ReportMessageManager reportMessageManager;
 
@@ -41,7 +41,7 @@ class ReportMessageManagerTest {
 
   @BeforeEach
   void setUp() {
-    reportMessageDynamoDb = mock(ReportMessageDynamoDb.class);
+    reportMessageDynamoDb = mock(ReportMessageStore.class);
 
     reportMessageManager = new ReportMessageManager(reportMessageDynamoDb,
         RATE_LIMIT_CLUSTER_EXTENSION.getRedisCluster(), Duration.ofDays(1));

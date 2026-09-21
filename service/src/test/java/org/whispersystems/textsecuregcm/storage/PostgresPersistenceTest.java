@@ -145,4 +145,24 @@ class PostgresPersistenceTest {
     configs.delete(saved.getName());
     assertThat(configs.getAll()).isEmpty();
   }
+  @Test
+  void remoteConfigsKeepIndependentKeysAndDeleteIsIdempotent() {
+    final RemoteConfig first = new RemoteConfig("a", 10, Set.of(), "off", "on", "first-key");
+    final RemoteConfig second = new RemoteConfig("b", 20, Set.of(UUID.randomUUID()), null, "v2", "second-key");
+    configs.set(second);
+    configs.set(first);
+    assertThat(configs.getAll()).extracting(RemoteConfig::getName).containsExactly("a", "b");
+    configs.set(new RemoteConfig("a", 99, Set.of(), "off", "v3", "changed-key"));
+    final List<RemoteConfig> stored = configs.getAll();
+    assertThat(stored).hasSize(2);
+    assertThat(stored.getFirst().getPercentage()).isEqualTo(99);
+    assertThat(stored.getFirst().getHashKey()).isEqualTo("changed-key");
+    assertThat(stored.getLast().getHashKey()).isEqualTo("second-key");
+    assertThat(stored.getLast().getUuids()).isEqualTo(second.getUuids());
+    configs.delete("a");
+    configs.delete("a");
+    configs.delete("missing");
+    assertThat(configs.getAll()).extracting(RemoteConfig::getName).containsExactly("b");
+  }
+
 }

@@ -268,7 +268,6 @@ import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseManager;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseStore;
-import org.whispersystems.textsecuregcm.storage.ClientReleases;
 import org.whispersystems.textsecuregcm.storage.DonationPermits;
 import org.whispersystems.textsecuregcm.storage.DonationPermitsManager;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
@@ -295,15 +294,12 @@ import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
 import org.whispersystems.textsecuregcm.storage.Profiles;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
 import org.whispersystems.textsecuregcm.storage.ProfilesV2;
-import org.whispersystems.textsecuregcm.storage.PushChallengeDynamoDb;
 import org.whispersystems.textsecuregcm.storage.PushChallengeStore;
 import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigStore;
-import org.whispersystems.textsecuregcm.storage.RemoteConfigs;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigsManager;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
-import org.whispersystems.textsecuregcm.storage.ReportMessageDynamoDb;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
 import org.whispersystems.textsecuregcm.storage.SingleUseECPreKeyStore;
@@ -581,8 +577,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         .allowCoreThreadTimeOut(true)
         .workQueue(messageDeletionQueue).build();
 
-    final PostgresPersistence postgres = config.getPostgresConfiguration() == null ? null
-        : PostgresPersistence.build(environment, config.getPostgresConfiguration(),
+    final PostgresPersistence postgres = PostgresPersistence.build(environment, config.getPostgresConfiguration(),
             config.getMessageRetention(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, config.getRecoveryRetention(), config.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionAsyncExecutor);
     RedeemedReceiptsManager redeemedReceiptsManager = gcpPilot ? null : new RedeemedReceiptsManager(clock,
         config.getDynamoDbTables().getRedeemedReceipts().getTableName(),
@@ -599,8 +594,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getDynamoDbTables().getAccounts().getUsernamesTableName(),
         config.getDynamoDbTables().getDeletedAccounts().getTableName(),
         config.getDynamoDbTables().getAccounts().getUsedLinkDeviceTokensTableName());
-    ClientReleaseStore clientReleases = postgres != null ? postgres.clientReleases() : new ClientReleases(dynamoDbAsyncClient,
-        config.getDynamoDbTables().getClientReleases().getTableName());
+    ClientReleaseStore clientReleases = postgres.clientReleases();
 
     PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres != null ? postgres.phoneNumbers() : new PhoneNumberIdentifiers(dynamoDbAsyncClient,
         config.getDynamoDbTables().getPhoneNumberIdentifiers().getTableName());
@@ -631,13 +625,9 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getDynamoDbTables().getMessages().getTableName(),
         config.getMessageRetention(),
         messageDeletionAsyncExecutor);
-    RemoteConfigStore remoteConfigs = postgres != null ? postgres.remoteConfigs() : new RemoteConfigs(dynamoDbClient,
-        config.getDynamoDbTables().getRemoteConfig().getTableName());
-    PushChallengeStore pushChallengeDynamoDb = postgres != null ? postgres.pushChallenges() : new PushChallengeDynamoDb(dynamoDbClient,
-        config.getDynamoDbTables().getPushChallenge().getTableName());
-    ReportMessageStore reportMessageDynamoDb = postgres != null ? postgres.reportMessages() : new ReportMessageDynamoDb(dynamoDbClient, dynamoDbAsyncClient,
-        config.getDynamoDbTables().getReportMessage().getTableName(),
-        config.getReportMessageConfiguration().getReportTtl());
+    RemoteConfigStore remoteConfigs = postgres.remoteConfigs();
+    PushChallengeStore pushChallengeStore = postgres.pushChallenges();
+    ReportMessageStore reportMessageStore = postgres.reportMessages();
     PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres != null ? postgres.recoveryPasswords() : new PhoneNumberRecoveryPasswords(
         config.getDynamoDbTables().getRegistrationRecovery().getTableName(),
         config.getRecoveryRetention(),
@@ -839,7 +829,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         recurringJobExecutor,
         config.getClientReleaseConfiguration().refreshInterval(),
         Clock.systemUTC());
-    ReportMessageManager reportMessageManager = new ReportMessageManager(reportMessageDynamoDb, rateLimitersCluster,
+    ReportMessageManager reportMessageManager = new ReportMessageManager(reportMessageStore, rateLimitersCluster,
         config.getReportMessageConfiguration().getCounterTtl());
     RedisMessageAvailabilityManager redisMessageAvailabilityManager =
         new RedisMessageAvailabilityManager(messagesCluster, clientEventExecutor, asyncOperationQueueingExecutor);
@@ -931,7 +921,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getMessageByteLimitCardinalityEstimator().period());
 
     PushChallengeManager pushChallengeManager = new PushChallengeManager(pushNotificationManager,
-        pushChallengeDynamoDb);
+        pushChallengeStore);
 
     HttpClient currencyClient = gcpPilot ? null : HttpClient.newBuilder().version(HttpClient.Version.HTTP_2).connectTimeout(Duration.ofSeconds(10)).build();
     FixerClient fixerClient = gcpPilot ? null : config.getPaymentsServiceConfiguration().externalClients()

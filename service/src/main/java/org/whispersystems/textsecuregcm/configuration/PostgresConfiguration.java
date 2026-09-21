@@ -6,7 +6,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import java.time.Duration;
 
-/** Optional during the incremental migration. Credentials never appear in YAML. */
+/** Required native storage configuration. Production passwords are read from the environment. */
 public record PostgresConfiguration(
     @NotBlank String jdbcUrl,
     @NotBlank String username,

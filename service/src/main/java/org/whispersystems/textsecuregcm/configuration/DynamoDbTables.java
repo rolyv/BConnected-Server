@@ -52,7 +52,6 @@ public class DynamoDbTables {
   private final Table changeNumberWaitingPeriods;
   private final Table appleDeviceCheckPublicKeys;
   private final Table backups;
-  private final Table clientReleases;
   private final Table deletedAccounts;
   private final Table deletedAccountsLock;
   private final TableWithExpiration donationPermits;
@@ -67,12 +66,9 @@ public class DynamoDbTables {
   private final Table profileAvatars;
   private final Table profiles;
   private final Table profilesV2;
-  private final Table pushChallenge;
   private final Table pushNotificationExperimentSamples;
   private final Table redeemedReceipts;
   private final TableWithExpiration registrationRecovery;
-  private final Table remoteConfig;
-  private final Table reportMessage;
   private final TableWithExpiration scheduledJobs;
   private final Table subscriptions;
   private final Table verificationSessions;
@@ -83,7 +79,6 @@ public class DynamoDbTables {
       @JsonProperty("changeNumberWaitingPeriods") final Table changeNumberWaitingPeriods,
       @JsonProperty("appleDeviceCheckPublicKeys") final Table appleDeviceCheckPublicKeys,
       @JsonProperty("backups") final Table backups,
-      @JsonProperty("clientReleases") final Table clientReleases,
       @JsonProperty("deletedAccounts") final Table deletedAccounts,
       @JsonProperty("deletedAccountsLock") final Table deletedAccountsLock,
       @JsonProperty("donationPermits") final TableWithExpiration donationPermits,
@@ -98,12 +93,9 @@ public class DynamoDbTables {
       @JsonProperty("profileAvatars") final Table profileAvatars,
       @JsonProperty("profiles") final Table profiles,
       @JsonProperty("profilesV2") final Table profilesV2,
-      @JsonProperty("pushChallenge") final Table pushChallenge,
       @JsonProperty("pushNotificationExperimentSamples") final Table pushNotificationExperimentSamples,
       @JsonProperty("redeemedReceipts") final Table redeemedReceipts,
       @JsonProperty("registrationRecovery") final TableWithExpiration registrationRecovery,
-      @JsonProperty("remoteConfig") final Table remoteConfig,
-      @JsonProperty("reportMessage") final Table reportMessage,
       @JsonProperty("scheduledJobs") final TableWithExpiration scheduledJobs,
       @JsonProperty("subscriptions") final Table subscriptions,
       @JsonProperty("verificationSessions") final Table verificationSessions) {
@@ -113,7 +105,6 @@ public class DynamoDbTables {
     this.changeNumberWaitingPeriods = changeNumberWaitingPeriods;
     this.appleDeviceCheckPublicKeys = appleDeviceCheckPublicKeys;
     this.backups = backups;
-    this.clientReleases = clientReleases;
     this.deletedAccounts = deletedAccounts;
     this.deletedAccountsLock = deletedAccountsLock;
     this.donationPermits = donationPermits;
@@ -128,12 +119,9 @@ public class DynamoDbTables {
     this.profileAvatars = profileAvatars;
     this.profiles = profiles;
     this.profilesV2 = profilesV2;
-    this.pushChallenge = pushChallenge;
     this.pushNotificationExperimentSamples = pushNotificationExperimentSamples;
     this.redeemedReceipts = redeemedReceipts;
     this.registrationRecovery = registrationRecovery;
-    this.remoteConfig = remoteConfig;
-    this.reportMessage = reportMessage;
     this.scheduledJobs = scheduledJobs;
     this.subscriptions = subscriptions;
     this.verificationSessions = verificationSessions;
@@ -167,12 +155,6 @@ public class DynamoDbTables {
   @Valid
   public Table getBackups() {
     return backups;
-  }
-
-  @NotNull
-  @Valid
-  public Table getClientReleases() {
-    return clientReleases;
   }
 
   @NotNull
@@ -261,12 +243,6 @@ public class DynamoDbTables {
 
   @NotNull
   @Valid
-  public Table getPushChallenge() {
-    return pushChallenge;
-  }
-
-  @NotNull
-  @Valid
   public Table getPushNotificationExperimentSamples() {
     return pushNotificationExperimentSamples;
   }
@@ -281,18 +257,6 @@ public class DynamoDbTables {
   @Valid
   public TableWithExpiration getRegistrationRecovery() {
     return registrationRecovery;
-  }
-
-  @NotNull
-  @Valid
-  public Table getRemoteConfig() {
-    return remoteConfig;
-  }
-
-  @NotNull
-  @Valid
-  public Table getReportMessage() {
-    return reportMessage;
   }
 
   @NotNull

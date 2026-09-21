@@ -33,7 +33,7 @@ class RemoteConfigsManagerTest {
   private static final UUID NORMAL_ACI = UUID.randomUUID();
   private static final UUID SPECIAL_ACI = UUID.randomUUID();
 
-  private RemoteConfigs remoteConfigs;
+  private RemoteConfigStore remoteConfigs;
 
   private RemoteConfigsManager remoteConfigsManager;
 
@@ -53,7 +53,7 @@ class RemoteConfigsManagerTest {
 
   @BeforeEach
   void setup() {
-    this.remoteConfigs = mock(RemoteConfigs.class);
+    this.remoteConfigs = mock(RemoteConfigStore.class);
     when(remoteConfigs.getAll()).thenReturn(CLIENT);
     this.remoteConfigsManager = new RemoteConfigsManager(remoteConfigs, GLOBAL);
   }

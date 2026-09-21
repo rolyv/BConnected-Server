@@ -23,6 +23,10 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 public final class DynamoDbExtensionSchema {
 
+  // Generic transaction participants for retained Dynamo account atomicity tests.
+  public static final String TRANSACTION_PARTITION = "partition";
+  public static final String TRANSACTION_SORT = "sort";
+
   public enum Tables implements DynamoDbExtension.TableSchema {
 
     ACCOUNTS("accounts_test",
@@ -69,16 +73,16 @@ public final class DynamoDbExtensionSchema {
             .build()),
         List.of(), List.of()),
 
-    CLIENT_RELEASES("client_releases_test",
-        ClientReleases.ATTR_PLATFORM,
-        ClientReleases.ATTR_VERSION,
+    TRANSACTION_PARTICIPANTS("transaction_participants_test",
+        TRANSACTION_PARTITION,
+        TRANSACTION_SORT,
         List.of(
             AttributeDefinition.builder()
-                .attributeName(ClientReleases.ATTR_PLATFORM)
+                .attributeName(TRANSACTION_PARTITION)
                 .attributeType(ScalarAttributeType.S)
                 .build(),
             AttributeDefinition.builder()
-                .attributeName(ClientReleases.ATTR_VERSION)
+                .attributeName(TRANSACTION_SORT)
                 .attributeType(ScalarAttributeType.S)
                 .build()),
         List.of(),
@@ -298,15 +302,6 @@ public final class DynamoDbExtensionSchema {
                 .build()),
         List.of(), List.of()),
 
-    PUSH_CHALLENGES("push_challenge_test",
-        PushChallengeDynamoDb.KEY_ACCOUNT_UUID,
-        null,
-        List.of(AttributeDefinition.builder()
-            .attributeName(PushChallengeDynamoDb.KEY_ACCOUNT_UUID)
-            .attributeType(ScalarAttributeType.B)
-            .build()),
-        List.of(), List.of()),
-
     REDEEMED_RECEIPTS("redeemed_receipts_test",
         RedeemedReceiptsManager.KEY_SERIAL,
         null,
@@ -322,24 +317,6 @@ public final class DynamoDbExtensionSchema {
         List.of(AttributeDefinition.builder()
             .attributeName(PhoneNumberRecoveryPasswords.KEY_PNI)
             .attributeType(ScalarAttributeType.S)
-            .build()),
-        List.of(), List.of()),
-
-    REMOTE_CONFIGS("remote_configs_test",
-        RemoteConfigs.KEY_NAME,
-        null,
-        List.of(AttributeDefinition.builder()
-            .attributeName(RemoteConfigs.KEY_NAME)
-            .attributeType(ScalarAttributeType.S)
-            .build()),
-        List.of(), List.of()),
-
-    REPORT_MESSAGES("report_messages_test",
-        ReportMessageDynamoDb.KEY_HASH,
-        null,
-        List.of(AttributeDefinition.builder()
-            .attributeName(ReportMessageDynamoDb.KEY_HASH)
-            .attributeType(ScalarAttributeType.B)
             .build()),
         List.of(), List.of()),
 

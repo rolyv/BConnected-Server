@@ -1,3 +1,10 @@
+postgres:
+  jdbcUrl: jdbc:postgresql://127.0.0.1:5432/bconnected_test
+  username: postgres
+  maximumPoolSize: 5
+  messageRetention: P30D
+  recoveryRetention: P30D
+
 logging:
   level: INFO
   appenders:
@@ -99,8 +106,6 @@ dynamoDbTables:
     tableName: backups_test
   changeNumberWaitingPeriods:
     tableName: change_number_waiting_periods_test
-  clientReleases:
-    tableName: client_releases_test
   deletedAccounts:
     tableName: deleted_accounts_test
   deletedAccountsLock:
@@ -138,8 +143,6 @@ dynamoDbTables:
     tableName: profiles_test
   profilesV2:
     tableName: profilesV2_test
-  pushChallenge:
-    tableName: push_challenge_test
   pushNotificationExperimentSamples:
     tableName: Example_PushNotificationExperimentSamples
   redeemedReceipts:
@@ -147,10 +150,6 @@ dynamoDbTables:
   registrationRecovery:
     tableName: registration_recovery_passwords_test
     expiration: P300D # Duration of time until rows expire
-  remoteConfig:
-    tableName: remote_config_test
-  reportMessage:
-    tableName: report_messages_test
   scheduledJobs:
     tableName: scheduled_jobs_test
     expiration: P7D

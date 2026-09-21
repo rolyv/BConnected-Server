@@ -23,14 +23,14 @@ import org.whispersystems.textsecuregcm.util.ua.ClientPlatform;
 
 class ClientReleaseManagerTest {
 
-  private ClientReleases clientReleases;
+  private ClientReleaseStore clientReleases;
   private Clock clock;
 
   private ClientReleaseManager clientReleaseManager;
 
   @BeforeEach
   void setUp() {
-    clientReleases = mock(ClientReleases.class);
+    clientReleases = mock(ClientReleaseStore.class);
     clock = Clock.fixed(Instant.now(), ZoneId.systemDefault());
 
     clientReleaseManager =

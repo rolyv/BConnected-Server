@@ -153,6 +153,20 @@ class GcpRuntimeConfigurationTest {
     assertThrows(IllegalArgumentException.class, noAvatars::validateRuntimeConfiguration);
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"LEGACY", "GCP_PILOT"})
+  void everyModeRequiresNativeStorageAndExplicitRetention(final String mode) throws Exception {
+    final String yaml = PILOT.replace("runtimeMode: GCP_PILOT", "runtimeMode: " + mode);
+    for (String invalid : new String[] {
+        yaml.replaceAll("(?s)postgres:.*?(?=dynamicConfig:)", ""),
+        yaml.replace("  messageRetention: PT168H\n", ""),
+        yaml.replace("  recoveryRetention: PT24H\n", "")}) {
+      final var configuration = read(invalid);
+      assertThat(assertThrows(IllegalArgumentException.class, configuration::validateRuntimeConfiguration))
+          .hasMessageContaining("All runtime modes require PostgreSQL with explicit messageRetention and recoveryRetention");
+    }
+  }
+
   private static WhisperServerConfiguration read(final String yaml) throws Exception {
     SecretsModule.INSTANCE.setSecretStore(new SecretStore(Map.of("collation",
         new SecretString(Base64.getEncoder().encodeToString(new byte[32])))));

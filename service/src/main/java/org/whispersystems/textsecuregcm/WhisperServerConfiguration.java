@@ -121,13 +121,11 @@ public class WhisperServerConfiguration extends Configuration {
   }
 
   public Duration getMessageRetention() {
-    return postgres != null && postgres.messageRetention() != null ? postgres.messageRetention()
-        : dynamoDbTables.getMessages().getExpiration();
+    return postgres.messageRetention();
   }
 
   public Duration getRecoveryRetention() {
-    return postgres != null && postgres.recoveryRetention() != null ? postgres.recoveryRetention()
-        : dynamoDbTables.getRegistrationRecovery().getExpiration();
+    return postgres.recoveryRetention();
   }
 
   @AssertTrue(message = "Runtime mode dependencies are missing or incompatible")
@@ -160,9 +158,9 @@ public class WhisperServerConfiguration extends Configuration {
     if (isFcmEnabled() && fcm == null) errors.add("Enabled FCM requires fcm configuration");
     if (isStorageEnabled() && storageService == null) errors.add("Enabled storage requires storageService configuration");
     if (isSvr2Enabled() && svr2 == null) errors.add("Enabled SVR2 requires svr2 configuration");
+    if (postgres == null || postgres.messageRetention() == null || postgres.recoveryRetention() == null)
+      errors.add("All runtime modes require PostgreSQL with explicit messageRetention and recoveryRetention");
     if (isGcpPilot()) {
-      if (postgres == null || postgres.messageRetention() == null || postgres.recoveryRetention() == null)
-        errors.add("GCP_PILOT requires PostgreSQL with explicit messageRetention and recoveryRetention");
       if (!(dynamicConfig instanceof MonitoredFileObjectConfiguration) || !(asnTable instanceof MonitoredFileObjectConfiguration))
         errors.add("GCP_PILOT requires type:file dynamicConfig and asnTable sources");
       if (!(registrationService instanceof TelnyxRegistrationServiceConfiguration))
@@ -181,6 +179,7 @@ public class WhisperServerConfiguration extends Configuration {
     return errors;
   }
 
+  @NotNull
   @Valid
   @JsonProperty
   private org.whispersystems.textsecuregcm.configuration.PostgresConfiguration postgres;

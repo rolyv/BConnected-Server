@@ -7,6 +7,8 @@ package org.whispersystems.textsecuregcm;
 
 import io.dropwizard.util.Resources;
 import java.util.Optional;
+import java.nio.file.Path;
+import org.whispersystems.textsecuregcm.storage.PostgresServerTestFixture;
 
 /**
  * This class may be run directly from a correctly configured IDE, or using the command line:
@@ -25,10 +27,14 @@ public class LocalWhisperServerService {
   public static void main(String[] args) throws Exception {
 
     System.setProperty("secrets.bundle.filename",
-        Resources.getResource("config/test-secrets-bundle.yml").getPath());
+        Path.of(Resources.getResource("config/test-secrets-bundle.yml").toURI()).toString());
 
     final String config = Optional.ofNullable(System.getenv(SIGNAL_SERVER_CONFIG_ENV_VAR))
-        .orElse(Resources.getResource("config/test.yml").getPath());
+        .orElse(Path.of(Resources.getResource("config/test.yml").toURI()).toString());
+
+    if (System.getenv(SIGNAL_SERVER_CONFIG_ENV_VAR) == null) {
+      System.setProperty("dw.postgres.jdbcUrl", PostgresServerTestFixture.jdbcUrl());
+    }
 
     new WhisperServerService().run("server", config);
   }

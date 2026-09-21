@@ -23,6 +23,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.ServerSocket;
 import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -49,6 +51,7 @@ import org.signal.chat.common.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.metrics.NoopAwsSdkMetricPublisher;
 import org.whispersystems.textsecuregcm.storage.DynamoDbExtension;
 import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema;
+import org.whispersystems.textsecuregcm.storage.PostgresServerTestFixture;
 import org.whispersystems.textsecuregcm.tests.util.TestWebsocketListener;
 import org.whispersystems.textsecuregcm.util.AttributeValues;
 import org.whispersystems.textsecuregcm.util.HeaderUtils;
@@ -68,17 +71,26 @@ class WhisperServerServiceTest {
 
   static {
     System.setProperty("secrets.bundle.filename",
-        Resources.getResource("config/test-secrets-bundle.yml").getPath());
+        resourcePath("config/test-secrets-bundle.yml"));
   }
+  private static String resourcePath(final String name) {
+    try {
+      return Path.of(Resources.getResource(name).toURI()).toString();
+    } catch (URISyntaxException e) {
+      throw new IllegalArgumentException("Invalid test resource URI", e);
+    }
+  }
+
   private static final int OMNIBUS_PORT = findAvailablePort();
 
   private static WebSocketClient webSocketClient;
   private static WebSocketClient h2WebSocketClient;
 
   private static final DropwizardAppExtension<WhisperServerConfiguration> EXTENSION = new DropwizardAppExtension<>(
-      WhisperServerService.class, Resources.getResource("config/test.yml").getPath(),
+      WhisperServerService.class, resourcePath("config/test.yml"),
       // Tables will be created by the local DynamoDbExtension
       ConfigOverride.config("dynamoDbClient.initTables", "false"),
+      ConfigOverride.config("postgres.jdbcUrl", PostgresServerTestFixture::jdbcUrl),
       ConfigOverride.config("grpc.port", String.valueOf(OMNIBUS_PORT)));
 
   @RegisterExtension
@@ -86,8 +98,8 @@ class WhisperServerServiceTest {
 
   @AfterAll
   static void teardown() throws Exception {
-    h2WebSocketClient.stop();
-    webSocketClient.stop();
+    if (h2WebSocketClient != null) h2WebSocketClient.stop();
+    if (webSocketClient != null) webSocketClient.stop();
     System.clearProperty("secrets.bundle.filename");
   }
 

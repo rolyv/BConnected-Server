@@ -128,7 +128,7 @@ class AccountsTest {
       Tables.REDEEMED_RECEIPTS,
 
       // This is an unrelated table used to test "tag-along" transactional updates
-      Tables.CLIENT_RELEASES);
+      Tables.TRANSACTION_PARTICIPANTS);
 
   private final TestClock clock = TestClock.pinned(Instant.EPOCH);
   private Accounts accounts;
@@ -1053,10 +1053,10 @@ class AccountsTest {
         accounts.getByAccountIdentifier(account.getAccountIdentifier()).orElseThrow().getPrimaryDevice().getName());
 
     assertFalse(DYNAMO_DB_EXTENSION.getDynamoDbClient().getItem(GetItemRequest.builder()
-            .tableName(Tables.CLIENT_RELEASES.tableName())
+            .tableName(Tables.TRANSACTION_PARTICIPANTS.tableName())
             .key(Map.of(
-                ClientReleases.ATTR_PLATFORM, AttributeValues.fromString("test"),
-                ClientReleases.ATTR_VERSION, AttributeValues.fromString("test")
+                DynamoDbExtensionSchema.TRANSACTION_PARTITION, AttributeValues.fromString("test"),
+                DynamoDbExtensionSchema.TRANSACTION_SORT, AttributeValues.fromString("test")
             ))
             .build())
         .hasItem());
@@ -1065,10 +1065,10 @@ class AccountsTest {
 
     accounts.updateTransactionally(account, List.of(TransactWriteItem.builder()
         .put(Put.builder()
-            .tableName(Tables.CLIENT_RELEASES.tableName())
+            .tableName(Tables.TRANSACTION_PARTICIPANTS.tableName())
             .item(Map.of(
-                ClientReleases.ATTR_PLATFORM, AttributeValues.fromString("test"),
-                ClientReleases.ATTR_VERSION, AttributeValues.fromString("test")
+                DynamoDbExtensionSchema.TRANSACTION_PARTITION, AttributeValues.fromString("test"),
+                DynamoDbExtensionSchema.TRANSACTION_SORT, AttributeValues.fromString("test")
             ))
             .build())
         .build()));
@@ -1077,10 +1077,10 @@ class AccountsTest {
         accounts.getByAccountIdentifier(account.getAccountIdentifier()).orElseThrow().getPrimaryDevice().getName());
 
     assertTrue(DYNAMO_DB_EXTENSION.getDynamoDbClient().getItem(GetItemRequest.builder()
-            .tableName(Tables.CLIENT_RELEASES.tableName())
+            .tableName(Tables.TRANSACTION_PARTICIPANTS.tableName())
             .key(Map.of(
-                ClientReleases.ATTR_PLATFORM, AttributeValues.fromString("test"),
-                ClientReleases.ATTR_VERSION, AttributeValues.fromString("test")
+                DynamoDbExtensionSchema.TRANSACTION_PARTITION, AttributeValues.fromString("test"),
+                DynamoDbExtensionSchema.TRANSACTION_SORT, AttributeValues.fromString("test")
             ))
             .build())
         .hasItem());
@@ -1104,10 +1104,10 @@ class AccountsTest {
     assertThrows(ContestedOptimisticLockException.class,
         () -> accounts.updateTransactionally(account, List.of(TransactWriteItem.builder()
             .put(Put.builder()
-                .tableName(Tables.CLIENT_RELEASES.tableName())
+                .tableName(Tables.TRANSACTION_PARTICIPANTS.tableName())
                 .item(Map.of(
-                    ClientReleases.ATTR_PLATFORM, AttributeValues.fromString("test"),
-                    ClientReleases.ATTR_VERSION, AttributeValues.fromString("test")
+                    DynamoDbExtensionSchema.TRANSACTION_PARTITION, AttributeValues.fromString("test"),
+                    DynamoDbExtensionSchema.TRANSACTION_SORT, AttributeValues.fromString("test")
                 ))
                 .build())
             .build())));
