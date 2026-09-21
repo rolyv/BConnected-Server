@@ -1,0 +1,122 @@
+[
+  {
+    "name": "client_session",
+    "path": [
+      "registrationRequest",
+      "sessionId"
+    ],
+    "value": "client-session"
+  },
+  {
+    "name": "client_recovery",
+    "path": [
+      "registrationRequest",
+      "recoveryPassword"
+    ],
+    "value": null
+  },
+  {
+    "name": "client_aci",
+    "path": [
+      "aci"
+    ],
+    "value": "00000000-0000-4000-8000-000000000002"
+  },
+  {
+    "name": "client_source",
+    "path": [
+      "sourceIp"
+    ],
+    "value": "127.0.0.1"
+  },
+  {
+    "name": "nested_unknown",
+    "path": [
+      "registrationRequest",
+      "accountAttributes",
+      "admin"
+    ],
+    "value": true
+  },
+  {
+    "name": "unknown_capability",
+    "path": [
+      "registrationRequest",
+      "accountAttributes",
+      "capabilities",
+      "future"
+    ],
+    "value": true
+  },
+  {
+    "name": "coerced_boolean",
+    "path": [
+      "registrationRequest",
+      "skipDeviceTransfer"
+    ],
+    "value": "true"
+  },
+  {
+    "name": "coerced_registration_id",
+    "path": [
+      "registrationRequest",
+      "accountAttributes",
+      "registrationId"
+    ],
+    "value": "42"
+  },
+  {
+    "name": "fractional_key",
+    "path": [
+      "registrationRequest",
+      "aciSignedPreKey",
+      "keyId"
+    ],
+    "value": 1.5
+  },
+  {
+    "name": "forged_signature",
+    "path": [
+      "registrationRequest",
+      "aciSignedPreKey",
+      "signature"
+    ],
+    "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+  },
+  {
+    "name": "padded_nonce",
+    "path": [
+      "registrationAttemptId"
+    ],
+    "value": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+  },
+  {
+    "name": "short_challenge",
+    "path": [
+      "bindingChallenge"
+    ],
+    "value": "AA"
+  },
+  {
+    "name": "bad_metadata",
+    "path": [
+      "originalUserAgent"
+    ],
+    "value": "app\nInjected"
+  },
+  {
+    "name": "missing_pni",
+    "path": [
+      "registrationRequest",
+      "pniIdentityKey"
+    ],
+    "value": null
+  },
+  {
+    "name": "nil_member",
+    "path": [
+      "memberId"
+    ],
+    "value": "00000000-0000-0000-0000-000000000000"
+  }
+]
