@@ -36,12 +36,50 @@ idle cleanup until a guarded activity transition is implemented and tested.
 
 ## Still required before opening enrollment
 
-This is initial HTTP/WebSocket/gRPC authentication, not complete capability or revocation
-enforcement. Existing connections, delayed message delivery, credential issuance, device-link
-routes, and anonymous Stories/group/media operations still require their own use-time gates and
-bounded revocation handling. Retaining a proof does not automatically enforce it at those sites.
+This is not complete capability or revocation enforcement. Delayed message delivery and
+acknowledgments, gRPC streams, credential issuance, device-link routes, and anonymous
+Stories/group/media operations still require their own use-time gates and bounded revocation
+handling. Retaining a proof does not automatically enforce it at those sites.
 Registration controllers stay absent and the confirmation worker stays unscheduled. No public
 enrollment or continuously running messaging service is enabled by this source change.
+
+## Retained chat WebSockets
+
+The GCP composition now installs `AdmissionWebSocketSessionManager` and a global request filter.
+The filter admits an exact opaque device proof and replaces the provider's original reusable-auth
+property. A Jersey `SubjectSecurityContext` checks that same proof immediately before invoking the
+resource method, after managed asynchronous dispatch and parameter validation. A delayed request
+cannot substitute a later renewed connection proof. This includes Optional-auth handlers and
+methods without an auth parameter; a missing proof cannot downgrade a request to anonymous.
+
+The session manager renews at half the remaining receipt lifetime. Renewal rechecks the original
+credential-verified SQL snapshot, obtains a new private receipt outside SQL, rechecks that snapshot,
+and requires the old lease to remain valid through publication. It never retains the password or
+reads the upgrade Authorization header. Any account-row mutation requires reconnecting rather
+than adopting a new credential snapshot. Successful renewal has its own original request-start
+deadline, so healthy connections can outlive the first four-second lease.
+
+An independent scheduler closes expired connections while SQL/HTTP renewal workers are blocked.
+There is at most one renewal per connection, at most 64 concurrent renewal workers, and no worker
+queue or caller-runs fallback. Exhaustion, issuer errors, stale evidence and expiry close with 1013;
+definitive local membership rejection closes with 1008. A 250ms forced-disconnect fallback does not
+depend on peer cooperation. Request checks remain conservative if a scheduler is delayed. In-flight
+requests on an unavailable closing connection remain 503; a local definitive rejection remains 401.
+The context's identity is never cleared as a failure response, and closed sessions cannot reopen
+from late renewal results. Close listeners execute outside the context lock to avoid lifecycle lock
+inversion.
+
+Initially anonymous or proofless pilot chat upgrades are rejected. Pilot provisioning upgrades are
+also rejected and the REST provisioning controller is omitted for the one-iPhone policy. This is a
+**temporary closed-runtime boundary**: anonymous Stories and group sending remain required before
+release, including the 8,000-member announcements use case. Other deferred account-management
+routes need their own explicit policy. Server-initiated message delivery and response acknowledgments
+do not pass the request filter and are not yet covered by this change.
+
+The high-frequency private entitlement reads have not been capacity-tested for 8,000 connected
+alumni. Half-life renewal can mean roughly 4,000 private reads per second at a four-second lease,
+plus initial authentication and local request checks. The 64-worker limit is a bounded pilot safety
+limit, not an 8,000-user throughput claim; entitlement distribution/capacity remains a release gate.
 
 ## Verification
 
@@ -50,5 +88,11 @@ tests), with no failures, errors or skips. This includes 28 native PostgreSQL au
 36 entitlement-gate cases, legacy authentication/configuration regressions, and actual HTTP filter,
 WebSocket upgrade and gRPC error-mapping checks. Native fixtures assert zero phone-provider
 interactions. The log is `.local/admission-authentication-tests.log` in the enclosing workspace.
-These tests do not establish existing-connection revocation, anonymous capability enforcement or
-real iPhone messaging.
+That initial-authentication checkpoint did not establish existing-connection revocation.
+The subsequent WebSocket suite exercises native SQL snapshots, synthetic issuer responses, actual
+Jersey synchronous and managed-asynchronous dispatch, blocked renewal, independent deadlines,
+healthy repeated renewal, local mutation, executor rejection and closure. It does not establish
+anonymous capability enforcement, server-initiated delivery revocation or real iPhone messaging.
+The final combined run passed 171 tests (146 service and 25 WebSocket-resource), including 29
+native WebSocket entitlement cases and two close-listener concurrency cases, with no failures,
+errors or skips. Evidence: `.local/admission-websocket-tests.log` in the enclosing workspace.

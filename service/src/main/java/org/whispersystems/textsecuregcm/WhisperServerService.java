@@ -90,6 +90,8 @@ import org.whispersystems.textsecuregcm.attachments.GcsAttachmentGenerator;
 import org.whispersystems.textsecuregcm.attachments.TusAttachmentGenerator;
 import org.whispersystems.textsecuregcm.auth.AccountAuthenticator;
 import org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate;
+import org.whispersystems.textsecuregcm.websocket.AdmissionWebSocketSessionManager;
+import org.whispersystems.textsecuregcm.websocket.AdmissionWebSocketRequestFilter;
 import org.whispersystems.textsecuregcm.admission.AdmissionServiceClient;
 import org.whispersystems.textsecuregcm.admission.AdmissionServiceConfiguration;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
@@ -1277,14 +1279,24 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     webSocketEnvironment.jersey().register(new VirtualExecutorServiceProvider(
         "managed-async-websocket-virtual-thread",
         config.getVirtualThreadConfiguration().maxConcurrentThreadsPerExecutor()));
-    webSocketEnvironment.setAuthenticator(new WebSocketAccountAuthenticator(accountAuthenticator));
+    webSocketEnvironment.setAuthenticator(new WebSocketAccountAuthenticator(accountAuthenticator, gcpPilot));
     webSocketEnvironment.setAuthenticatedWebSocketUpgradeFilter(new IdlePrimaryDeviceAuthenticatedWebSocketUpgradeFilter(
         config.idlePrimaryDeviceReminderConfiguration().minIdleDuration(), Clock.systemUTC()));
-    webSocketEnvironment.setConnectListener(
+    final var chatConnectListener =
         new AuthenticatedConnectListener(accountsManager, receiptSender, messagesManager, messageMetrics, pushNotificationManager,
             pushNotificationScheduler, disconnectionRequestManager,
             messageDeliveryScheduler, asnInfoProviderSupplier, clientReleaseManager, messageDeliveryLoopMonitor, experimentEnrollmentManager
-        ));
+        );
+    if (gcpPilot) {
+      final var admissionSessions = new AdmissionWebSocketSessionManager(
+          ScheduledExecutorServiceBuilder.of(environment, "admissionWebSocketDeadlines").threads(1).build(),
+          ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionWebSocketRenewal", 64, environment));
+      environment.lifecycle().manage(admissionSessions);
+      webSocketEnvironment.setConnectListener(admissionSessions.wrap(chatConnectListener));
+      webSocketEnvironment.jersey().register(new AdmissionWebSocketRequestFilter(admissionSessions));
+    } else {
+      webSocketEnvironment.setConnectListener(chatConnectListener);
+    }
     webSocketEnvironment.jersey().register(new RateLimitByIpFilter(rateLimiters));
     webSocketEnvironment.jersey().register(new RequestStatisticsFilter(TrafficSource.WEBSOCKET));
     webSocketEnvironment.jersey().register(MultiRecipientMessageProvider.class);
@@ -1321,7 +1333,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         new ProfileController(clock, rateLimiters, accountsManager, profilesManager, asnInfoProviderSupplier,
             dynamicConfigurationManager, profileBadgeConverter, config.getBadges(), profileCdnPolicyGenerator,
             groupZkSecretParams, zkProfileOperations, batchIdentityCheckExecutor),
-        new ProvisioningController(rateLimiters, provisioningManager),
+        gcpPilot ? null : new ProvisioningController(rateLimiters, provisioningManager),
         gcpPilot ? null : new RegistrationController(accountsManager, phoneVerificationTokenManager, registrationLockVerificationManager,
             rateLimiters, registrationFraudChecker, ReceiptCredentialPresentation::new, zkReceiptOperations, clock, dynamicConfigurationManager),
         new RemoteConfigController(remoteConfigsManager),
@@ -1351,7 +1363,14 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     WebSocketEnvironment<AuthenticatedDevice> provisioningEnvironment = new WebSocketEnvironment<>(environment,
         webSocketEnvironment.getRequestLog(), Duration.ofMillis(60000));
-    provisioningEnvironment.setConnectListener(new ProvisioningConnectListener(provisioningManager, asnInfoProviderSupplier, clientReleaseManager, provisioningWebsocketTimeoutExecutor, Duration.ofSeconds(90)));
+    if (gcpPilot) {
+      // One iPhone only. Do not turn a deferred provisioning operation into an anonymous socket.
+      provisioningEnvironment.setAuthenticator(request -> {
+        throw new org.whispersystems.websocket.auth.InvalidCredentialsException();
+      });
+    } else {
+      provisioningEnvironment.setConnectListener(new ProvisioningConnectListener(provisioningManager, asnInfoProviderSupplier, clientReleaseManager, provisioningWebsocketTimeoutExecutor, Duration.ofSeconds(90)));
+    }
     provisioningEnvironment.jersey().register(new MetricsApplicationEventListener(TrafficSource.WEBSOCKET, clientReleaseManager));
     provisioningEnvironment.jersey().register(new KeepAliveController(redisMessageAvailabilityManager));
     provisioningEnvironment.jersey().register(new TimestampResponseFilter());

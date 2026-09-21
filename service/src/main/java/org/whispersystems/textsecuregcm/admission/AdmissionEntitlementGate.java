@@ -86,6 +86,22 @@ public final class AdmissionEntitlementGate {
       membership.requireCurrent(expectedAci);
     }
 
+    /** Only for scheduling closure; this is not a local-state or credential check. */
+    public long remainingNanos() {
+      return membership.receipt.remainingNanos();
+    }
+
+    /**
+     * Renew the original credential-verified snapshot, never adopt a changed account/device or
+     * retain its password. The old lease must survive the complete renewal, including SQL waits.
+     */
+    public DeviceAuthorization renew(UUID expectedAci, byte expectedDeviceId) {
+      requireCurrent(expectedAci, expectedDeviceId);
+      Authorization next = membership.owner.authorizeSnapshot(membership.snapshot);
+      requireReceipt(membership.snapshot, membership.receipt);
+      return new DeviceAuthorization(next, deviceId, primaryDeviceLastSeen);
+    }
+
     /** Metadata from the credential-verified snapshot, not a separate cached account read. */
     public Instant primaryDeviceLastSeen() {
       return primaryDeviceLastSeen;

@@ -102,4 +102,18 @@ class WebSocketAccountAuthenticatorTest {
         () -> new WebSocketAccountAuthenticator(accountAuthenticator).authenticate(upgradeRequest));
     assertEquals(503, error.getResponse().getStatus());
   }
+
+  @Test
+  void pilotRejectsAnonymousUpgrade() {
+    assertThrows(InvalidCredentialsException.class,
+        () -> new WebSocketAccountAuthenticator(accountAuthenticator, true).authenticate(upgradeRequest));
+  }
+
+  @Test
+  void pilotRejectsLegacyPrincipalWithoutAdmissionProof() {
+    when(upgradeRequest.getHeader(eq(HttpHeaders.AUTHORIZATION)))
+        .thenReturn(HeaderUtils.basicAuthHeader(VALID_USER.toString(), VALID_PASSWORD));
+    assertThrows(InvalidCredentialsException.class,
+        () -> new WebSocketAccountAuthenticator(accountAuthenticator, true).authenticate(upgradeRequest));
+  }
 }

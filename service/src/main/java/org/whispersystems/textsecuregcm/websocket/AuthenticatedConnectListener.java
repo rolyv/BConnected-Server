@@ -130,6 +130,10 @@ public class AuthenticatedConnectListener implements WebSocketConnectListener {
 
     final boolean disableMessages = context.getClient().shouldDisableMessages();
 
+    // Pilot initialization may have waited on the account cache. The session manager publishes
+    // only renewed proofs for the original verified device; never start with an expired proof.
+    requirePilotEntitlement(context);
+
     final Optional<WebSocketConnection> maybeWebSocketConnection = disableMessages
             ? Optional.empty()
             : Optional.of(webSocketConnectionBuilder.buildWebSocketConnection(account, device, context.getClient()));
@@ -147,10 +151,20 @@ public class AuthenticatedConnectListener implements WebSocketConnectListener {
     });
 
     try {
+      requirePilotEntitlement(context);
       maybeWebSocketConnection.ifPresent(WebSocketConnection::start);
     } catch (final Exception e) {
       log.warn("Failed to initialize websocket", e);
       context.getClient().close(1011, "Unexpected error initializing connection");
+    }
+  }
+
+  private static void requirePilotEntitlement(WebSocketSessionContext context) {
+    var current = context.getAuthenticated(AuthenticatedDevice.class);
+    if (current.admissionAuthorization() != null) {
+      if (!context.getClient().isOpen())
+        throw new org.whispersystems.textsecuregcm.auth.AuthenticationUnavailableException();
+      current.requireCurrentEntitlement();
     }
   }
 

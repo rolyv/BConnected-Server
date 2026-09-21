@@ -18,7 +18,7 @@ public class WebSocketSessionContext {
 
   private final WebSocketClient webSocketClient;
 
-  private Object authenticated;
+  private volatile Object authenticated;
   private boolean closed;
 
   public WebSocketSessionContext(WebSocketClient webSocketClient) {
@@ -30,8 +30,9 @@ public class WebSocketSessionContext {
   }
 
   public <T> T getAuthenticated(Class<T> clazz) {
-    if (authenticated != null && clazz.equals(authenticated.getClass())) {
-      return clazz.cast(authenticated);
+    final Object current = authenticated;
+    if (current != null && clazz.equals(current.getClass())) {
+      return clazz.cast(current);
     }
 
     throw new IllegalArgumentException("No authenticated type for: " + clazz + ", we have: " + authenticated);
@@ -43,15 +44,16 @@ public class WebSocketSessionContext {
   }
 
   public void addWebsocketClosedListener(WebSocketEventListener listener) {
+    final boolean alreadyClosed;
     lock.lock();
     try {
-      if (!closed)
+      alreadyClosed = closed;
+      if (!alreadyClosed)
         this.closeListeners.add(listener);
-      else
-        listener.onWebSocketClose(this, 1000, "Closed");
     } finally {
       lock.unlock();
     }
+    if (alreadyClosed) listener.onWebSocketClose(this, 1000, "Closed");
   }
 
   public WebSocketClient getClient() {
@@ -59,16 +61,19 @@ public class WebSocketSessionContext {
   }
 
   public void notifyClosed(int statusCode, String reason) {
+    final List<WebSocketEventListener> listeners;
     lock.lock();
     try {
-      for (WebSocketEventListener listener : closeListeners) {
-        listener.onWebSocketClose(this, statusCode, reason);
-      }
-
+      if (closed) return;
       closed = true;
+      listeners = List.copyOf(closeListeners);
+      closeListeners.clear();
     } finally {
       lock.unlock();
     }
+    // Listeners may acquire their own lifecycle locks or register further listeners. Never hold
+    // the context lock while invoking them, and expose closed state before callbacks begin.
+    listeners.forEach(listener -> listener.onWebSocketClose(this, statusCode, reason));
   }
 
   public interface WebSocketEventListener {

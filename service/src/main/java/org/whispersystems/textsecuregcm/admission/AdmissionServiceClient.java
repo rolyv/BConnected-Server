@@ -189,6 +189,18 @@ public final class AdmissionServiceClient implements AutoCloseable {
       return elapsed >= 0 && elapsed < budgetNanos && clock.millis() < validUntil;
     }
 
+    /** Conservative scheduling budget; observing it never renews this receipt. */
+    public long remainingNanos() {
+      long elapsed = monotonic.getAsLong() - startNanos;
+      long now = clock.millis();
+      if (elapsed < 0 || elapsed >= budgetNanos || now >= validUntil) return 0;
+      // The receipt window is at most four seconds. Clamp before converting so unusual wall-clock
+      // movement cannot overflow the conversion or extend the monotonic deadline.
+      long wallMillis = Math.min(4_000, validUntil - now);
+      if (wallMillis <= 0) return 0;
+      return Math.min(budgetNanos - elapsed, TimeUnit.MILLISECONDS.toNanos(wallMillis));
+    }
+
     public void requireFresh() {
       if (!isFresh()) throw failure(Failure.EXPIRED);
     }

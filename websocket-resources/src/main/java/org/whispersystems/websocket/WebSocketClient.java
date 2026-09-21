@@ -82,6 +82,11 @@ public class WebSocketClient {
     return session.isOpen();
   }
 
+  /** Terminate a connection whose authorization deadline has already elapsed. */
+  public void disconnect() {
+    session.disconnect();
+  }
+
   public void close(final int code, final String message) {
     session.close(code, message, new Callback() {
       @Override

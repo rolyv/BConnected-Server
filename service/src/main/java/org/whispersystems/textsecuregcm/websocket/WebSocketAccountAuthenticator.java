@@ -21,9 +21,16 @@ import org.whispersystems.websocket.auth.WebSocketAuthenticator;
 public class WebSocketAccountAuthenticator implements WebSocketAuthenticator<AuthenticatedDevice> {
 
   private final AccountAuthenticator accountAuthenticator;
+  private final boolean requireAuthenticated;
 
   public WebSocketAccountAuthenticator(final AccountAuthenticator accountAuthenticator) {
+    this(accountAuthenticator, false);
+  }
+
+  public WebSocketAccountAuthenticator(final AccountAuthenticator accountAuthenticator,
+      final boolean requireAuthenticated) {
     this.accountAuthenticator = accountAuthenticator;
+    this.requireAuthenticated = requireAuthenticated;
   }
 
   @Override
@@ -33,6 +40,7 @@ public class WebSocketAccountAuthenticator implements WebSocketAuthenticator<Aut
     @Nullable final String authHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
 
     if (authHeader == null) {
+      if (requireAuthenticated) throw new InvalidCredentialsException();
       return Optional.empty();
     }
 
@@ -41,6 +49,11 @@ public class WebSocketAccountAuthenticator implements WebSocketAuthenticator<Aut
 
     final AuthenticatedDevice authenticatedDevice = accountAuthenticator.authenticate(credentials)
         .orElseThrow(InvalidCredentialsException::new);
+
+    if (requireAuthenticated && (authenticatedDevice.admissionAuthorization() == null
+        || authenticatedDevice.deviceId() != org.whispersystems.textsecuregcm.storage.Device.PRIMARY_ID)) {
+      throw new InvalidCredentialsException();
+    }
 
     return Optional.of(authenticatedDevice);
   }
