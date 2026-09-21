@@ -352,7 +352,6 @@ import org.whispersystems.textsecuregcm.workers.CheckDynamicConfigurationCommand
 import org.whispersystems.textsecuregcm.workers.ClearExpiredFoundationDbMessagesCommand;
 import org.whispersystems.textsecuregcm.workers.ClearIssuedReceiptRedemptionsCommand;
 import org.whispersystems.textsecuregcm.workers.ClearOrphanedFoundationDbQueuesCommand;
-import org.whispersystems.textsecuregcm.workers.CopyToS3Command;
 import org.whispersystems.textsecuregcm.workers.DeleteUserCommand;
 import org.whispersystems.textsecuregcm.workers.IdleDeviceNotificationSchedulerFactory;
 import org.whispersystems.textsecuregcm.workers.MessagePersisterServiceCommand;
@@ -426,7 +425,6 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     bootstrap.addCommand(new UnlinkDevicesWithIdlePrimaryCommand(Clock.systemUTC()));
     bootstrap.addCommand(new NotifyIdleDevicesCommand());
     bootstrap.addCommand(new ClearIssuedReceiptRedemptionsCommand());
-    bootstrap.addCommand(new CopyToS3Command());
     bootstrap.addCommand(new ClearExpiredFoundationDbMessagesCommand(Clock.systemUTC()));
     bootstrap.addCommand(new TrimOversizedFoundationDbMessageQueuesCommand());
     bootstrap.addCommand(new ClearOrphanedFoundationDbQueuesCommand());
