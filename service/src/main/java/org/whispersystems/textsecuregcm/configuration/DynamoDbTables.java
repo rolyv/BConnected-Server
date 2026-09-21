@@ -56,10 +56,6 @@ public class DynamoDbTables {
   private final Table deletedAccountsLock;
   private final TableWithExpiration donationPermits;
   private final IssuedReceiptsTableConfiguration issuedReceipts;
-  private final Table ecKeys;
-  private final Table ecSignedPreKeys;
-  private final Table kemLastResortKeys;
-  private final Table pagedKemKeys;
   private final TableWithExpiration onetimeDonations;
   private final Table phoneNumberIdentifiers;
   private final Table pushNotificationExperimentSamples;
@@ -79,10 +75,6 @@ public class DynamoDbTables {
       @JsonProperty("deletedAccountsLock") final Table deletedAccountsLock,
       @JsonProperty("donationPermits") final TableWithExpiration donationPermits,
       @JsonProperty("issuedReceipts") final IssuedReceiptsTableConfiguration issuedReceipts,
-      @JsonProperty("ecKeys") final Table ecKeys,
-      @JsonProperty("ecSignedPreKeys") final Table ecSignedPreKeys,
-      @JsonProperty("pqLastResortKeys") final Table kemLastResortKeys,
-      @JsonProperty("pagedPqKeys") final Table pagedKemKeys,
       @JsonProperty("onetimeDonations") final TableWithExpiration onetimeDonations,
       @JsonProperty("phoneNumberIdentifiers") final Table phoneNumberIdentifiers,
       @JsonProperty("pushNotificationExperimentSamples") final Table pushNotificationExperimentSamples,
@@ -101,10 +93,6 @@ public class DynamoDbTables {
     this.deletedAccountsLock = deletedAccountsLock;
     this.donationPermits = donationPermits;
     this.issuedReceipts = issuedReceipts;
-    this.ecKeys = ecKeys;
-    this.ecSignedPreKeys = ecSignedPreKeys;
-    this.pagedKemKeys = pagedKemKeys;
-    this.kemLastResortKeys = kemLastResortKeys;
     this.onetimeDonations = onetimeDonations;
     this.phoneNumberIdentifiers = phoneNumberIdentifiers;
     this.pushNotificationExperimentSamples = pushNotificationExperimentSamples;
@@ -167,30 +155,6 @@ public class DynamoDbTables {
   @Valid
   public IssuedReceiptsTableConfiguration getIssuedReceipts() {
     return issuedReceipts;
-  }
-
-  @NotNull
-  @Valid
-  public Table getEcKeys() {
-    return ecKeys;
-  }
-
-  @NotNull
-  @Valid
-  public Table getEcSignedPreKeys() {
-    return ecSignedPreKeys;
-  }
-
-  @NotNull
-  @Valid
-  public Table getPagedKemKeys() {
-    return pagedKemKeys;
-  }
-
-  @NotNull
-  @Valid
-  public Table getKemLastResortKeys() {
-    return kemLastResortKeys;
   }
 
   @NotNull

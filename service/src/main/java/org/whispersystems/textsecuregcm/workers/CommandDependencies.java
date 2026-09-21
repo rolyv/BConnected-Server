@@ -53,8 +53,8 @@ import org.whispersystems.textsecuregcm.push.PushNotificationManager;
 import org.whispersystems.textsecuregcm.push.PushNotificationScheduler;
 import org.whispersystems.textsecuregcm.push.PushNotificationSender;
 import org.whispersystems.textsecuregcm.push.RedisMessageAvailabilityManager;
-import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
+import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
 import org.whispersystems.textsecuregcm.storage.AccountLockManager;
@@ -70,7 +70,6 @@ import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.KeysManager;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
-import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
@@ -82,12 +81,8 @@ import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
 import org.whispersystems.textsecuregcm.storage.ProfileDataStore;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
 import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
-import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
-import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
-import org.whispersystems.textsecuregcm.storage.SingleUseECPreKeyStore;
-import org.whispersystems.textsecuregcm.storage.SingleUseKEMPreKeyStorage;
 import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
 import org.whispersystems.textsecuregcm.storage.Subscriptions;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FaultTolerantDatabase;
@@ -318,23 +313,8 @@ public record CommandDependencies(
     ProfileDataStore profileStore = postgres.profiles();
     ProfileAvatarStore profileAvatars = postgres.profileAvatars();
 
-    S3AsyncClient asyncKeysS3Client = postgres != null ? null : S3AsyncClient.builder()
-        .credentialsProvider(awsCredentialsProvider)
-        .region(Region.of(configuration.getPagedSingleUseKEMPreKeyStore().region()))
-        .build();
-    SingleUseKEMPreKeyStorage pagedSingleUseKEMPreKeyStore = postgres != null ? postgres.kemPreKeys() : new PagedSingleUseKEMPreKeyStore(
-        dynamoDbAsyncClient, asyncKeysS3Client,
-        configuration.getDynamoDbTables().getPagedKemKeys().getTableName(),
-        configuration.getPagedSingleUseKEMPreKeyStore().bucket());
-
     KeysManager keys = new KeysManager(
-        postgres != null ? postgres.ecPreKeys()
-            : new SingleUseECPreKeyStore(dynamoDbAsyncClient, configuration.getDynamoDbTables().getEcKeys().getTableName()),
-        pagedSingleUseKEMPreKeyStore,
-        postgres != null ? postgres.signedEcKeys() : new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient,
-            configuration.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
-        postgres != null ? postgres.signedKemKeys() : new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
-            configuration.getDynamoDbTables().getKemLastResortKeys().getTableName()));
+        postgres.ecPreKeys(), postgres.kemPreKeys(), postgres.signedEcKeys(), postgres.signedKemKeys());
     PersistentMessageStore messageStore = postgres.messages();
     FaultTolerantRedisClusterClient messagesCluster = configuration.getMessageCacheConfiguration()
         .getRedisClusterConfiguration().build("messages", redisClientResourcesBuilder);

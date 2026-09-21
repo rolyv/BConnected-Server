@@ -18,7 +18,6 @@ import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
-import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -42,34 +41,16 @@ import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
 import org.whispersystems.textsecuregcm.redis.RedisClusterExtension;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema.Tables;
 import org.whispersystems.textsecuregcm.tests.util.AccountsHelper;
 import org.whispersystems.textsecuregcm.tests.util.KeysHelper;
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 
 class AccountsManagerChangeNumberIntegrationTest {
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(
-      Tables.ACCOUNTS,
-      Tables.DELETED_ACCOUNTS,
-      Tables.DELETED_ACCOUNTS_LOCK,
-      Tables.NUMBERS,
-      Tables.PNI,
-      Tables.PNI_ASSIGNMENTS,
-      Tables.USERNAMES,
-      Tables.EC_KEYS,
-      Tables.PAGED_PQ_KEYS,
-      Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS,
-      Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS,
-      Tables.PHONE_NUMBER_RECOVERY_PASSWORDS,
-      Tables.REDEEMED_RECEIPTS);
+  static final PostgresAccountKeyTestExtension POSTGRES = new PostgresAccountKeyTestExtension();
 
   @RegisterExtension
   static final RedisClusterExtension CACHE_CLUSTER_EXTENSION = RedisClusterExtension.builder().build();
-
-  @RegisterExtension
-  static final S3LocalStackExtension S3_EXTENSION = new S3LocalStackExtension("testbucket");
 
   private KeysManager keysManager;
   private DisconnectionRequestManager disconnectionRequestManager;
@@ -81,35 +62,14 @@ class AccountsManagerChangeNumberIntegrationTest {
   void setup() throws InterruptedException {
 
     {
-      final DynamoDbAsyncClient dynamoDbAsyncClient = DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient();
-      keysManager = new KeysManager(
-          new SingleUseECPreKeyStore(dynamoDbAsyncClient, DynamoDbExtensionSchema.Tables.EC_KEYS.tableName()),
-          new PagedSingleUseKEMPreKeyStore(dynamoDbAsyncClient,
-              S3_EXTENSION.getS3Client(),
-              DynamoDbExtensionSchema.Tables.PAGED_PQ_KEYS.tableName(),
-              S3_EXTENSION.getBucketName()),
-          new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient,
-              DynamoDbExtensionSchema.Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS.tableName()),
-          new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
-              DynamoDbExtensionSchema.Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS.tableName()));
 
-      final Accounts accounts = new Accounts(
-          Clock.systemUTC(),
-          DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-          DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(),
-          new RedeemedReceiptsManager(Clock.systemUTC(), Tables.REDEEMED_RECEIPTS.tableName(),
-              DYNAMO_DB_EXTENSION.getDynamoDbClient()),
-          Tables.ACCOUNTS.tableName(),
-          Tables.NUMBERS.tableName(),
-          Tables.PNI_ASSIGNMENTS.tableName(),
-          Tables.USERNAMES.tableName(),
-          Tables.DELETED_ACCOUNTS.tableName(),
-          Tables.USED_LINK_DEVICE_TOKENS.tableName());
+      keysManager = POSTGRES.keys();
+
+      final AccountStore accounts = POSTGRES.accounts(Clock.systemUTC());
 
       executor = Executors.newSingleThreadScheduledExecutor();
 
-      final AccountLockManager accountLockManager = new AccountLockManager(DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-          Tables.DELETED_ACCOUNTS_LOCK.tableName());
+      final AccountLockManager accountLockManager = POSTGRES.locks();
 
       final SecureStorageClient secureStorageClient = mock(SecureStorageClient.class);
       when(secureStorageClient.deleteStoredData(any())).thenReturn(CompletableFuture.completedFuture(null));
@@ -119,8 +79,8 @@ class AccountsManagerChangeNumberIntegrationTest {
 
       disconnectionRequestManager = mock(DisconnectionRequestManager.class);
 
-      final PhoneNumberIdentifiers phoneNumberIdentifiers =
-          new PhoneNumberIdentifiers(DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(), Tables.PNI.tableName());
+      final PhoneNumberIdentifierStore phoneNumberIdentifiers =
+          POSTGRES.phoneNumbers();
 
       final MessagesManager messagesManager = mock(MessagesManager.class);
       when(messagesManager.clear(any())).thenReturn(CompletableFuture.completedFuture(null));
@@ -128,11 +88,8 @@ class AccountsManagerChangeNumberIntegrationTest {
       final ProfilesManager profilesManager = mock(ProfilesManager.class);
       when(profilesManager.deleteAll(any(), anyBoolean())).thenReturn(CompletableFuture.completedFuture(null));
 
-      final PhoneNumberRecoveryPasswords phoneNumberRecoveryPasswords =
-          new PhoneNumberRecoveryPasswords(DynamoDbExtensionSchema.Tables.PHONE_NUMBER_RECOVERY_PASSWORDS.tableName(),
-              Duration.ofDays(1),
-              DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-              Clock.systemUTC());
+      final PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords =
+          POSTGRES.recovery(Clock.systemUTC());
 
       final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager =
           new PhoneNumberRecoveryPasswordsManager(phoneNumberRecoveryPasswords);
@@ -198,16 +155,10 @@ class AccountsManagerChangeNumberIntegrationTest {
   }
 
   @Test
-  void testChangeNumberAccountHasNoPhoneNumber() {
-    final Account accountWithoutPhoneNumber = new AccountsHelper.AccountBuilder(accountsManager).e164(null).build();
-    final ECKeyPair pniIdentityKeyPair = ECKeyPair.generate();
-
-    assertThrows(IllegalArgumentException.class, () -> accountsManager.changeNumber(accountWithoutPhoneNumber.getAccountIdentifier(),
-        "+18005551111",
-        new IdentityKey(pniIdentityKeyPair.getPublicKey()),
-        Map.of(Device.PRIMARY_ID, KeysHelper.signedECPreKey(1, pniIdentityKeyPair)),
-        Map.of(Device.PRIMARY_ID, KeysHelper.signedKEMPreKey(2, pniIdentityKeyPair)),
-        Map.of(Device.PRIMARY_ID, 1)));
+  void numberlessAccountCreationIsRejectedWithoutStoredAccountOrKeys() throws Exception {
+    assertThrows(UnsupportedOperationException.class,
+        () -> new AccountsHelper.AccountBuilder(accountsManager).e164(null).build());
+    assertEquals(0, POSTGRES.accountAndKeyCount());
   }
 
   @Test

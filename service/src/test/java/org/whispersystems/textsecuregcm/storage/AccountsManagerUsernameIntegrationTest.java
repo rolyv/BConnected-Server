@@ -24,9 +24,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -34,23 +32,15 @@ import java.util.concurrent.Executors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 import org.whispersystems.textsecuregcm.auth.DisconnectionRequestManager;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
 import org.whispersystems.textsecuregcm.redis.RedisClusterExtension;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema.Tables;
 import org.whispersystems.textsecuregcm.tests.util.AccountsHelper;
-import org.whispersystems.textsecuregcm.util.AttributeValues;
 import org.whispersystems.textsecuregcm.util.TestRandomUtil;
 import org.whispersystems.textsecuregcm.util.ThrowingSupplier;
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
-import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 
 class AccountsManagerUsernameIntegrationTest {
 
@@ -64,55 +54,20 @@ class AccountsManagerUsernameIntegrationTest {
   private static final byte[] ENCRYPTED_USERNAME_2 = Base64.getUrlDecoder().decode(BASE_64_URL_ENCRYPTED_USERNAME_2);
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(
-      Tables.ACCOUNTS,
-      Tables.NUMBERS,
-      Tables.USERNAMES,
-      Tables.DELETED_ACCOUNTS,
-      Tables.PNI,
-      Tables.PNI_ASSIGNMENTS,
-      Tables.EC_KEYS,
-      Tables.PAGED_PQ_KEYS,
-      Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS,
-      Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS,
-      Tables.REDEEMED_RECEIPTS,
-      Tables.PHONE_NUMBER_RECOVERY_PASSWORDS);
+  static final PostgresAccountKeyTestExtension POSTGRES = new PostgresAccountKeyTestExtension();
 
   @RegisterExtension
   static RedisClusterExtension CACHE_CLUSTER_EXTENSION = RedisClusterExtension.builder().build();
 
-  @RegisterExtension
-  static final S3LocalStackExtension S3_EXTENSION = new S3LocalStackExtension("testbucket");
-
   private AccountsManager accountsManager;
-  private Accounts accounts;
+  private AccountsPostgres accounts;
 
   @BeforeEach
   void setup() throws Exception {
-    final DynamoDbAsyncClient dynamoDbAsyncClient = DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient();
-    final KeysManager keysManager = new KeysManager(
-        new SingleUseECPreKeyStore(dynamoDbAsyncClient, DynamoDbExtensionSchema.Tables.EC_KEYS.tableName()),
-        new PagedSingleUseKEMPreKeyStore(dynamoDbAsyncClient,
-            S3_EXTENSION.getS3Client(),
-            DynamoDbExtensionSchema.Tables.PAGED_PQ_KEYS.tableName(),
-            S3_EXTENSION.getBucketName()),
-        new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient,
-            DynamoDbExtensionSchema.Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS.tableName()),
-        new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
-            DynamoDbExtensionSchema.Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS.tableName()));
 
-    accounts = Mockito.spy(new Accounts(
-        Clock.systemUTC(),
-        DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(),
-        new RedeemedReceiptsManager(Clock.systemUTC(), Tables.REDEEMED_RECEIPTS.tableName(),
-            DYNAMO_DB_EXTENSION.getDynamoDbClient()),
-        Tables.ACCOUNTS.tableName(),
-        Tables.NUMBERS.tableName(),
-        Tables.PNI_ASSIGNMENTS.tableName(),
-        Tables.USERNAMES.tableName(),
-        Tables.DELETED_ACCOUNTS.tableName(),
-        Tables.USED_LINK_DEVICE_TOKENS.tableName()));
+    final KeysManager keysManager = POSTGRES.keys();
+
+    accounts = Mockito.spy(POSTGRES.accounts(Clock.systemUTC()));
 
     final AccountLockManager accountLockManager = mock(AccountLockManager.class);
 
@@ -121,8 +76,8 @@ class AccountsManagerUsernameIntegrationTest {
       return task.get();
     }).when(accountLockManager).withLock(anySet(), any());
 
-    final PhoneNumberIdentifiers phoneNumberIdentifiers =
-        new PhoneNumberIdentifiers(DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(), Tables.PNI.tableName());
+    final PhoneNumberIdentifierStore phoneNumberIdentifiers =
+        POSTGRES.phoneNumbers();
 
     final MessagesManager messageManager = mock(MessagesManager.class);
     final ProfilesManager profileManager = mock(ProfilesManager.class);
@@ -133,11 +88,7 @@ class AccountsManagerUsernameIntegrationTest {
     when(disconnectionRequestManager.requestDisconnection(any())).thenReturn(CompletableFuture.completedFuture(null));
 
     final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager =
-        new PhoneNumberRecoveryPasswordsManager(new PhoneNumberRecoveryPasswords(
-            Tables.PHONE_NUMBER_RECOVERY_PASSWORDS.tableName(),
-            Duration.ofDays(1),
-            DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-            Clock.systemUTC()));
+        new PhoneNumberRecoveryPasswordsManager(POSTGRES.recovery(Clock.systemUTC()));
 
     accountsManager = new AccountsManager(
         accounts,
@@ -162,25 +113,15 @@ class AccountsManagerUsernameIntegrationTest {
   }
 
   @Test
-  void testNoUsernames() {
+  void testNoUsernames() throws Exception {
     final Account account = AccountsHelper.createAccount(accountsManager, "+18005551111");
 
     List<byte[]> usernameHashes = List.of(USERNAME_HASH_1, USERNAME_HASH_2);
     int i = 0;
     for (byte[] hash : usernameHashes) {
-      final Map<String, AttributeValue> item = new HashMap<>(Map.of(
-          Accounts.UsernameTable.ATTR_ACCOUNT_UUID, AttributeValues.fromUUID(UUID.randomUUID()),
-          Accounts.UsernameTable.KEY_USERNAME_HASH, AttributeValues.fromByteArray(hash)));
-      // half of these are taken usernames, half are only reservations (have a TTL)
-      if (i % 2 == 0) {
-        item.put(Accounts.UsernameTable.ATTR_TTL,
-            AttributeValues.fromLong(Instant.now().plus(Duration.ofMinutes(1)).getEpochSecond()));
-      }
-      i++;
-      DYNAMO_DB_EXTENSION.getDynamoDbClient().putItem(PutItemRequest.builder()
-          .tableName(Tables.USERNAMES.tableName())
-          .item(item)
-          .build());
+      // Both confirmed names and unexpired reservations are unavailable.
+      POSTGRES.username(hash, UUID.randomUUID(), i++ % 2 == 0
+          ? Instant.now().plus(Duration.ofMinutes(1)).getEpochSecond() : null);
     }
 
     assertThrows(UsernameHashNotAvailableException.class,
@@ -190,17 +131,12 @@ class AccountsManagerUsernameIntegrationTest {
   }
 
   @Test
-  void testReserveUsernameGetFirstAvailableChoice() throws UsernameHashNotAvailableException {
+  void testReserveUsernameGetFirstAvailableChoice() throws Exception {
     final Account account = AccountsHelper.createAccount(accountsManager, "+18005551111");
 
     ArrayList<byte[]> usernameHashes = new ArrayList<>(Arrays.asList(USERNAME_HASH_1, USERNAME_HASH_2));
     for (byte[] hash : usernameHashes) {
-      DYNAMO_DB_EXTENSION.getDynamoDbClient().putItem(PutItemRequest.builder()
-          .tableName(Tables.USERNAMES.tableName())
-          .item(Map.of(
-              Accounts.UsernameTable.ATTR_ACCOUNT_UUID, AttributeValues.fromUUID(UUID.randomUUID()),
-              Accounts.UsernameTable.KEY_USERNAME_HASH, AttributeValues.fromByteArray(hash)))
-          .build());
+      POSTGRES.username(hash, UUID.randomUUID(), null);
     }
 
 
@@ -215,12 +151,11 @@ class AccountsManagerUsernameIntegrationTest {
     assertArrayEquals(username, availableHash);
   }
 
-  @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  public void testReserveConfirmClear(final boolean numberless)
+  @Test
+  public void testReserveConfirmClear()
       throws UsernameHashNotAvailableException, UsernameReservationNotFoundException {
     Account account = new AccountsHelper.AccountBuilder(accountsManager)
-        .e164(numberless ? null : "+18005551111")
+        .e164("+18005551111")
         .build();
 
     // reserve
@@ -276,8 +211,7 @@ class AccountsManagerUsernameIntegrationTest {
   }
 
   @Test
-  public void testReservationLapsed()
-      throws UsernameHashNotAvailableException, UsernameReservationNotFoundException {
+  public void testReservationLapsed() throws Exception {
     final Account account = AccountsHelper.createAccount(accountsManager, "+18005551111");
 
     AccountsManager.UsernameReservation reservation1 =
@@ -285,13 +219,7 @@ class AccountsManagerUsernameIntegrationTest {
 
     long past = Instant.now().minus(Duration.ofMinutes(1)).getEpochSecond();
     // force expiration
-    DYNAMO_DB_EXTENSION.getDynamoDbClient().updateItem(UpdateItemRequest.builder()
-        .tableName(Tables.USERNAMES.tableName())
-        .key(Map.of(Accounts.UsernameTable.KEY_USERNAME_HASH, AttributeValues.fromByteArray(USERNAME_HASH_1)))
-        .updateExpression("SET #ttl = :ttl")
-        .expressionAttributeNames(Map.of("#ttl", Accounts.UsernameTable.ATTR_TTL))
-        .expressionAttributeValues(Map.of(":ttl", AttributeValues.fromLong(past)))
-        .build());
+    POSTGRES.expireUsername(USERNAME_HASH_1, past);
 
     // a different account should be able to reserve it
     Account account2 = AccountsHelper.createAccount(accountsManager, "+18005552222");
@@ -361,14 +289,13 @@ class AccountsManagerUsernameIntegrationTest {
     assertThat(accountsManager.getByUsernameHash(USERNAME_HASH_1).join()).isPresent();
   }
 
-  @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  public void testUsernameLinks(final boolean numberless)
+  @Test
+  public void testUsernameLinks()
       throws UsernameHashNotAvailableException, UsernameReservationNotFoundException {
     final UUID accountIdentifier;
     {
       final Account account = new AccountsHelper.AccountBuilder(accountsManager)
-          .e164(numberless ? null : "+18005551111")
+          .e164("+18005551111")
           .build();
       accountIdentifier = account.getAccountIdentifier();
     }

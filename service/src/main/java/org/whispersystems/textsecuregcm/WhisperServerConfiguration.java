@@ -58,9 +58,9 @@ import org.whispersystems.textsecuregcm.configuration.LoginPurchaseConfiguration
 import org.whispersystems.textsecuregcm.configuration.MessageByteLimitCardinalityEstimatorConfiguration;
 import org.whispersystems.textsecuregcm.configuration.MessageCacheConfiguration;
 import org.whispersystems.textsecuregcm.configuration.MonitoredFileObjectConfiguration;
+import org.whispersystems.textsecuregcm.configuration.ObjectMonitorFactory;
 import org.whispersystems.textsecuregcm.configuration.OneTimeDonationConfiguration;
 import org.whispersystems.textsecuregcm.configuration.OpenTelemetryConfiguration;
-import org.whispersystems.textsecuregcm.configuration.PagedSingleUseKEMPreKeyStoreConfiguration;
 import org.whispersystems.textsecuregcm.configuration.PaymentsServiceConfiguration;
 import org.whispersystems.textsecuregcm.configuration.PilotIntegrationsConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RegistrationServiceClientFactory;
@@ -68,7 +68,6 @@ import org.whispersystems.textsecuregcm.configuration.RemoteConfigConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ReportMessageConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RetryConfiguration;
 import org.whispersystems.textsecuregcm.configuration.RuntimeMode;
-import org.whispersystems.textsecuregcm.configuration.ObjectMonitorFactory;
 import org.whispersystems.textsecuregcm.configuration.SecureStorageServiceConfiguration;
 import org.whispersystems.textsecuregcm.configuration.SecureValueRecoveryConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ShortCodeExpanderConfiguration;
@@ -171,7 +170,7 @@ public class WhisperServerConfiguration extends Configuration {
     } else {
       final Object[] legacy = {stripe, braintree, googlePlayBilling, appleAppStore, appleDeviceCheck, deviceCheck,
           dynamoDbClient, dynamoDbTables, cdn, cdn3StorageManager, svrb, paymentsService, subscription, oneTimeDonations,
-          loginPurchase, pagedSingleUseKEMPreKeyStore, turn, tus, callQualitySurvey, foundationDbMessages,
+          loginPurchase, turn, tus, callQualitySurvey, foundationDbMessages,
           callingZkConfig, callingZkConfigPreV101, keyTransparencyService, hlrLookup};
       if (java.util.Arrays.stream(legacy).anyMatch(java.util.Objects::isNull))
         errors.add("LEGACY runtime requires billing, backup, calling, CDN, DynamoDB, FoundationDB and Key Transparency configuration");
@@ -370,10 +369,6 @@ public class WhisperServerConfiguration extends Configuration {
   @Valid
   @JsonProperty
   private LoginPurchaseConfiguration loginPurchase;
-
-  @Valid
-  @JsonProperty
-  private PagedSingleUseKEMPreKeyStoreConfiguration pagedSingleUseKEMPreKeyStore;
 
   @Valid
   @NotNull
@@ -647,10 +642,6 @@ public class WhisperServerConfiguration extends Configuration {
 
   public LoginPurchaseConfiguration getLoginPurchase() {
     return loginPurchase;
-  }
-
-  public PagedSingleUseKEMPreKeyStoreConfiguration getPagedSingleUseKEMPreKeyStore() {
-    return pagedSingleUseKEMPreKeyStore;
   }
 
   public ReportMessageConfiguration getReportMessageConfiguration() {

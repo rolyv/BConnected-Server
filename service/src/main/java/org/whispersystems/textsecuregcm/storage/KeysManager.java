@@ -23,7 +23,6 @@ import org.whispersystems.textsecuregcm.metrics.MetricsUtil;
 import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
 import org.whispersystems.textsecuregcm.util.Futures;
 import org.whispersystems.textsecuregcm.util.Optionals;
-import reactor.core.publisher.Flux;
 
 public class KeysManager {
   // KeysController for backwards compatibility
@@ -186,34 +185,6 @@ public class KeysManager {
         ecPreKeys.delete(accountUuid, deviceId),
         pagedPqPreKeys.delete(accountUuid, deviceId)
     );
-  }
-
-  /**
-   * List all the current remotely stored prekey pages across all devices. Pages that are no longer in use can be
-   * removed with {@link #pruneDeadPage}
-   *
-   * @param lookupConcurrency the number of concurrent lookup operations to perform when populating list results
-   * @return All stored prekey pages
-   */
-  public boolean hasPagedKEMStorage() { return pagedPqPreKeys instanceof PagedSingleUseKEMPreKeyStore; }
-
-  public Flux<DeviceKEMPreKeyPages> listStoredKEMPreKeyPages(int lookupConcurrency) {
-    if (pagedPqPreKeys instanceof PagedSingleUseKEMPreKeyStore pages) return pages.listStoredPages(lookupConcurrency);
-    throw new IllegalStateException("The selected KEM store has no object-storage pages");
-  }
-
-  /**
-   * Remove a prekey page that is no longer in use. A page should only be removed if it is not the active page and
-   * it has no chance of being updated to be.
-   *
-   * @param identifier The owner of the dead page
-   * @param deviceId The device of the dead page
-   * @param pageId The dead page to remove from storage
-   * @return A future that completes when the page has been removed
-   */
-  public CompletableFuture<Void> pruneDeadPage(final UUID identifier, final byte deviceId, final UUID pageId) {
-    if (pagedPqPreKeys instanceof PagedSingleUseKEMPreKeyStore pages) return pages.deleteBundleFromS3(identifier, deviceId, pageId);
-    throw new IllegalStateException("The selected KEM store has no object-storage pages");
   }
 
   public record DevicePreKeys(

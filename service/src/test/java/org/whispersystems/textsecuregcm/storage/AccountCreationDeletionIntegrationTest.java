@@ -61,31 +61,14 @@ import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
 import org.whispersystems.textsecuregcm.tests.util.KeysHelper;
 import org.whispersystems.textsecuregcm.util.TestRandomUtil;
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 
 public class AccountCreationDeletionIntegrationTest {
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(
-      DynamoDbExtensionSchema.Tables.ACCOUNTS,
-      DynamoDbExtensionSchema.Tables.DELETED_ACCOUNTS,
-      DynamoDbExtensionSchema.Tables.DELETED_ACCOUNTS_LOCK,
-      DynamoDbExtensionSchema.Tables.NUMBERS,
-      DynamoDbExtensionSchema.Tables.PNI,
-      DynamoDbExtensionSchema.Tables.PNI_ASSIGNMENTS,
-      DynamoDbExtensionSchema.Tables.USERNAMES,
-      DynamoDbExtensionSchema.Tables.EC_KEYS,
-      DynamoDbExtensionSchema.Tables.PAGED_PQ_KEYS,
-      DynamoDbExtensionSchema.Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS,
-      DynamoDbExtensionSchema.Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS,
-      DynamoDbExtensionSchema.Tables.PHONE_NUMBER_RECOVERY_PASSWORDS,
-      DynamoDbExtensionSchema.Tables.REDEEMED_RECEIPTS);
+  static final PostgresAccountKeyTestExtension POSTGRES = new PostgresAccountKeyTestExtension();
 
   @RegisterExtension
   static final RedisClusterExtension CACHE_CLUSTER_EXTENSION = RedisClusterExtension.builder().build();
-
-  @RegisterExtension
-  static final S3LocalStackExtension S3_EXTENSION = new S3LocalStackExtension("testbucket");
 
   private static final Clock CLOCK = Clock.fixed(Instant.now(), ZoneId.systemDefault());
 
@@ -100,35 +83,14 @@ public class AccountCreationDeletionIntegrationTest {
 
   @BeforeEach
   void setUp() {
-    final DynamoDbAsyncClient dynamoDbAsyncClient = DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient();
-    keysManager = new KeysManager(
-        new SingleUseECPreKeyStore(dynamoDbAsyncClient, DynamoDbExtensionSchema.Tables.EC_KEYS.tableName()),
-        new PagedSingleUseKEMPreKeyStore(dynamoDbAsyncClient,
-            S3_EXTENSION.getS3Client(),
-            DynamoDbExtensionSchema.Tables.PAGED_PQ_KEYS.tableName(),
-            S3_EXTENSION.getBucketName()),
-        new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient,
-            DynamoDbExtensionSchema.Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS.tableName()),
-        new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
-            DynamoDbExtensionSchema.Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS.tableName()));
 
-    final Accounts accounts = new Accounts(
-        CLOCK,
-        DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(),
-        new RedeemedReceiptsManager(CLOCK, DynamoDbExtensionSchema.Tables.REDEEMED_RECEIPTS.tableName(),
-            DYNAMO_DB_EXTENSION.getDynamoDbClient()),
-        DynamoDbExtensionSchema.Tables.ACCOUNTS.tableName(),
-        DynamoDbExtensionSchema.Tables.NUMBERS.tableName(),
-        DynamoDbExtensionSchema.Tables.PNI_ASSIGNMENTS.tableName(),
-        DynamoDbExtensionSchema.Tables.USERNAMES.tableName(),
-        DynamoDbExtensionSchema.Tables.DELETED_ACCOUNTS.tableName(),
-        DynamoDbExtensionSchema.Tables.USED_LINK_DEVICE_TOKENS.tableName());
+    keysManager = POSTGRES.keys();
+
+    final AccountStore accounts = POSTGRES.accounts(CLOCK);
 
     executor = Executors.newSingleThreadScheduledExecutor();
 
-    final AccountLockManager accountLockManager = new AccountLockManager(DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        DynamoDbExtensionSchema.Tables.DELETED_ACCOUNTS_LOCK.tableName());
+    final AccountLockManager accountLockManager = POSTGRES.locks();
 
     final SecureStorageClient secureStorageClient = mock(SecureStorageClient.class);
     when(secureStorageClient.deleteStoredData(any())).thenReturn(CompletableFuture.completedFuture(null));
@@ -136,9 +98,8 @@ public class AccountCreationDeletionIntegrationTest {
     final SecureValueRecoveryClient svr2Client = mock(SecureValueRecoveryClient.class);
     when(svr2Client.removeData(any(UUID.class))).thenReturn(CompletableFuture.completedFuture(null));
 
-    final PhoneNumberIdentifiers phoneNumberIdentifiers =
-        new PhoneNumberIdentifiers(DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(),
-            DynamoDbExtensionSchema.Tables.PNI.tableName());
+    final PhoneNumberIdentifierStore phoneNumberIdentifiers =
+        POSTGRES.phoneNumbers();
 
     final MessagesManager messagesManager = mock(MessagesManager.class);
     when(messagesManager.clear(any())).thenReturn(CompletableFuture.completedFuture(null));
@@ -146,11 +107,8 @@ public class AccountCreationDeletionIntegrationTest {
     final ProfilesManager profilesManager = mock(ProfilesManager.class);
     when(profilesManager.deleteAll(any(), anyBoolean())).thenReturn(CompletableFuture.completedFuture(null));
 
-    final PhoneNumberRecoveryPasswords phoneNumberRecoveryPasswords =
-        new PhoneNumberRecoveryPasswords(DynamoDbExtensionSchema.Tables.PHONE_NUMBER_RECOVERY_PASSWORDS.tableName(),
-            Duration.ofDays(1),
-            DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-            CLOCK);
+    final PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords =
+        POSTGRES.recovery(CLOCK);
 
     phoneNumberRecoveryPasswordsManager = new PhoneNumberRecoveryPasswordsManager(phoneNumberRecoveryPasswords);
 
@@ -276,8 +234,7 @@ public class AccountCreationDeletionIntegrationTest {
 
   @ParameterizedTest
   @MethodSource("deliveryChannels")
-  void createAccountWithoutNumber(final DeliveryChannels deliveryChannels)
-      throws InvalidInputException, VerificationFailedException, ReceiptAlreadyRedeemedException {
+  void numberlessCreationIsRejectedWithoutStoredAccountOrKeys(final DeliveryChannels deliveryChannels) throws Exception {
     final String password = RandomStringUtils.secure().nextAlphanumeric(16);
     final String signalAgent = RandomStringUtils.secure().nextAlphabetic(3);
     final int registrationId = ThreadLocalRandom.current().nextInt(Device.MAX_REGISTRATION_ID);
@@ -308,7 +265,7 @@ public class AccountCreationDeletionIntegrationTest {
         ? Optional.of(new GcmRegistrationId(deliveryChannels.fcmToken()))
         : Optional.empty();
 
-    final Account account = accountsManager.create(accountAttributes,
+    assertThrows(UnsupportedOperationException.class, () -> accountsManager.create(accountAttributes,
         new IdentityKey(aciKeyPair.getPublicKey()),
         receiptPresentation(CLOCK.instant().plus(Duration.ofDays(30)), 1),
         new DeviceSpec(
@@ -321,33 +278,8 @@ public class AccountCreationDeletionIntegrationTest {
             deliveryChannels.fetchesMessages(),
             maybeApnRegistrationId,
             maybeGcmRegistrationId),
-        null);
-
-    assertExpectedStoredAccount(account,
-        Optional.empty(),
-        password,
-        signalAgent,
-        deliveryChannels,
-        registrationId,
-        Optional.empty(),
-        deviceName,
-        false,
-        deviceCapabilities,
-        Collections.emptyList(),
-        maybeApnRegistrationId,
-        maybeGcmRegistrationId,
-        Optional.empty(),
-        aciSignedPreKey,
-        Optional.empty(),
-        aciPqLastResortPreKey,
-        Optional.empty());
-
-    assertEquals(Optional.of(aciSignedPreKey), keysManager.getEcSignedPreKey(account.getAccountIdentifier(), Device.PRIMARY_ID).join());
-    assertEquals(Optional.of(aciPqLastResortPreKey), keysManager.getLastResort(account.getAccountIdentifier(), Device.PRIMARY_ID).join());
-
-    assertTrue(account.getNumber().isEmpty());
-    assertTrue(account.getPhoneNumberIdentifier().isEmpty());
-    assertTrue(account.getPhoneNumberIdentityKey().isEmpty());
+        null));
+    assertEquals(0, POSTGRES.accountAndKeyCount());
   }
 
   private static List<DeliveryChannels> deliveryChannels() {
@@ -491,9 +423,8 @@ public class AccountCreationDeletionIntegrationTest {
     assertFalse(phoneNumberRecoveryPasswordsManager.verify(reregisteredAccount.getPhoneNumberIdentifier().orElseThrow(), originalRecoveryPassword));
   }
 
-  @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void reclaimAccount(final boolean hasE164)
+  @Test
+  void reclaimAccount()
       throws InvalidInputException, VerificationFailedException, ReceiptAlreadyRedeemedException {
     final String number = PhoneNumberUtil.getInstance().format(
         PhoneNumberUtil.getInstance().getExampleNumber("US"),
@@ -517,10 +448,7 @@ public class AccountCreationDeletionIntegrationTest {
       final KEMSignedPreKey aciPqLastResortPreKey = KeysHelper.signedKEMPreKey(3, aciKeyPair);
       final KEMSignedPreKey pniPqLastResortPreKey = KeysHelper.signedKEMPreKey(4, pniKeyPair);
 
-      final ReceiptSerial receiptSerial = new ReceiptSerial(TestRandomUtil.nextBytes(ReceiptSerial.SIZE));
-
-      final Account existingAccount = hasE164
-          ? accountsManager.create(number,
+      final Account existingAccount = accountsManager.create(number,
           new AccountAttributes(true, 1, 2, "name".getBytes(StandardCharsets.UTF_8), "registration-lock", false, Set.of(),
               originalRecoveryPassword),
           new IdentityKey(aciKeyPair.getPublicKey()),
@@ -534,21 +462,7 @@ public class AccountCreationDeletionIntegrationTest {
               true,
               Optional.empty(),
               Optional.empty()),
-          null)
-          : accountsManager.create(new AccountAttributes(true, 1, null, "name".getBytes(StandardCharsets.UTF_8), null, false, Set.of(),
-              originalRecoveryPassword),
-              new IdentityKey(aciKeyPair.getPublicKey()),
-              receiptPresentation(receiptSerial, CLOCK.instant().plus(Duration.ofDays(30)), 1),
-              new DeviceSpec(null,
-                  "password?",
-                  "OWI",
-                  Set.of(),
-                  new DeviceIdentityInfo(1, aciSignedPreKey, aciPqLastResortPreKey),
-                  Optional.empty(),
-                  true,
-                  Optional.empty(),
-                  Optional.empty()),
-              null);
+          null);
 
       accountsManager.update(existingAccount, a -> a.setBadges(CLOCK, existingAccountBadges));
 
@@ -574,7 +488,7 @@ public class AccountCreationDeletionIntegrationTest {
         "OWI",
         Set.of(),
         new DeviceIdentityInfo(aciRegistrationId, aciSignedPreKey, aciPqLastResortPreKey),
-        hasE164 ? Optional.of(new DeviceIdentityInfo(pniRegistrationId, pniSignedPreKey, pniPqLastResortPreKey)) : Optional.empty(),
+        Optional.of(new DeviceIdentityInfo(pniRegistrationId, pniSignedPreKey, pniPqLastResortPreKey)),
         true,
         Optional.empty(),
         Optional.empty());
@@ -582,10 +496,10 @@ public class AccountCreationDeletionIntegrationTest {
     final Account existingAccount = accountsManager.getByAccountIdentifier(existingAccountIdentifier).orElseThrow();
 
     final Account reclaimedAccount = accountsManager.recover(existingAccount,
-        new AccountAttributes(true, aciRegistrationId, hasE164 ? pniRegistrationId : null, "name".getBytes(StandardCharsets.UTF_8), null, hasE164, Set.of(),
+        new AccountAttributes(true, aciRegistrationId, pniRegistrationId, "name".getBytes(StandardCharsets.UTF_8), null, true, Set.of(),
             updatedRecoveryPassword),
         aciIdentityKey,
-        hasE164 ? Optional.of(pniIdentityKey) : Optional.empty(),
+        Optional.of(pniIdentityKey),
         primaryDeviceSpec,
         null);
 
@@ -593,13 +507,13 @@ public class AccountCreationDeletionIntegrationTest {
     assertEquals(existingAccount.getNumber(), reclaimedAccount.getNumber());
     assertEquals(existingAccount.getPhoneNumberIdentifier(), reclaimedAccount.getPhoneNumberIdentifier());
     assertEquals(aciIdentityKey, reclaimedAccount.getAccountIdentityKey());
-    assertEquals(hasE164 ? Optional.of(pniIdentityKey) : Optional.empty(), reclaimedAccount.getPhoneNumberIdentityKey());
+    assertEquals(Optional.of(pniIdentityKey), reclaimedAccount.getPhoneNumberIdentityKey());
 
     final Device reclaimedPrimaryDevice = reclaimedAccount.getPrimaryDevice();
     assertArrayEquals(primaryDeviceSpec.deviceNameCiphertext(), reclaimedPrimaryDevice.getName());
     assertEquals(primaryDeviceSpec.signalAgent(), reclaimedPrimaryDevice.getUserAgent());
     assertEquals(aciRegistrationId, reclaimedPrimaryDevice.getAccountRegistrationId());
-    assertEquals(hasE164 ? Optional.of(pniRegistrationId) : Optional.empty(), reclaimedPrimaryDevice.getPhoneNumberIdentityRegistrationId());
+    assertEquals(Optional.of(pniRegistrationId), reclaimedPrimaryDevice.getPhoneNumberIdentityRegistrationId());
     assertTrue(reclaimedPrimaryDevice.getFetchesMessages());
     assertTrue(StringUtils.isBlank(reclaimedPrimaryDevice.getApnId()));
     assertTrue(StringUtils.isBlank(reclaimedPrimaryDevice.getGcmId()));
@@ -608,28 +522,27 @@ public class AccountCreationDeletionIntegrationTest {
     assertTrue(reclaimedPrimaryDevice.getAuthTokenHash().verify(primaryDeviceSpec.password()));
 
     assertExpectedStoredAccount(reclaimedAccount,
-        hasE164 ? Optional.of(number) : Optional.empty(),
+        Optional.of(number),
         primaryDeviceSpec.password(),
         primaryDeviceSpec.signalAgent(),
         new DeliveryChannels(true, null, null),
         aciRegistrationId,
-        hasE164 ? Optional.of(pniRegistrationId) : Optional.empty(),
+        Optional.of(pniRegistrationId),
         primaryDeviceSpec.deviceNameCiphertext(),
-        hasE164,
+        true,
         Collections.emptySet(),
         existingAccountBadges,
         Optional.empty(),
         Optional.empty(),
         Optional.empty(),
         aciSignedPreKey,
-        hasE164 ? Optional.of(pniSignedPreKey) : Optional.empty(),
+        Optional.of(pniSignedPreKey),
         aciPqLastResortPreKey,
-        hasE164 ? Optional.of(pniPqLastResortPreKey) : Optional.empty());
+        Optional.of(pniPqLastResortPreKey));
   }
 
-  @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void deleteAccount(final boolean hasE164)
+  @Test
+  void deleteAccount()
       throws InvalidInputException, VerificationFailedException, ReceiptAlreadyRedeemedException {
     final String number = PhoneNumberUtil.getInstance().format(
         PhoneNumberUtil.getInstance().getExampleNumber("US"),
@@ -662,41 +575,23 @@ public class AccountCreationDeletionIntegrationTest {
     final KEMSignedPreKey aciPqLastResortPreKey = KeysHelper.signedKEMPreKey(3, aciKeyPair);
     final KEMSignedPreKey pniPqLastResortPreKey = KeysHelper.signedKEMPreKey(4, pniKeyPair);
 
-    final Account account;
-    if (hasE164) {
-      account = accountsManager.create(number,
-          accountAttributes,
-          new IdentityKey(aciKeyPair.getPublicKey()),
-          new IdentityKey(pniKeyPair.getPublicKey()),
-          new DeviceSpec(
-              deviceName,
-              password,
-              signalAgent,
-              deviceCapabilities,
-              new DeviceIdentityInfo(registrationId, aciSignedPreKey, aciPqLastResortPreKey),
-              Optional.of(new DeviceIdentityInfo(pniRegistrationId, pniSignedPreKey, pniPqLastResortPreKey)),
-              true,
-              Optional.empty(),
-              Optional.empty()),
-          null);
-      assertTrue(phoneNumberRecoveryPasswordsManager.verify(account.getPhoneNumberIdentifier().orElseThrow(),
-          accountAttributes.recoveryPassword().orElseThrow()));
-    } else {
-      account = accountsManager.create(accountAttributes,
-          new IdentityKey(aciKeyPair.getPublicKey()),
-          receiptPresentation(CLOCK.instant().plus(Duration.ofDays(30)), 1),
-          new DeviceSpec(
-              deviceName,
-              password,
-              signalAgent,
-              deviceCapabilities,
-              new DeviceIdentityInfo(registrationId, aciSignedPreKey, aciPqLastResortPreKey),
-              Optional.empty(),
-              true,
-              Optional.empty(),
-              Optional.empty()),
-          null);
-    }
+    final Account account = accountsManager.create(number,
+        accountAttributes,
+        new IdentityKey(aciKeyPair.getPublicKey()),
+        new IdentityKey(pniKeyPair.getPublicKey()),
+        new DeviceSpec(
+            deviceName,
+            password,
+            signalAgent,
+            deviceCapabilities,
+            new DeviceIdentityInfo(registrationId, aciSignedPreKey, aciPqLastResortPreKey),
+            Optional.of(new DeviceIdentityInfo(pniRegistrationId, pniSignedPreKey, pniPqLastResortPreKey)),
+            true,
+            Optional.empty(),
+            Optional.empty()),
+        null);
+    assertTrue(phoneNumberRecoveryPasswordsManager.verify(account.getPhoneNumberIdentifier().orElseThrow(),
+        accountAttributes.recoveryPassword().orElseThrow()));
 
     final UUID aci = account.getAccountIdentifier();
 
@@ -706,160 +601,35 @@ public class AccountCreationDeletionIntegrationTest {
     assertFalse(accountsManager.getByAccountIdentifier(aci).isPresent());
     assertFalse(keysManager.getEcSignedPreKey(account.getAccountIdentifier(), Device.PRIMARY_ID).join().isPresent());
     assertFalse(keysManager.getLastResort(account.getAccountIdentifier(), Device.PRIMARY_ID).join().isPresent());
-    if (hasE164) {
-      assertFalse(keysManager.getEcSignedPreKey(account.getPhoneNumberIdentifier().orElseThrow(), Device.PRIMARY_ID).join().isPresent());
-      assertFalse(keysManager.getLastResort(account.getPhoneNumberIdentifier().orElseThrow(), Device.PRIMARY_ID).join().isPresent());
-      assertFalse(phoneNumberRecoveryPasswordsManager.verify(account.getPhoneNumberIdentifier().orElseThrow(),
-          accountAttributes.recoveryPassword().orElseThrow()));
-    }
+    assertFalse(keysManager.getEcSignedPreKey(account.getPhoneNumberIdentifier().orElseThrow(), Device.PRIMARY_ID).join().isPresent());
+    assertFalse(keysManager.getLastResort(account.getPhoneNumberIdentifier().orElseThrow(), Device.PRIMARY_ID).join().isPresent());
+    assertFalse(phoneNumberRecoveryPasswordsManager.verify(account.getPhoneNumberIdentifier().orElseThrow(),
+        accountAttributes.recoveryPassword().orElseThrow()));
 
     verify(disconnectionRequestManager).requestDisconnection(argThat(disconnectedAccount ->
         disconnectedAccount.getAccountIdentifier().equals(account.getAccountIdentifier())));
   }
 
-  @Test
-  void retryRegistrationAccountWithoutNumber()
-      throws InvalidInputException, VerificationFailedException, ReceiptAlreadyRedeemedException {
-
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void receiptRetriesCannotPersistAnAccountOrKeys(final boolean changeRecoveryPassword) throws Exception {
     final ReceiptSerial receiptSerial = new ReceiptSerial(TestRandomUtil.nextBytes(ReceiptSerial.SIZE));
-    final String password = RandomStringUtils.secure().nextAlphanumeric(16);
     final byte[] recoveryPassword = TestRandomUtil.nextBytes(32);
     final ECKeyPair aciKeyPair = ECKeyPair.generate();
     final IdentityKey aciIdentityKey = new IdentityKey(aciKeyPair.getPublicKey());
-    final DeliveryChannels deliveryChannels = new DeliveryChannels(false, "apns-token", null);
-
-    final UUID existingAccountUuid;
-    {
-      final Account existingAccount = accountsManager.create(
-          new AccountAttributes(true, 1, null, "name".getBytes(StandardCharsets.UTF_8), null, false, Set.of(), null)
-              .setRecoveryPassword(recoveryPassword),
-          aciIdentityKey,
-          receiptPresentation(receiptSerial, CLOCK.instant().plus(Duration.ofDays(30)), 1),
-          new DeviceSpec(null,
-              password,
-              "OWI",
-              Set.of(),
-              new DeviceIdentityInfo(1, KeysHelper.signedECPreKey(1, aciKeyPair), KeysHelper.signedKEMPreKey(3, aciKeyPair)),
-              Optional.empty(),
-              true,
-              Optional.empty(),
-              Optional.empty()),
-          null);
-
-      existingAccountUuid = existingAccount.getAccountIdentifier();
+    final DeviceSpec deviceSpec = new DeviceSpec(null, "password", "OWI", Set.of(),
+        new DeviceIdentityInfo(1, KeysHelper.signedECPreKey(1, aciKeyPair), KeysHelper.signedKEMPreKey(3, aciKeyPair)),
+        Optional.empty(), true, Optional.empty(), Optional.empty());
+    for (int attempt = 0; attempt < 2; attempt++) {
+      final byte[] attemptRecoveryPassword = changeRecoveryPassword && attempt > 0
+          ? TestRandomUtil.nextBytes(32) : recoveryPassword;
+      assertThrows(UnsupportedOperationException.class, () -> accountsManager.create(
+          new AccountAttributes(true, 1, null, "name".getBytes(StandardCharsets.UTF_8), null, false,
+              Set.of(), attemptRecoveryPassword),
+          aciIdentityKey, receiptPresentation(receiptSerial, CLOCK.instant().plus(Duration.ofDays(30)), 1),
+          deviceSpec, null));
+      assertEquals(0, POSTGRES.accountAndKeyCount());
     }
-
-    final String signalAgent = RandomStringUtils.secure().nextAlphabetic(3);
-    final int registrationId = ThreadLocalRandom.current().nextInt(Device.MAX_REGISTRATION_ID);
-    final byte[] deviceName = RandomStringUtils.secure().nextAlphabetic(16).getBytes(StandardCharsets.UTF_8);
-
-    final Set<DeviceCapability> deviceCapabilities = Set.of();
-
-    final AccountAttributes accountAttributes = new AccountAttributes(deliveryChannels.fetchesMessages(),
-        registrationId,
-        null,
-        deviceName,
-        null,
-        false,
-        deviceCapabilities, null).setRecoveryPassword(recoveryPassword);
-
-    final ECSignedPreKey aciSignedPreKey = KeysHelper.signedECPreKey(5, aciKeyPair);
-    final KEMSignedPreKey aciPqLastResortPreKey = KeysHelper.signedKEMPreKey(7, aciKeyPair);
-
-    final Optional<ApnRegistrationId> maybeApnRegistrationId =
-        deliveryChannels.apnsToken() != null
-            ? Optional.of(new ApnRegistrationId(deliveryChannels.apnsToken()))
-            : Optional.empty();
-
-    final Optional<GcmRegistrationId> maybeGcmRegistrationId = deliveryChannels.fcmToken() != null
-        ? Optional.of(new GcmRegistrationId(deliveryChannels.fcmToken()))
-        : Optional.empty();
-
-    final Account retriedAccount = accountsManager.create(accountAttributes,
-        aciIdentityKey,
-        receiptPresentation(receiptSerial,  CLOCK.instant().plus(Duration.ofDays(30)), 1),
-        new DeviceSpec(deviceName,
-            password,
-            signalAgent,
-            deviceCapabilities,
-            new DeviceIdentityInfo(registrationId, aciSignedPreKey, aciPqLastResortPreKey),
-            Optional.empty(),
-            accountAttributes.getFetchesMessages(),
-            maybeApnRegistrationId,
-            maybeGcmRegistrationId),
-        null);
-
-    assertExpectedStoredAccount(retriedAccount,
-        Optional.empty(),
-        password,
-        signalAgent,
-        deliveryChannels,
-        registrationId,
-        Optional.empty(),
-        deviceName,
-        false,
-        deviceCapabilities,
-        Collections.emptyList(),
-        maybeApnRegistrationId,
-        maybeGcmRegistrationId,
-        Optional.empty(),
-        aciSignedPreKey,
-        Optional.empty(),
-        aciPqLastResortPreKey,
-        Optional.empty());
-
-    assertEquals(existingAccountUuid, retriedAccount.getAccountIdentifier());
-
-    assertTrue(retriedAccount.getNumber().isEmpty());
-    assertTrue(retriedAccount.getPhoneNumberIdentifier().isEmpty());
-    assertTrue(retriedAccount.getPhoneNumberIdentityKey().isEmpty());
-
-    verify(disconnectionRequestManager).requestDisconnection(argThat(account ->
-        account.getAccountIdentifier().equals(existingAccountUuid) && account != retriedAccount));
-  }
-
-  @Test
-  void retryRegistrationAccountWithNoNumberDifferentRecoveryPassword()
-      throws InvalidInputException, VerificationFailedException, ReceiptAlreadyRedeemedException {
-
-    final ReceiptSerial receiptSerial = new ReceiptSerial(TestRandomUtil.nextBytes(ReceiptSerial.SIZE));
-    final String password = RandomStringUtils.secure().nextAlphanumeric(16);
-    final byte[] recoveryPassword = TestRandomUtil.nextBytes(32);
-    final ECKeyPair aciKeyPair = ECKeyPair.generate();
-    final IdentityKey aciIdentityKey = new IdentityKey(aciKeyPair.getPublicKey());
-
-    final Account existingAccount = accountsManager.create(
-        new AccountAttributes(true, 1, null, "name".getBytes(StandardCharsets.UTF_8), null, false, Set.of(), recoveryPassword),
-        aciIdentityKey,
-        receiptPresentation(receiptSerial, CLOCK.instant().plus(Duration.ofDays(30)), 1),
-        new DeviceSpec(null,
-            password,
-            "OWI",
-            Set.of(),
-            new DeviceIdentityInfo(1, KeysHelper.signedECPreKey(1, aciKeyPair), KeysHelper.signedKEMPreKey(3, aciKeyPair)),
-            Optional.empty(),
-            true,
-            Optional.empty(),
-            Optional.empty()),
-        null);
-
-    assertNotNull(existingAccount);
-
-    assertThrows(ReceiptAlreadyRedeemedException.class, () -> accountsManager.create(
-        // Using a different account recovery password should throw an exception
-        new AccountAttributes(true, 1, null, "name".getBytes(StandardCharsets.UTF_8), null, false, Set.of(), TestRandomUtil.nextBytes(16)),
-        aciIdentityKey,
-        receiptPresentation(receiptSerial, CLOCK.instant().plus(Duration.ofDays(30)), 1),
-        new DeviceSpec(null,
-            password,
-            "OWI",
-            Set.of(),
-            new DeviceIdentityInfo(1, KeysHelper.signedECPreKey(1, aciKeyPair), KeysHelper.signedKEMPreKey(3, aciKeyPair)),
-            Optional.empty(),
-            true,
-            Optional.empty(),
-            Optional.empty()),
-        null));
   }
 
   @SuppressWarnings("OptionalUsedAsFieldOrParameterType")

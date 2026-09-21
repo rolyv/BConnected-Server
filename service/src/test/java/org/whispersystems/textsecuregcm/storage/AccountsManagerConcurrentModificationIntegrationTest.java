@@ -56,7 +56,6 @@ import org.whispersystems.textsecuregcm.tests.util.RedisClusterHelper;
 import org.whispersystems.textsecuregcm.util.Pair;
 import org.whispersystems.textsecuregcm.util.ThrowingSupplier;
 
-
 class AccountsManagerConcurrentModificationIntegrationTest {
 
   @RegisterExtension
@@ -65,11 +64,7 @@ class AccountsManagerConcurrentModificationIntegrationTest {
       Tables.NUMBERS,
       Tables.PNI_ASSIGNMENTS,
       Tables.DELETED_ACCOUNTS,
-      Tables.EC_KEYS,
-      Tables.PAGED_PQ_KEYS,
       Tables.REDEEMED_RECEIPTS,
-      Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS,
-      Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS,
       Tables.PHONE_NUMBER_RECOVERY_PASSWORDS);
 
   private Accounts accounts;

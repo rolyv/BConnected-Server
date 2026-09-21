@@ -116,14 +116,6 @@ dynamoDbTables:
       BRAINTREE: 1
       GOOGLE_PLAY_BILLING: 1
       APPLE_APP_STORE: 1
-  ecKeys:
-    tableName: Example_Keys
-  ecSignedPreKeys:
-    tableName: Example_EC_Signed_Pre_Keys
-  pagedPqKeys:
-    tableName: Example_PQ_Paged_Keys
-  pqLastResortKeys:
-    tableName: Example_PQ_Last_Resort_Keys
   onetimeDonations:
     tableName: Example_OnetimeDonations
     expiration: P90D
@@ -143,10 +135,6 @@ dynamoDbTables:
     tableName: Example_Subscriptions
   verificationSessions:
     tableName: Example_VerificationSessions
-
-pagedSingleUseKEMPreKeyStore:
-  bucket: preKeyBucket # S3 Bucket name
-  region: us-west-2    # AWS region
 
 cacheCluster: # Redis server configuration for cache cluster
   configurationUri: redis://redis.example.com:6379/

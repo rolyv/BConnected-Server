@@ -3,6 +3,7 @@ package org.whispersystems.textsecuregcm.storage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.*;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,7 +25,6 @@ import org.postgresql.ds.PGSimpleDataSource;
 import org.signal.libsignal.protocol.ecc.ECKeyPair;
 import org.whispersystems.textsecuregcm.entities.KEMSignedPreKey;
 import org.whispersystems.textsecuregcm.tests.util.KeysHelper;
-import static org.mockito.Mockito.*;
 
 @EnabledIfEnvironmentVariable(named = "BCONNECTED_TEST_JDBC_URL", matches = ".+")
 class SingleUseKEMPreKeysPostgresTest {
@@ -178,22 +178,20 @@ class SingleUseKEMPreKeysPostgresTest {
     assertThat(store.getCount(account, (byte) 1).join()).isEqualTo(1);
   }
   @Test
-  void exhaustionUsesLastResortAndNativeStoreHasNoObjectPages() {
+  void exhaustionUsesLastResort() {
     UUID account = UUID.randomUUID();
     KEMSignedPreKey single = key(1);
     KEMSignedPreKey fallback = key(2);
-    var lastResort = mock(RepeatedUseKEMSignedPreKeyStore.class);
+    @SuppressWarnings("unchecked")
+    SignedPreKeyStore<KEMSignedPreKey> lastResort = mock(SignedPreKeyStore.class);
     when(lastResort.find(account, (byte) 1)).thenReturn(CompletableFuture.completedFuture(Optional.of(fallback)));
     var manager = new KeysManager(mock(SingleUseECPreKeyStorage.class), store,
-        mock(RepeatedUseECSignedPreKeyStore.class), lastResort);
+        mock(SignedPreKeyStore.class), lastResort);
     store.store(account, (byte) 1, List.of(single)).join();
     assertThat(manager.takePQ(account, (byte) 1).join()).contains(single);
     verifyNoInteractions(lastResort);
     assertThat(manager.takePQ(account, (byte) 1).join()).contains(fallback);
     verify(lastResort).find(account, (byte) 1);
-    assertThat(manager.hasPagedKEMStorage()).isFalse();
-    assertThrows(IllegalStateException.class, () -> manager.listStoredKEMPreKeyPages(1));
-    assertThrows(IllegalStateException.class, () -> manager.pruneDeadPage(account, (byte) 1, UUID.randomUUID()));
   }
 
   @Test

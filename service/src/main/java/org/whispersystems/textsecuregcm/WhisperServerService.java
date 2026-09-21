@@ -235,6 +235,7 @@ import org.whispersystems.textsecuregcm.metrics.MicrometerAwsSdkMetricPublisher;
 import org.whispersystems.textsecuregcm.metrics.ReportedMessageMetricsListener;
 import org.whispersystems.textsecuregcm.metrics.TlsCertificateExpirationUtil;
 import org.whispersystems.textsecuregcm.metrics.TrafficSource;
+import org.whispersystems.textsecuregcm.monitoring.MonitoringSupplier;
 import org.whispersystems.textsecuregcm.providers.MultiRecipientMessageProvider;
 import org.whispersystems.textsecuregcm.push.APNSender;
 import org.whispersystems.textsecuregcm.push.FcmSender;
@@ -246,11 +247,10 @@ import org.whispersystems.textsecuregcm.push.PushNotificationSender;
 import org.whispersystems.textsecuregcm.push.ReceiptSender;
 import org.whispersystems.textsecuregcm.push.RedisMessageAvailabilityManager;
 import org.whispersystems.textsecuregcm.redis.ConnectionEventLogger;
-import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
+import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.registration.RegistrationService;
 import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
-import org.whispersystems.textsecuregcm.monitoring.MonitoringSupplier;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
 import org.whispersystems.textsecuregcm.spam.ChallengeConstraintChecker;
@@ -277,7 +277,6 @@ import org.whispersystems.textsecuregcm.storage.KeysManager;
 import org.whispersystems.textsecuregcm.storage.MessagesCache;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.OneTimeDonationsManager;
-import org.whispersystems.textsecuregcm.storage.PagedSingleUseKEMPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
 import org.whispersystems.textsecuregcm.storage.PersistentTimer;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
@@ -293,11 +292,8 @@ import org.whispersystems.textsecuregcm.storage.PushChallengeStore;
 import org.whispersystems.textsecuregcm.storage.RedeemedReceiptsManager;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigStore;
 import org.whispersystems.textsecuregcm.storage.RemoteConfigsManager;
-import org.whispersystems.textsecuregcm.storage.RepeatedUseECSignedPreKeyStore;
-import org.whispersystems.textsecuregcm.storage.RepeatedUseKEMSignedPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.storage.ReportMessageStore;
-import org.whispersystems.textsecuregcm.storage.SingleUseECPreKeyStore;
 import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
 import org.whispersystems.textsecuregcm.storage.Subscriptions;
 import org.whispersystems.textsecuregcm.storage.VerificationSessionManager;
@@ -597,22 +593,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     ProfileDataStore profileStore = postgres.profiles();
     ProfileAvatarStore profileAvatars = postgres.profileAvatars();
 
-    S3AsyncClient asyncKeysS3Client = postgres != null ? null : S3AsyncClient.builder()
-        .credentialsProvider(awsCredentialsProvider)
-        .region(Region.of(config.getPagedSingleUseKEMPreKeyStore().region()))
-        .endpointOverride(config.getPagedSingleUseKEMPreKeyStore().endpointOverride())
-        .build();
-
     KeysManager keysManager = new KeysManager(
-        postgres != null ? postgres.ecPreKeys()
-            : new SingleUseECPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcKeys().getTableName()),
-        postgres != null ? postgres.kemPreKeys() : new PagedSingleUseKEMPreKeyStore(
-            dynamoDbAsyncClient,
-            asyncKeysS3Client,
-            config.getDynamoDbTables().getPagedKemKeys().getTableName(),
-            config.getPagedSingleUseKEMPreKeyStore().bucket()),
-        postgres != null ? postgres.signedEcKeys() : new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getEcSignedPreKeys().getTableName()),
-        postgres != null ? postgres.signedKemKeys() : new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient, config.getDynamoDbTables().getKemLastResortKeys().getTableName()));
+        postgres.ecPreKeys(), postgres.kemPreKeys(), postgres.signedEcKeys(), postgres.signedKemKeys());
     PersistentMessageStore messageStore = postgres.messages();
     RemoteConfigStore remoteConfigs = postgres.remoteConfigs();
     PushChallengeStore pushChallengeStore = postgres.pushChallenges();

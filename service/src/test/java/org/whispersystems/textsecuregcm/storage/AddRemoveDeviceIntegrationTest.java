@@ -40,34 +40,17 @@ import org.whispersystems.textsecuregcm.tests.util.AccountsHelper;
 import org.whispersystems.textsecuregcm.tests.util.KeysHelper;
 import org.whispersystems.textsecuregcm.util.Pair;
 import org.whispersystems.textsecuregcm.util.TestClock;
-import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 
 public class AddRemoveDeviceIntegrationTest {
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(
-      DynamoDbExtensionSchema.Tables.ACCOUNTS,
-      DynamoDbExtensionSchema.Tables.DELETED_ACCOUNTS,
-      DynamoDbExtensionSchema.Tables.DELETED_ACCOUNTS_LOCK,
-      DynamoDbExtensionSchema.Tables.USED_LINK_DEVICE_TOKENS,
-      DynamoDbExtensionSchema.Tables.NUMBERS,
-      DynamoDbExtensionSchema.Tables.PNI,
-      DynamoDbExtensionSchema.Tables.PNI_ASSIGNMENTS,
-      DynamoDbExtensionSchema.Tables.USERNAMES,
-      DynamoDbExtensionSchema.Tables.EC_KEYS,
-      DynamoDbExtensionSchema.Tables.PAGED_PQ_KEYS,
-      DynamoDbExtensionSchema.Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS,
-      DynamoDbExtensionSchema.Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS,
-      DynamoDbExtensionSchema.Tables.PHONE_NUMBER_RECOVERY_PASSWORDS);
+  static final PostgresAccountKeyTestExtension POSTGRES = new PostgresAccountKeyTestExtension();
 
   @RegisterExtension
   static final RedisClusterExtension CACHE_CLUSTER_EXTENSION = RedisClusterExtension.builder().build();
 
   @RegisterExtension
   static final RedisServerExtension PUBSUB_SERVER_EXTENSION = RedisServerExtension.builder().build();
-
-  @RegisterExtension
-  static final S3LocalStackExtension S3_EXTENSION = new S3LocalStackExtension("testbucket");
 
   private ScheduledExecutorService scheduledExecutorService;
 
@@ -80,35 +63,13 @@ public class AddRemoveDeviceIntegrationTest {
   void setUp() {
     clock = TestClock.pinned(Instant.now());
 
-    final DynamoDbAsyncClient dynamoDbAsyncClient = DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient();
-    keysManager = new KeysManager(
-        new SingleUseECPreKeyStore(dynamoDbAsyncClient, DynamoDbExtensionSchema.Tables.EC_KEYS.tableName()),
-        new PagedSingleUseKEMPreKeyStore(dynamoDbAsyncClient,
-            S3_EXTENSION.getS3Client(),
-            DynamoDbExtensionSchema.Tables.PAGED_PQ_KEYS.tableName(),
-            S3_EXTENSION.getBucketName()),
-        new RepeatedUseECSignedPreKeyStore(dynamoDbAsyncClient,
-            DynamoDbExtensionSchema.Tables.REPEATED_USE_EC_SIGNED_PRE_KEYS.tableName()),
-        new RepeatedUseKEMSignedPreKeyStore(dynamoDbAsyncClient,
-            DynamoDbExtensionSchema.Tables.REPEATED_USE_KEM_SIGNED_PRE_KEYS.tableName()));
+    keysManager = POSTGRES.keys();
 
-    final Accounts accounts = new Accounts(
-        clock,
-        DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(),
-        new RedeemedReceiptsManager(clock, DynamoDbExtensionSchema.Tables.REDEEMED_RECEIPTS.tableName(),
-            DYNAMO_DB_EXTENSION.getDynamoDbClient()),
-        DynamoDbExtensionSchema.Tables.ACCOUNTS.tableName(),
-        DynamoDbExtensionSchema.Tables.NUMBERS.tableName(),
-        DynamoDbExtensionSchema.Tables.PNI_ASSIGNMENTS.tableName(),
-        DynamoDbExtensionSchema.Tables.USERNAMES.tableName(),
-        DynamoDbExtensionSchema.Tables.DELETED_ACCOUNTS.tableName(),
-        DynamoDbExtensionSchema.Tables.USED_LINK_DEVICE_TOKENS.tableName());
+    final AccountStore accounts = POSTGRES.accounts(clock);
 
     scheduledExecutorService = mock(ScheduledExecutorService.class);
 
-    final AccountLockManager accountLockManager = new AccountLockManager(DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        DynamoDbExtensionSchema.Tables.DELETED_ACCOUNTS_LOCK.tableName());
+    final AccountLockManager accountLockManager = POSTGRES.locks();
 
     final SecureStorageClient secureStorageClient = mock(SecureStorageClient.class);
     when(secureStorageClient.deleteStoredData(any())).thenReturn(CompletableFuture.completedFuture(null));
@@ -116,9 +77,8 @@ public class AddRemoveDeviceIntegrationTest {
     final SecureValueRecoveryClient svr2Client = mock(SecureValueRecoveryClient.class);
     when(svr2Client.removeData(any(UUID.class))).thenReturn(CompletableFuture.completedFuture(null));
 
-    final PhoneNumberIdentifiers phoneNumberIdentifiers =
-        new PhoneNumberIdentifiers(DYNAMO_DB_EXTENSION.getDynamoDbAsyncClient(),
-            DynamoDbExtensionSchema.Tables.PNI.tableName());
+    final PhoneNumberIdentifierStore phoneNumberIdentifiers =
+        POSTGRES.phoneNumbers();
 
     messagesManager = mock(MessagesManager.class);
     when(messagesManager.clear(any(), anyByte())).thenReturn(CompletableFuture.completedFuture(null));
@@ -127,11 +87,7 @@ public class AddRemoveDeviceIntegrationTest {
     when(profilesManager.deleteAll(any(), anyBoolean())).thenReturn(CompletableFuture.completedFuture(null));
 
     final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager =
-        new PhoneNumberRecoveryPasswordsManager(new PhoneNumberRecoveryPasswords(
-            DynamoDbExtensionSchema.Tables.PHONE_NUMBER_RECOVERY_PASSWORDS.tableName(),
-            Duration.ofDays(1),
-            DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-            Clock.systemUTC()));
+        new PhoneNumberRecoveryPasswordsManager(POSTGRES.recovery(Clock.systemUTC()));
 
     PUBSUB_SERVER_EXTENSION.getRedisClient().useConnection(connection -> {
       connection.sync().flushall();
