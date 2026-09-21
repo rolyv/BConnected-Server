@@ -29,11 +29,14 @@ public final class CanonicalRegistrationRequest implements AutoCloseable {
   private byte[] bytes;
   private final String keyCommitment;
   private final String number;
+  private final RegistrationRequest frozenRequest;
 
-  private CanonicalRegistrationRequest(byte[] bytes, String keyCommitment, String number) {
+  private CanonicalRegistrationRequest(
+      byte[] bytes, String keyCommitment, String number, RegistrationRequest frozenRequest) {
     this.bytes = bytes;
     this.keyCommitment = keyCommitment;
     this.number = number;
+    this.frozenRequest = frozenRequest;
   }
 
   public static final class InvalidRequestException extends IllegalArgumentException {
@@ -143,7 +146,7 @@ public final class CanonicalRegistrationRequest implements AutoCloseable {
       text(out, gcmId);
       byte[] encoded = buffer.toByteArray();
       if (encoded.length > 1_048_576) throw new InvalidRequestException();
-      return new CanonicalRegistrationRequest(encoded, keyDigest, number);
+      return new CanonicalRegistrationRequest(encoded, keyDigest, number, frozen);
     } catch (Exception ignored) {
       throw new InvalidRequestException();
     }
@@ -182,6 +185,13 @@ public final class CanonicalRegistrationRequest implements AutoCloseable {
   synchronized byte[] bytes() {
     if (bytes == null) throw new IllegalStateException("Registration snapshot closed");
     return bytes.clone();
+  }
+
+  // Internal construction snapshot only. Do not expose this mutable DTO to the caller that
+  // supplied the original request. Account construction reauthenticates this exact snapshot.
+  synchronized RegistrationRequest frozenRequest() {
+    if (bytes == null) throw new IllegalStateException("Registration snapshot closed");
+    return frozenRequest;
   }
 
   public String keyCommitment() {

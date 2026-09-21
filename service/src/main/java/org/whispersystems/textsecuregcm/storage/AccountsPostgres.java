@@ -171,6 +171,18 @@ public final class AccountsPostgres implements AccountStore {
   @Override
   public boolean createWithMutations(Account a, Collection<AccountMutation> mutations)
       throws AccountAlreadyExistsException {
+    return createWithMutations(a, mutations, false);
+  }
+
+  /** Admission enrollment must never reuse a recently deleted phone identity. */
+  public boolean createFreshWithMutations(Account a, Collection<AccountMutation> mutations)
+      throws AccountAlreadyExistsException {
+    return createWithMutations(a, mutations, true);
+  }
+
+  private boolean createWithMutations(
+      Account a, Collection<AccountMutation> mutations, boolean freshOnly)
+      throws AccountAlreadyExistsException {
     if (a.getNumber().isEmpty() || a.getPhoneNumberIdentifier().isEmpty())
       throw new IllegalArgumentException("Phone registration requires a number and PNI");
     try {
@@ -188,10 +200,23 @@ public final class AccountsPostgres implements AccountStore {
                 encode(a),
                 a.getUsernameHash().orElse(null),
                 a.getUsernameLinkHandle());
-            execute(
-                c,
-                "DELETE FROM signal.deleted_accounts WHERE pni=?",
-                a.getPhoneNumberIdentifier().orElseThrow());
+            if (freshOnly) {
+              // Check AFTER INSERT: it may have waited for deletion of an older account.
+              // Its tombstone must not be consumed by a first-enrollment flow.
+              try (var tombstone =
+                      statement(
+                          c,
+                          "SELECT 1 FROM signal.deleted_accounts WHERE pni=? FOR SHARE",
+                          a.getPhoneNumberIdentifier().orElseThrow());
+                  var rows = tombstone.executeQuery()) {
+                if (rows.next()) throw new IllegalStateException("Phone recovery is unavailable");
+              }
+            } else {
+              execute(
+                  c,
+                  "DELETE FROM signal.deleted_accounts WHERE pni=?",
+                  a.getPhoneNumberIdentifier().orElseThrow());
+            }
             AccountMutation.executeSql(c, mutations);
             return null;
           });

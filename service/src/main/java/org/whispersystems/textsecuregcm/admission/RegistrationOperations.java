@@ -280,6 +280,57 @@ public final class RegistrationOperations {
             org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
   }
 
+  /**
+   * Read-only authentication of an already committed operation, including after expiry. It never
+   * creates/refreshes a row and grants no account or messaging authorization.
+   */
+  Optional<AuthenticatedOperation> authenticateCommittedRetry(
+      UUID memberId,
+      String attemptNonce,
+      String bindingChallenge,
+      String number,
+      String password,
+      RegistrationRequest request,
+      String signalAgent,
+      String userAgent) {
+    requireUuid(memberId);
+    byte[] attempt = hash("bconnected.registration-attempt.v1", decodeNonce(attemptNonce));
+    decodeNonce(bindingChallenge);
+    byte[] challenge = hash(null, bindingChallenge.getBytes(StandardCharsets.US_ASCII));
+    try (var canonical =
+        CanonicalRegistrationRequest.beforeVerification(request, number, signalAgent, userAgent)) {
+      byte[] encoded = canonical.bytes();
+      try {
+        return transaction(
+            connection -> {
+              try (var query =
+                  connection.prepareStatement(
+                      """
+                      SELECT r.* FROM signal.registration_operations r
+                      JOIN signal.admissions a ON a.signal_operation_id=r.operation_id
+                      WHERE r.member_id=? AND r.registration_attempt_hash=?
+                      """)) {
+                query.setObject(1, memberId);
+                query.setBytes(2, attempt);
+                try (var rows = query.executeQuery()) {
+                  if (!rows.next()) return Optional.empty();
+                  var stored = read(rows);
+                  if (!stored.authentication.verify(password)
+                      || !equal(stored.challenge, challenge)
+                      || !stored.number.equals(canonical.number())
+                      || !equal(stored.keys, unhex(canonical.keyCommitment()))
+                      || !equal(stored.request, requestCommitment(encoded, stored.authentication)))
+                    throw new OperationRejectedException();
+                  return Optional.of(new AuthenticatedOperation(stored));
+                }
+              }
+            });
+      } finally {
+        Arrays.fill(encoded, (byte) 0);
+      }
+    }
+  }
+
   /** One SQL transaction for claim binding, native quota/session creation and association. */
   byte[] getOrCreateClaimedSession(
       AuthenticatedOperation operation,
@@ -544,6 +595,64 @@ public final class RegistrationOperations {
         return stored;
       }
     }
+  }
+
+  /** Last-moment guard on the account transaction; never a standalone redemption. */
+  org.whispersystems.textsecuregcm.storage.AccountMutation.Sql accountCreationGuard(
+      AuthenticatedOperation operation,
+      AdmissionPermitVerifier.VerifiedPermit permit,
+      UUID accountId) {
+    return new org.whispersystems.textsecuregcm.storage.AccountMutation.Sql(
+        connection -> {
+          if (connection.getAutoCommit())
+            throw new IllegalStateException("Account transaction required");
+          Stored stored = lock(connection, operation);
+          requireSession(connection, stored, true);
+          var binding = permit.binding();
+          // Account INSERT has already serialized competing current owners of this phone/PNI.
+          // A spent historical admission also excludes fresh enrollment after account deletion.
+          try (var previous =
+              connection.prepareStatement(
+                  """
+                  SELECT a.signal_operation_id FROM signal.admissions a
+                  LEFT JOIN signal.registration_operations r ON r.operation_id=a.signal_operation_id
+                  LEFT JOIN signal.phone_number_identifiers pn ON pn.e164=r.requested_number
+                  WHERE a.phone_binding=? OR pn.pni=(SELECT pni FROM signal.accounts WHERE aci=?)
+                  """)) {
+            previous.setBytes(1, unhex(binding.phoneBinding()));
+            previous.setObject(2, Objects.requireNonNull(accountId));
+            try (var rows = previous.executeQuery()) {
+              while (rows.next())
+                if (!stored.id.equals(rows.getObject(1, UUID.class)))
+                  throw new OperationRejectedException();
+            }
+          }
+          if (!stored.id.equals(binding.signalOperationId())
+              || !stored.member.equals(binding.memberId())
+              || !stored.number.equals(binding.canonicalVerifiedNumber())
+              || !hex(stored.attempt).equals(binding.registrationAttemptHash())
+              || !hex(stored.keys).equals(binding.deviceKeyCommitment())
+              || !hex(stored.request).equals(binding.serverRequestCommitment())
+              || !hex(stored.sessionHash).equals(binding.serverVerificationSessionHash()))
+            throw new OperationRejectedException();
+          try (var query =
+              connection.prepareStatement(
+                  "SELECT claim_approval_epoch,claim_expires_ms FROM signal.registration_operations"
+                      + " WHERE operation_id=?")) {
+            query.setObject(1, stored.id);
+            try (var row = query.executeQuery()) {
+              if (!row.next()
+                  || row.getObject(1) == null
+                  || row.getObject(2) == null
+                  || row.getLong(1) != binding.approvalEpoch()
+                  || row.getLong(2) <= clock.millis()) throw new OperationRejectedException();
+            }
+          }
+          requireActive(stored);
+          long now = clock.instant().getEpochSecond();
+          if (permit.expiresAt() <= now || permit.issuedAt() > now + 5)
+            throw new OperationRejectedException();
+        });
   }
 
   private void requireActive(Stored row) {

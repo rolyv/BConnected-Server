@@ -1,6 +1,6 @@
 package org.whispersystems.textsecuregcm.storage;
 
-class AccountAlreadyExistsException extends Exception {
+public class AccountAlreadyExistsException extends Exception {
   private final Account existingAccount;
 
   public AccountAlreadyExistsException(final Account existingAccount) {
