@@ -93,10 +93,6 @@ dynamoDbTables:
     phoneNumberIdentifierTableName: Example_Accounts_PhoneNumberIdentifiers
     usernamesTableName: Example_Accounts_Usernames
     usedLinkDeviceTokensTableName: Example_Accounts_UsedLinkDeviceTokens
-  appleDeviceChecks:
-    tableName: Example_AppleDeviceChecks
-  appleDeviceCheckPublicKeys:
-    tableName: Example_AppleDeviceCheckPublicKeys
   backups:
     tableName: Example_Backups
   changeNumberWaitingPeriods:

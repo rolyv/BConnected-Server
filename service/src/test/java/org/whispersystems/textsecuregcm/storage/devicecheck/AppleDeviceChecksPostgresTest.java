@@ -8,8 +8,6 @@ import com.webauthn4j.appattest.DeviceCheckManager;
 import com.webauthn4j.appattest.authenticator.DCAppleDevice;
 import com.webauthn4j.appattest.authenticator.DCAppleDeviceImpl;
 import com.webauthn4j.appattest.data.attestation.statement.AppleAppAttestAttestationStatement;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -18,16 +16,18 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import org.postgresql.ds.PGSimpleDataSource;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.whispersystems.textsecuregcm.storage.Account;
 
-@EnabledIfEnvironmentVariable(named = "BCONNECTED_TEST_JDBC_URL", matches = ".+")
 class AppleDeviceChecksPostgresTest {
-  private PGSimpleDataSource dataSource;
+  @RegisterExtension
+  static final PostgresDeviceCheckTestExtension POSTGRES = new PostgresDeviceCheckTestExtension();
+
+  private DataSource dataSource;
   private AppleDeviceChecksPostgres store;
   private ExecutorService executor;
   private Account account;
@@ -35,19 +35,8 @@ class AppleDeviceChecksPostgresTest {
 
   @BeforeEach
   void setUp() throws Exception {
-    final String url = System.getenv("BCONNECTED_TEST_JDBC_URL");
-    if (!url.matches("jdbc:postgresql://(127\\.0\\.0\\.1|localhost):[0-9]+/[A-Za-z0-9_]+_test")) {
-      throw new IllegalArgumentException("Tests require a local isolated _test database");
-    }
-    dataSource = new PGSimpleDataSource();
-    dataSource.setURL(url);
-    dataSource.setUser("postgres");
-    dataSource.setPassword(System.getenv("BCONNECTED_TEST_POSTGRES_PASSWORD"));
-    try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
-      statement.execute(Files.readString(Path.of("../bconnected/migrations/009-apple-device-checks.sql")));
-      statement.execute("TRUNCATE signal.apple_device_checks, signal.apple_device_check_public_keys");
-    }
-    store = new AppleDeviceChecksPostgres(dataSource, DeviceCheckManager.createObjectConverter());
+    dataSource = POSTGRES.dataSource();
+    store = POSTGRES.store();
     executor = Executors.newFixedThreadPool(12);
     account = account();
     // Reuse upstream's genuinely verified historical Apple fixture; do not invent attestation validity in this test.

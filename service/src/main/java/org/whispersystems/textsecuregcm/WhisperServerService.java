@@ -302,7 +302,6 @@ import org.whispersystems.textsecuregcm.storage.VerificationSessions;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckManager;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckStore;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckTrustAnchor;
-import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceChecks;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FaultTolerantDatabase;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDBWarmup;
 import org.whispersystems.textsecuregcm.storage.foundationdb.FoundationDbMessageStore;
@@ -998,11 +997,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getBackupConfiguration());
     final BackupMetrics backupMetrics = gcpPilot ? null : new BackupMetrics();
 
-    final AppleDeviceCheckStore appleDeviceChecks = gcpPilot ? null : postgres != null ? postgres.appleDeviceChecks() : new AppleDeviceChecks(
-        dynamoDbClient,
-        DeviceCheckManager.createObjectConverter(),
-        config.getDynamoDbTables().getAppleDeviceChecks().getTableName(),
-        config.getDynamoDbTables().getAppleDeviceCheckPublicKeys().getTableName());
+    final AppleDeviceCheckStore appleDeviceChecks = gcpPilot ? null : postgres.appleDeviceChecks();
     final DeviceCheckManager deviceCheckManager = gcpPilot ? null : new DeviceCheckManager(new AppleDeviceCheckTrustAnchor());
     if (!gcpPilot) deviceCheckManager.getAttestationDataValidator().setProduction(config.getAppleDeviceCheck().production());
     final AppleDeviceCheckManager appleDeviceCheckManager = gcpPilot ? null : new AppleDeviceCheckManager(

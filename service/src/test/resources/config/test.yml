@@ -98,10 +98,6 @@ dynamoDbTables:
     phoneNumberIdentifierTableName: pni_assignment_test
     usernamesTableName: usernames_test
     usedLinkDeviceTokensTableName: used_link_device_tokens_test
-  appleDeviceChecks:
-    tableName: apple_device_checks_test
-  appleDeviceCheckPublicKeys:
-    tableName: apple_device_check_public_keys_test
   backups:
     tableName: backups_test
   changeNumberWaitingPeriods:

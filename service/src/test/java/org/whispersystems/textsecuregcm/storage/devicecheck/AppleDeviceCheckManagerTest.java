@@ -27,8 +27,6 @@ import org.mockito.Mockito;
 import org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
 import org.whispersystems.textsecuregcm.redis.RedisClusterExtension;
 import org.whispersystems.textsecuregcm.storage.Account;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtension;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema;
 import org.whispersystems.textsecuregcm.util.TestClock;
 import org.whispersystems.textsecuregcm.util.TestRandomUtil;
 import org.whispersystems.textsecuregcm.util.Util;
@@ -41,12 +39,10 @@ class AppleDeviceCheckManagerTest {
   static final RedisClusterExtension CLUSTER_EXTENSION = RedisClusterExtension.builder().build();
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(
-      DynamoDbExtensionSchema.Tables.APPLE_DEVICE_CHECKS,
-      DynamoDbExtensionSchema.Tables.APPLE_DEVICE_CHECKS_KEY_CONSTRAINT);
+  static final PostgresDeviceCheckTestExtension POSTGRES = new PostgresDeviceCheckTestExtension();
 
   private final TestClock clock = TestClock.pinned(Instant.now());
-  private AppleDeviceChecks appleDeviceChecks;
+  private AppleDeviceCheckStore appleDeviceChecks;
   private Account account;
   private AppleDeviceCheckManager appleDeviceCheckManager;
 
@@ -57,10 +53,7 @@ class AppleDeviceCheckManagerTest {
     when(account.getAccountIdentifier()).thenReturn(ACI);
 
     final DeviceCheckManager deviceCheckManager = DeviceCheckTestUtil.appleDeviceCheckManager();
-    appleDeviceChecks = new AppleDeviceChecks(DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        DeviceCheckManager.createObjectConverter(),
-        DynamoDbExtensionSchema.Tables.APPLE_DEVICE_CHECKS.tableName(),
-        DynamoDbExtensionSchema.Tables.APPLE_DEVICE_CHECKS_KEY_CONSTRAINT.tableName());
+    appleDeviceChecks = POSTGRES.store();
     appleDeviceCheckManager = new AppleDeviceCheckManager(appleDeviceChecks, CLUSTER_EXTENSION.getRedisCluster(),
         deviceCheckManager, DeviceCheckTestUtil.SAMPLE_TEAM_ID, DeviceCheckTestUtil.SAMPLE_BUNDLE_ID);
   }

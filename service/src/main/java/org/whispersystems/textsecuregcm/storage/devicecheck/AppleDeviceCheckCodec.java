@@ -21,7 +21,7 @@ import java.security.PublicKey;
 import java.util.Objects;
 import java.util.Optional;
 
-/** The upstream credential/CBOR encoding shared by DynamoDB and PostgreSQL. No attestation verification occurs here. */
+/** The original credential/CBOR encoding retained by PostgreSQL. No attestation verification occurs here. */
 final class AppleDeviceCheckCodec {
   private final ObjectConverter objectConverter;
 
