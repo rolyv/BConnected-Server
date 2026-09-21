@@ -75,6 +75,13 @@ public class WebSocketResourceProviderFactory<T extends Principal> implements Je
           this.environment.getMessageFactory(),
           ofNullable(this.environment.getConnectListener()),
           this.environment.getIdleTimeout());
+    } catch (final jakarta.ws.rs.ServiceUnavailableException e) {
+      // An unavailable membership/auth store is retriable, not invalid device credentials.
+      try {
+        response.sendError(503, "Authentication unavailable");
+      } catch (final IOException ignored) {
+      }
+      return null;
     } catch (final InvalidCredentialsException e) {
       try {
         response.sendForbidden("Unauthorized");

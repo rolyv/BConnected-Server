@@ -4,6 +4,7 @@ package org.whispersystems.textsecuregcm.admission;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.Objects;
 import java.util.UUID;
@@ -14,8 +15,8 @@ import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
 
 /**
- * Source-only account-membership and optional live device-credential checks, not transport
- * enforcement. No HTTP request holds a SQL connection. Callers must recheck at use after any
+ * Account-membership and live device-credential checks, including initial pilot authentication.
+ * No HTTP request holds a SQL connection. Callers must recheck at use after any
  * asynchronous wait; this component does not schedule revocation, close sockets, or authorize
  * anonymous capabilities.
  */
@@ -30,6 +31,13 @@ public final class AdmissionEntitlementGate {
 
   public static final class DeniedException extends RuntimeException {
     private DeniedException() {
+      super("Current alumni entitlement unavailable");
+    }
+  }
+
+  /** No current decision is possible; this does not establish invalid device credentials. */
+  public static final class UnavailableException extends RuntimeException {
+    private UnavailableException() {
       super("Current alumni entitlement unavailable");
     }
   }
@@ -65,15 +73,22 @@ public final class AdmissionEntitlementGate {
   public static final class DeviceAuthorization {
     private final Authorization membership;
     private final byte deviceId;
+    private final Instant primaryDeviceLastSeen;
 
-    private DeviceAuthorization(Authorization membership, byte deviceId) {
+    private DeviceAuthorization(Authorization membership, byte deviceId, Instant primaryDeviceLastSeen) {
       this.membership = membership;
       this.deviceId = deviceId;
+      this.primaryDeviceLastSeen = primaryDeviceLastSeen;
     }
 
     public void requireCurrent(UUID expectedAci, byte expectedDeviceId) {
       if (expectedDeviceId != deviceId) throw denied();
       membership.requireCurrent(expectedAci);
+    }
+
+    /** Metadata from the credential-verified snapshot, not a separate cached account read. */
+    public Instant primaryDeviceLastSeen() {
+      return primaryDeviceLastSeen;
     }
 
     @Override
@@ -103,16 +118,21 @@ public final class AdmissionEntitlementGate {
     requireAci(aci);
     if (deviceId < 1 || password == null || password.isEmpty()) throw denied();
     Snapshot original = transaction(connection -> readLocked(connection, aci));
+    final Instant primaryDeviceLastSeen;
     try {
       var json = SystemMapper.jsonMapper();
       var account = json.treeToValue(json.readTree(original.account()).get("data"), Account.class);
       var device = account.getDevice(deviceId).orElseThrow(AdmissionEntitlementGate::denied);
       if (device.hasLockedCredentials() || !device.getAuthTokenHash().verify(password))
         throw denied();
+      long lastSeen = account.getDevice(org.whispersystems.textsecuregcm.storage.Device.PRIMARY_ID)
+          .orElseThrow(AdmissionEntitlementGate::denied).getLastSeen();
+      if (lastSeen < 0) throw unavailable();
+      primaryDeviceLastSeen = Instant.ofEpochMilli(lastSeen);
     } catch (IOException | IllegalArgumentException | NullPointerException invalid) {
-      throw denied();
+      throw unavailable();
     }
-    return new DeviceAuthorization(authorizeSnapshot(original), deviceId);
+    return new DeviceAuthorization(authorizeSnapshot(original), deviceId, primaryDeviceLastSeen);
   }
 
   private Authorization authorizeSnapshot(Snapshot original) {
@@ -136,7 +156,8 @@ public final class AdmissionEntitlementGate {
           requireReceipt(
               authorization.snapshot, authorization.receipt); // Pool acquisition consumes time.
           Snapshot current = readLocked(connection, expectedAci);
-          if (!current.equals(authorization.snapshot)) throw denied();
+          // The row may have changed benignly; stale evidence is not proof of a bad password.
+          if (!current.equals(authorization.snapshot)) throw unavailable();
           // Both account and admission updates are blocked until commit. Row waits consume the same
           // receipt deadline; a receipt checked before a lock wait is insufficient.
           requireReceipt(current, authorization.receipt);
@@ -147,7 +168,7 @@ public final class AdmissionEntitlementGate {
   }
 
   private static void requireReceipt(Snapshot snapshot, FreshEntitlement receipt) {
-    if (receipt == null || !snapshot.binding().equals(receipt.binding())) throw denied();
+    if (receipt == null || !snapshot.binding().equals(receipt.binding())) throw unavailable();
     receipt.requireFreshCurrentEntitlement();
   }
 
@@ -178,13 +199,17 @@ public final class AdmissionEntitlementGate {
             || rows.getObject("activated_at") == null
             || rows.getObject("suspended_at") != null) throw denied();
         permit = rows.getBytes("permit_id");
-        binding =
-            new Binding(
-                rows.getObject("member_id", UUID.class),
-                rows.getLong("approval_epoch"),
-                rows.getObject("signal_operation_id", UUID.class),
-                Base64.getUrlEncoder().withoutPadding().encodeToString(permit),
-                aci);
+        try {
+          binding =
+              new Binding(
+                  rows.getObject("member_id", UUID.class),
+                  rows.getLong("approval_epoch"),
+                  rows.getObject("signal_operation_id", UUID.class),
+                  Base64.getUrlEncoder().withoutPadding().encodeToString(permit),
+                  aci);
+        } catch (IllegalArgumentException | NullPointerException malformedStoredBinding) {
+          throw unavailable();
+        }
         admission = rows.getString("snapshot");
       }
     }
@@ -226,7 +251,7 @@ public final class AdmissionEntitlementGate {
         throw failure;
       }
     } catch (SQLException ignored) {
-      throw denied();
+      throw unavailable();
     }
   }
 
@@ -236,5 +261,9 @@ public final class AdmissionEntitlementGate {
 
   private static DeniedException denied() {
     return new DeniedException();
+  }
+
+  private static UnavailableException unavailable() {
+    return new UnavailableException();
   }
 }

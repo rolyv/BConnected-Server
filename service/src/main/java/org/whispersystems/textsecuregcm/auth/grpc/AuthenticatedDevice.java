@@ -6,6 +6,20 @@
 package org.whispersystems.textsecuregcm.auth.grpc;
 
 import java.util.UUID;
+import javax.annotation.Nullable;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate;
 
-public record AuthenticatedDevice(UUID accountIdentifier, byte deviceId) {
+public record AuthenticatedDevice(UUID accountIdentifier, byte deviceId,
+                                 @JsonIgnore @Nullable AdmissionEntitlementGate.DeviceAuthorization admissionAuthorization) {
+  public AuthenticatedDevice(UUID accountIdentifier, byte deviceId) {
+    this(accountIdentifier, deviceId, null);
+  }
+
+  public void requireCurrentEntitlement() {
+    if (admissionAuthorization == null) {
+      throw new IllegalStateException("Current alumni entitlement evidence required");
+    }
+    admissionAuthorization.requireCurrent(accountIdentifier, deviceId);
+  }
 }

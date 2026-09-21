@@ -20,11 +20,13 @@ import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import org.eclipse.jetty.ee10.websocket.server.JettyServerUpgradeRequest;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.whispersystems.textsecuregcm.auth.AccountAuthenticator;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
+import org.whispersystems.textsecuregcm.auth.AuthenticationUnavailableException;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.util.HeaderUtils;
 import org.whispersystems.websocket.auth.InvalidCredentialsException;
@@ -88,5 +90,16 @@ class WebSocketAccountAuthenticatorTest {
         // if `Authorization` header is not set, we expect no account and anonymous credentials
         Arguments.of(null, false, false)
     );
+  }
+
+  @Test
+  void unavailableMembershipPropagatesToTheUpgrade503Boundary() {
+    when(upgradeRequest.getHeader(eq(HttpHeaders.AUTHORIZATION)))
+        .thenReturn(HeaderUtils.basicAuthHeader(VALID_USER.toString(), VALID_PASSWORD));
+    when(accountAuthenticator.authenticate(eq(new BasicCredentials(VALID_USER.toString(), VALID_PASSWORD))))
+        .thenThrow(new AuthenticationUnavailableException());
+    final var error = assertThrows(AuthenticationUnavailableException.class,
+        () -> new WebSocketAccountAuthenticator(accountAuthenticator).authenticate(upgradeRequest));
+    assertEquals(503, error.getResponse().getStatus());
   }
 }

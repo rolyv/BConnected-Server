@@ -17,8 +17,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.UUID;
 import org.apache.commons.lang3.StringUtils;
+import org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate;
+import org.whispersystems.textsecuregcm.admission.AdmissionServiceClient;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
@@ -39,6 +42,7 @@ public class AccountAuthenticator implements Authenticator<BasicCredentials, Aut
 
   private final AccountsManager accountsManager;
   private final Clock clock;
+  private final AdmissionEntitlementGate admissionGate;
 
   public AccountAuthenticator(AccountsManager accountsManager) {
     this(accountsManager, Clock.systemUTC());
@@ -48,6 +52,24 @@ public class AccountAuthenticator implements Authenticator<BasicCredentials, Aut
   public AccountAuthenticator(AccountsManager accountsManager, Clock clock) {
     this.accountsManager = accountsManager;
     this.clock = clock;
+    this.admissionGate = null;
+  }
+
+  /**
+   * The pilot has no cache-backed credential fallback and permits only its primary iPhone.
+   * Activity writes are deliberately deferred: changing lastSeen/version would invalidate the
+   * full-row authorization snapshot. Re-fetching entitlement after that write would silently
+   * replace the original freshness budget. This also means idle/lastSeen consumers remain stale
+   * until a separately guarded activity transition is implemented.
+   */
+  public static AccountAuthenticator withAdmission(final AdmissionEntitlementGate admissionGate) {
+    return new AccountAuthenticator(Objects.requireNonNull(admissionGate));
+  }
+
+  private AccountAuthenticator(final AdmissionEntitlementGate admissionGate) {
+    this.accountsManager = null;
+    this.clock = Clock.systemUTC();
+    this.admissionGate = admissionGate;
   }
 
   static Pair<String, Byte> getIdentifierAndDeviceId(final String basicUsername) {
@@ -82,6 +104,21 @@ public class AccountAuthenticator implements Authenticator<BasicCredentials, Aut
         deviceId = identifierAndDeviceId.second();
       }
 
+      if (admissionGate != null) {
+        if (deviceId != Device.PRIMARY_ID) {
+          failureReason = "pilotPrimaryDeviceRequired";
+          return Optional.empty();
+        }
+        final AdmissionEntitlementGate.DeviceAuthorization authorization =
+            admissionGate.authorizeDevice(accountUuid, deviceId, basicCredentials.getPassword());
+        final AuthenticatedDevice principal = new AuthenticatedDevice(accountUuid, deviceId,
+            authorization.primaryDeviceLastSeen(), authorization);
+        // Principal construction and any intervening wait consume the same lease. Never renew it.
+        principal.requireCurrentEntitlement();
+        succeeded = true;
+        return Optional.of(principal);
+      }
+
       Optional<Account> account = accountsManager.getByAccountIdentifier(accountUuid);
 
       if (account.isEmpty()) {
@@ -107,6 +144,13 @@ public class AccountAuthenticator implements Authenticator<BasicCredentials, Aut
         failureReason = "incorrectPassword";
         return Optional.empty();
       }
+    } catch (AdmissionEntitlementGate.UnavailableException | AdmissionServiceClient.AdmissionServiceException unavailable) {
+      failureReason = "admissionUnavailable";
+      // Remote DENIED also includes IAM errors and rate limits; it is not bad-device proof.
+      throw new AuthenticationUnavailableException();
+    } catch (AdmissionEntitlementGate.DeniedException denied) {
+      failureReason = "admissionDenied";
+      return Optional.empty();
     } catch (IllegalArgumentException | InvalidAuthorizationHeaderException iae) {
       failureReason = "invalidHeader";
       return Optional.empty();
@@ -124,6 +168,9 @@ public class AccountAuthenticator implements Authenticator<BasicCredentials, Aut
 
   @VisibleForTesting
   public Account updateLastSeen(Account account, Device device) {
+    if (admissionGate != null) {
+      throw new IllegalStateException("Pilot activity writes require a guarded admission transition");
+    }
     // compute a non-negative integer between 0 and 86400.
     long n = Util.ensureNonNegativeLong(account.getAccountIdentifier().getLeastSignificantBits());
     final long lastSeenOffsetSeconds = n % ChronoUnit.DAYS.getDuration().toSeconds();

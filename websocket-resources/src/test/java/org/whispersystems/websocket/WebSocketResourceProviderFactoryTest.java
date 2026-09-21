@@ -108,6 +108,17 @@ public class WebSocketResourceProviderFactoryTest {
   }
 
   @Test
+  void testUnavailableAuthorizationIsRetriableAndCreatesNoSocket() throws Exception {
+    when(environment.getAuthenticator()).thenReturn(authenticator);
+    when(authenticator.authenticate(eq(request))).thenThrow(new jakarta.ws.rs.ServiceUnavailableException());
+    when(environment.jersey()).thenReturn(jerseyEnvironment);
+    var factory = new WebSocketResourceProviderFactory<>(environment, Account.class, REMOTE_ADDRESS_PROPERTY_NAME);
+    assertNull(factory.createWebSocket(request, response));
+    verify(response).sendError(503, "Authentication unavailable");
+    verifyNoMoreInteractions(response);
+  }
+
+  @Test
   void testAuthenticatedWebSocketUpgradeFilter() throws InvalidCredentialsException {
     final Account account = new Account();
     final Optional<Account> reusableAuth = Optional.of(account);

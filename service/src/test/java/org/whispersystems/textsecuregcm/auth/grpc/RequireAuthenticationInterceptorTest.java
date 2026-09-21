@@ -26,6 +26,7 @@ import org.signal.chat.rpc.GetAuthenticatedDeviceResponse;
 import org.signal.chat.rpc.GetRequestAttributesRequest;
 import org.signal.chat.rpc.RequestAttributesGrpc;
 import org.whispersystems.textsecuregcm.auth.AccountAuthenticator;
+import org.whispersystems.textsecuregcm.auth.AuthenticationUnavailableException;
 import org.whispersystems.textsecuregcm.grpc.RequestAttributesServiceImpl;
 import org.whispersystems.textsecuregcm.util.UUIDUtil;
 
@@ -97,5 +98,16 @@ class RequireAuthenticationInterceptorTest {
     final StatusRuntimeException e = assertThrows(StatusRuntimeException.class,
         () -> client.getRequestAttributes(GetRequestAttributesRequest.getDefaultInstance()));
     assertEquals(Status.Code.UNAUTHENTICATED, e.getStatus().getCode());
+  }
+
+  @Test
+  void unavailableMembershipIsNotInvalidCredentials() {
+    when(authenticator.authenticate(any())).thenThrow(new AuthenticationUnavailableException());
+    final var client = RequestAttributesGrpc.newBlockingStub(channel)
+        .withCallCredentials(new BasicAuthCallCredentials("test", "password"));
+    final var error = assertThrows(StatusRuntimeException.class,
+        () -> client.getRequestAttributes(GetRequestAttributesRequest.getDefaultInstance()));
+    assertEquals(Status.Code.UNAVAILABLE, error.getStatus().getCode());
+    assertEquals("Current authentication unavailable", error.getStatus().getDescription());
   }
 }

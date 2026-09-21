@@ -89,6 +89,9 @@ import org.whispersystems.textsecuregcm.asn.AsnInfoProviderImpl;
 import org.whispersystems.textsecuregcm.attachments.GcsAttachmentGenerator;
 import org.whispersystems.textsecuregcm.attachments.TusAttachmentGenerator;
 import org.whispersystems.textsecuregcm.auth.AccountAuthenticator;
+import org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate;
+import org.whispersystems.textsecuregcm.admission.AdmissionServiceClient;
+import org.whispersystems.textsecuregcm.admission.AdmissionServiceConfiguration;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
 import org.whispersystems.textsecuregcm.auth.CertificateGenerator;
 import org.whispersystems.textsecuregcm.auth.CloudflareTurnCredentialsManager;
@@ -855,7 +858,19 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         accountsManager);
     reportMessageManager.addListener(reportedMessageMetricsListener);
 
-    final AccountAuthenticator accountAuthenticator = new AccountAuthenticator(accountsManager);
+    final AccountAuthenticator accountAuthenticator;
+    if (gcpPilot) {
+      // Required for every pilot authentication. Failure to initialize has no legacy fallback.
+      final AdmissionServiceClient admissionClient =
+          AdmissionServiceClient.applicationDefault(AdmissionServiceConfiguration.pilot());
+      environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
+        @Override public void stop() { admissionClient.close(); }
+      });
+      accountAuthenticator = AccountAuthenticator.withAdmission(
+          new AdmissionEntitlementGate(postgres.dataSource(), admissionClient));
+    } else {
+      accountAuthenticator = new AccountAuthenticator(accountsManager);
+    }
 
     final MessageSender messageSender = new MessageSender(messagesManager, pushNotificationManager, dynamicConfigurationManager);
     final ReceiptSender receiptSender = new ReceiptSender(accountsManager, messageSender, receiptSenderExecutor);

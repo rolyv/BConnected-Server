@@ -352,7 +352,7 @@ class AdmissionEntitlementGatePostgresTest {
     when(ds.getConnection()).thenThrow(new SQLException("sensitive fixture detail"));
     var failure =
         assertThrows(
-            AdmissionEntitlementGate.DeniedException.class,
+            AdmissionEntitlementGate.UnavailableException.class,
             () -> new AdmissionEntitlementGate(ds, client).authorize(aci));
     assertThat(failure).hasMessage("Current alumni entitlement unavailable").hasNoCause();
     assertThat(requests.get()).isZero();
