@@ -70,15 +70,23 @@ public final class AdmissionEntitlementGate {
   }
 
   /** Device credentials were verified against the same live snapshot as membership. */
+  public record AccountProjection(UUID aci, UUID pni, String number, byte deviceId) {
+    @Override public String toString() { return "AdmissionAccountProjection[redacted]"; }
+  }
+
+  /** Device credentials were verified against the same live snapshot as membership. */
   public static final class DeviceAuthorization {
     private final Authorization membership;
     private final byte deviceId;
     private final Instant primaryDeviceLastSeen;
+    private final AccountProjection projection;
 
-    private DeviceAuthorization(Authorization membership, byte deviceId, Instant primaryDeviceLastSeen) {
+    private DeviceAuthorization(Authorization membership, byte deviceId, Instant primaryDeviceLastSeen,
+        AccountProjection projection) {
       this.membership = membership;
       this.deviceId = deviceId;
       this.primaryDeviceLastSeen = primaryDeviceLastSeen;
+      this.projection = projection;
     }
 
     public void requireCurrent(UUID expectedAci, byte expectedDeviceId) {
@@ -99,7 +107,13 @@ public final class AdmissionEntitlementGate {
       requireCurrent(expectedAci, expectedDeviceId);
       Authorization next = membership.owner.authorizeSnapshot(membership.snapshot);
       requireReceipt(membership.snapshot, membership.receipt);
-      return new DeviceAuthorization(next, deviceId, primaryDeviceLastSeen);
+      return new DeviceAuthorization(next, deviceId, primaryDeviceLastSeen, projection);
+    }
+
+    /** Immutable authoritative identity from this same credential-verified snapshot, rechecked now. */
+    public AccountProjection accountProjection() {
+      requireCurrent(projection.aci(), projection.deviceId());
+      return projection;
     }
 
     /** Metadata from the credential-verified snapshot, not a separate cached account read. */
@@ -135,9 +149,11 @@ public final class AdmissionEntitlementGate {
     if (deviceId < 1 || password == null || password.isEmpty()) throw denied();
     Snapshot original = transaction(connection -> readLocked(connection, aci));
     final Instant primaryDeviceLastSeen;
+    final AccountProjection projection;
     try {
       var json = SystemMapper.jsonMapper();
-      var account = json.treeToValue(json.readTree(original.account()).get("data"), Account.class);
+      var row = json.readTree(original.account());
+      var account = json.treeToValue(row.get("data"), Account.class);
       var device = account.getDevice(deviceId).orElseThrow(AdmissionEntitlementGate::denied);
       if (device.hasLockedCredentials() || !device.getAuthTokenHash().verify(password))
         throw denied();
@@ -145,10 +161,16 @@ public final class AdmissionEntitlementGate {
           .orElseThrow(AdmissionEntitlementGate::denied).getLastSeen();
       if (lastSeen < 0) throw unavailable();
       primaryDeviceLastSeen = Instant.ofEpochMilli(lastSeen);
+      UUID storedAci = UUID.fromString(row.required("aci").textValue());
+      UUID pni = UUID.fromString(row.required("pni").textValue());
+      String number = row.required("number").textValue();
+      if (!aci.equals(storedAci) || pni.equals(new UUID(0, 0)) || number == null
+          || !number.matches("\\+[1-9][0-9]{1,14}")) throw unavailable();
+      projection = new AccountProjection(storedAci, pni, number, deviceId);
     } catch (IOException | IllegalArgumentException | NullPointerException invalid) {
       throw unavailable();
     }
-    return new DeviceAuthorization(authorizeSnapshot(original), deviceId, primaryDeviceLastSeen);
+    return new DeviceAuthorization(authorizeSnapshot(original), deviceId, primaryDeviceLastSeen, projection);
   }
 
   private Authorization authorizeSnapshot(Snapshot original) {

@@ -74,6 +74,13 @@ public final class AdmissionAccountCreator {
   public Status createOrResumePending(
       AdmissionRegistrationCoordinator.Input input,
       AdmissionRegistrationCoordinator.AttestedRegistration attested) {
+    return createOrResumePending(null, input, attested);
+  }
+
+  /** Public enrollment adapters must select an existing operation before any creation effects. */
+  public Status createOrResumePending(UUID expectedOperationId,
+      AdmissionRegistrationCoordinator.Input input,
+      AdmissionRegistrationCoordinator.AttestedRegistration attested) {
     Objects.requireNonNull(input);
     Objects.requireNonNull(attested);
     // The caller's arrays/DTOs must never be read after authenticating a different snapshot.
@@ -91,8 +98,12 @@ public final class AdmissionAccountCreator {
               request,
               input.signalAgent(),
               input.userAgent());
-      var operation =
-          committed.orElseGet(
+      var operation = expectedOperationId != null
+          ? operations.authenticateExisting(expectedOperationId,
+              new AdmissionRegistrationCoordinator.Input(input.memberId(), input.attemptNonce(),
+                  input.bindingChallenge(), input.requestedNumber(), input.password(), request,
+                  input.signalAgent(), input.userAgent()), true)
+          : committed.orElseGet(
               () ->
                   operations.prepareOrAuthenticateRetry(
                       input.memberId(),
@@ -236,7 +247,11 @@ public final class AdmissionAccountCreator {
       throw rejected();
   }
 
-  private static IllegalStateException rejected() {
-    return new IllegalStateException("Enrollment is unavailable or binding changed");
+  public static final class EnrollmentRejectedException extends IllegalStateException {
+    private EnrollmentRejectedException() { super("Enrollment is unavailable or binding changed"); }
+  }
+
+  private static EnrollmentRejectedException rejected() {
+    return new EnrollmentRejectedException();
   }
 }

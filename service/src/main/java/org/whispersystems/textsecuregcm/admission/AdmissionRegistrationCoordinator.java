@@ -138,8 +138,14 @@ public final class AdmissionRegistrationCoordinator {
       throws VerificationSessionRateLimitExceededException,
           RegistrationServiceException,
           RegistrationServiceSenderException {
+    return sendCode(null, input, acceptLanguage, timeout);
+  }
+
+  public SessionStatus sendCode(UUID expectedOperationId, Input input, String acceptLanguage, Duration timeout)
+      throws VerificationSessionRateLimitExceededException, RegistrationServiceException,
+          RegistrationServiceSenderException {
     timeout(timeout);
-    var operation = authenticate(input);
+    var operation = operations.authenticateExisting(expectedOperationId, input, false);
     var claim = admission.claim(operation, input.bindingChallenge());
     byte[] session = operations.requireClaimedSession(operation, claim);
     return status(
@@ -156,10 +162,15 @@ public final class AdmissionRegistrationCoordinator {
 
   public SessionStatus checkCode(Input input, String code, Duration timeout)
       throws VerificationSessionRateLimitExceededException, RegistrationServiceException {
+    return checkCode(null, input, code, timeout);
+  }
+
+  public SessionStatus checkCode(UUID expectedOperationId, Input input, String code, Duration timeout)
+      throws VerificationSessionRateLimitExceededException, RegistrationServiceException {
     timeout(timeout);
     if (code == null || !code.matches("[0-9]{4,10}"))
       throw new IllegalArgumentException("Invalid verification code format");
-    var operation = authenticate(input);
+    var operation = operations.authenticateExisting(expectedOperationId, input, false);
     var claim = admission.claim(operation, input.bindingChallenge());
     byte[] session = operations.requireClaimedSession(operation, claim);
     return status(
@@ -170,7 +181,11 @@ public final class AdmissionRegistrationCoordinator {
    * Reads authoritative native verification state; client or provider receipt claims never suffice.
    */
   public AttestedRegistration attestVerifiedPhone(Input input) {
-    var operation = authenticate(input);
+    return attestVerifiedPhone(null, input);
+  }
+
+  public AttestedRegistration attestVerifiedPhone(UUID expectedOperationId, Input input) {
+    var operation = operations.authenticateExisting(expectedOperationId, input, false);
     var claim = admission.claim(operation, input.bindingChallenge());
     operations.requireClaimedSession(operation, claim);
     var phone = operations.readVerifiedPhone(operation);
@@ -178,6 +193,16 @@ public final class AdmissionRegistrationCoordinator {
     var permit =
         admission.attest(operation, claim, phone, phoneBinding(phone.canonicalNumber()), verifier);
     return new AttestedRegistration(operation, permit);
+  }
+
+  /** Pure status read: no claim renewal, session creation, provider request, or account mutation. */
+  public SessionStatus status(UUID expectedOperationId, Input input, Duration timeout) {
+    timeout(timeout);
+    var operation = operations.authenticateExisting(expectedOperationId, input, false);
+    byte[] session = operations.assignedSessionId(operation)
+        .orElseThrow(() -> new IllegalStateException("Registration session unavailable"));
+    return status(operation, registration.getSession(session, timeout)
+        .orElseThrow(() -> new IllegalStateException("Registration session unavailable")));
   }
 
   private RegistrationOperations.AuthenticatedOperation authenticate(Input input) {
@@ -193,7 +218,7 @@ public final class AdmissionRegistrationCoordinator {
         input.userAgent());
   }
 
-  private static SessionStatus status(
+  private SessionStatus status(
       RegistrationOperations.AuthenticatedOperation operation, RegistrationServiceSession session) {
     if (!operation.requestedNumber().equals(session.number()))
       throw new IllegalStateException("Invalid registration session binding");
@@ -202,7 +227,7 @@ public final class AdmissionRegistrationCoordinator {
         session.verified(),
         session.nextSms(),
         session.nextVerificationAttempt(),
-        session.expiration());
+        Math.min(session.expiration(), operations.remainingSessionSeconds(operation)));
   }
 
   private String phoneBinding(String number) {

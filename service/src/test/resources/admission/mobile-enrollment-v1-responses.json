@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "verification",
+      "httpStatus": 200,
+      "body": {
+        "operationId": "00000000-0000-4000-8000-000000000010",
+        "state": "verification",
+        "phoneVerified": false,
+        "nextSmsSeconds": 0,
+        "nextCheckSeconds": null,
+        "expiresInSeconds": 120,
+        "registrationAuthorized": false
+      }
+    },
+    {
+      "name": "phone_verified",
+      "httpStatus": 200,
+      "body": {
+        "operationId": "00000000-0000-4000-8000-000000000010",
+        "state": "verification",
+        "phoneVerified": true,
+        "nextSmsSeconds": null,
+        "nextCheckSeconds": null,
+        "expiresInSeconds": 100,
+        "registrationAuthorized": false
+      }
+    },
+    {
+      "name": "pending_confirmation",
+      "httpStatus": 202,
+      "body": {
+        "operationId": "00000000-0000-4000-8000-000000000010",
+        "state": "pending_confirmation",
+        "registrationAuthorized": false
+      }
+    },
+    {
+      "name": "pending_status",
+      "httpStatus": 200,
+      "body": {
+        "operationId": "00000000-0000-4000-8000-000000000010",
+        "state": "pending_confirmation",
+        "registrationAuthorized": false
+      }
+    },
+    {
+      "name": "suspended",
+      "httpStatus": 200,
+      "body": {
+        "operationId": "00000000-0000-4000-8000-000000000010",
+        "state": "suspended",
+        "registrationAuthorized": false
+      }
+    },
+    {
+      "name": "active",
+      "httpStatus": 200,
+      "body": {
+        "operationId": "00000000-0000-4000-8000-000000000010",
+        "state": "active",
+        "registrationAuthorized": true,
+        "account": {
+          "aci": "00000000-0000-4000-8000-000000000020",
+          "pni": "00000000-0000-4000-8000-000000000030",
+          "number": "+13055550123",
+          "deviceId": 1
+        }
+      }
+    },
+    {
+      "name": "invalid_request",
+      "httpStatus": 400,
+      "body": {
+        "code": "INVALID_REQUEST"
+      }
+    },
+    {
+      "name": "invalid_credentials",
+      "httpStatus": 401,
+      "body": {
+        "code": "INVALID_CREDENTIALS"
+      }
+    },
+    {
+      "name": "enrollment_unavailable",
+      "httpStatus": 404,
+      "body": {
+        "code": "ENROLLMENT_UNAVAILABLE"
+      }
+    },
+    {
+      "name": "enrollment_conflict",
+      "httpStatus": 409,
+      "body": {
+        "code": "ENROLLMENT_CONFLICT"
+      }
+    },
+    {
+      "name": "enrollment_expired",
+      "httpStatus": 410,
+      "body": {
+        "code": "ENROLLMENT_EXPIRED"
+      }
+    },
+    {
+      "name": "code_not_accepted",
+      "httpStatus": 422,
+      "body": {
+        "code": "CODE_NOT_ACCEPTED"
+      }
+    },
+    {
+      "name": "rate_limited",
+      "httpStatus": 429,
+      "body": {
+        "code": "RATE_LIMITED"
+      }
+    },
+    {
+      "name": "temporarily_unavailable",
+      "httpStatus": 503,
+      "body": {
+        "code": "TEMPORARILY_UNAVAILABLE"
+      }
+    },
+    {
+      "name": "known_rate_delay",
+      "httpStatus": 429,
+      "body": {
+        "code": "RATE_LIMITED",
+        "retryAfterSeconds": 30
+      }
+    }
+  ]
+}

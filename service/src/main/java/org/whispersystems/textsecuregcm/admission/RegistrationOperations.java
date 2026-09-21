@@ -34,9 +34,16 @@ public final class RegistrationOperations {
   }
 
   public static final class OperationRejectedException extends RuntimeException {
+    public enum Reason { UNAVAILABLE, INVALID_CREDENTIALS, CONFLICT, EXPIRED }
+    private final Reason reason;
     private OperationRejectedException() {
-      super("Registration operation unavailable or inputs changed");
+      this(Reason.UNAVAILABLE);
     }
+    private OperationRejectedException(Reason reason) {
+      super("Registration operation unavailable or inputs changed");
+      this.reason = reason;
+    }
+    public Reason reason() { return reason; }
   }
 
   public static final class OperationUnavailableException extends RuntimeException {
@@ -257,19 +264,86 @@ public final class RegistrationOperations {
                   stored = read(rows);
                 }
               }
-              requireActive(stored);
-              if (!stored.authentication.verify(password)
-                  || !equal(stored.challenge, challenge)
+              if (!stored.authentication.verify(password))
+                throw new OperationRejectedException(OperationRejectedException.Reason.INVALID_CREDENTIALS);
+              if (!equal(stored.challenge, challenge)
                   || !stored.number.equals(canonical.number())
                   || !equal(stored.keys, unhex(canonical.keyCommitment()))
                   || !equal(stored.request, requestCommitment(encoded, stored.authentication)))
-                throw new OperationRejectedException();
+                throw new OperationRejectedException(OperationRejectedException.Reason.CONFLICT);
+              requireActive(stored);
               return new AuthenticatedOperation(stored);
             });
       } finally {
         Arrays.fill(encoded, (byte) 0);
       }
     }
+  }
+
+  /** Existing-only public-operation boundary. No INSERT, claim, provider call or account write. */
+  public AuthenticatedOperation authenticateExisting(UUID expectedId,
+      AdmissionRegistrationCoordinator.Input input, boolean allowExpiredCommitted) {
+    Objects.requireNonNull(input);
+    requireUuid(input.memberId());
+    if (expectedId != null) requireUuid(expectedId);
+    byte[] attempt = hash("bconnected.registration-attempt.v1", decodeNonce(input.attemptNonce()));
+    decodeNonce(input.bindingChallenge());
+    byte[] challenge = hash(null, input.bindingChallenge().getBytes(StandardCharsets.US_ASCII));
+    try (var canonical = CanonicalRegistrationRequest.beforeVerification(input.request(), input.requestedNumber(),
+        input.signalAgent(), input.userAgent())) {
+      byte[] encoded = canonical.bytes();
+      try {
+        return transaction(connection -> {
+          try (var query = connection.prepareStatement("""
+              SELECT r.* FROM signal.registration_operations r WHERE member_id=? AND registration_attempt_hash=?
+              """)) {
+            query.setObject(1, input.memberId());
+            query.setBytes(2, attempt);
+            try (var rows = query.executeQuery()) {
+              if (!rows.next()) throw new OperationRejectedException();
+              Stored stored = read(rows);
+              if (expectedId != null && !stored.id.equals(expectedId)) throw new OperationRejectedException();
+              if (!stored.authentication.verify(input.password()))
+                throw new OperationRejectedException(OperationRejectedException.Reason.INVALID_CREDENTIALS);
+              if (!equal(stored.challenge, challenge) || !stored.number.equals(canonical.number())
+                  || !equal(stored.keys, unhex(canonical.keyCommitment()))
+                  || !equal(stored.request, requestCommitment(encoded, stored.authentication)))
+                throw new OperationRejectedException(OperationRejectedException.Reason.CONFLICT);
+              boolean committed = false;
+              if (allowExpiredCommitted) {
+                try (var admission = connection.prepareStatement(
+                    "SELECT 1 FROM signal.admissions WHERE signal_operation_id=?")) {
+                  admission.setObject(1, stored.id);
+                  try (var found = admission.executeQuery()) { committed = found.next(); }
+                }
+              }
+              if (!committed) requireActive(stored);
+              return new AuthenticatedOperation(stored);
+            }
+          }
+        });
+      } finally { Arrays.fill(encoded, (byte) 0); }
+    }
+  }
+
+  /** Read-only native association validation; countdown is capped by both immutable deadlines. */
+  public long remainingSessionSeconds(AuthenticatedOperation operation) {
+    return transaction(connection -> {
+      Stored stored = lock(connection, operation);
+      requireSession(connection, stored, false);
+      long deadline = Math.min(stored.expires, stored.sessionExpires);
+      try (var query = connection.prepareStatement(
+          "SELECT claim_expires_ms FROM signal.registration_operations WHERE operation_id=?")) {
+        query.setObject(1, stored.id);
+        try (var row = query.executeQuery()) {
+          if (!row.next() || row.getObject(1) == null) throw new OperationRejectedException();
+          deadline = Math.min(deadline, row.getLong(1));
+        }
+      }
+      long remaining = deadline - clock.millis();
+      if (remaining <= 0) throw new OperationRejectedException(OperationRejectedException.Reason.EXPIRED);
+      return (remaining + 999) / 1000;
+    });
   }
 
   @FunctionalInterface
@@ -315,12 +389,13 @@ public final class RegistrationOperations {
                 try (var rows = query.executeQuery()) {
                   if (!rows.next()) return Optional.empty();
                   var stored = read(rows);
-                  if (!stored.authentication.verify(password)
-                      || !equal(stored.challenge, challenge)
+                  if (!stored.authentication.verify(password))
+                    throw new OperationRejectedException(OperationRejectedException.Reason.INVALID_CREDENTIALS);
+                  if (!equal(stored.challenge, challenge)
                       || !stored.number.equals(canonical.number())
                       || !equal(stored.keys, unhex(canonical.keyCommitment()))
                       || !equal(stored.request, requestCommitment(encoded, stored.authentication)))
-                    throw new OperationRejectedException();
+                    throw new OperationRejectedException(OperationRejectedException.Reason.CONFLICT);
                   return Optional.of(new AuthenticatedOperation(stored));
                 }
               }
@@ -461,10 +536,11 @@ public final class RegistrationOperations {
       try (var row = query.executeQuery()) {
         if (!row.next()
             || !stored.number.equals(row.getString("number"))
-            || row.getLong("expires_ms") <= clock.millis()
             || !Objects.equals(stored.sessionExpires, row.getLong("expires_ms"))
             || (requireVerified && !row.getBoolean("verified")))
           throw new OperationRejectedException();
+        if (row.getLong("expires_ms") <= clock.millis())
+          throw new OperationRejectedException(OperationRejectedException.Reason.EXPIRED);
       }
     }
     requireActive(stored);
@@ -657,7 +733,8 @@ public final class RegistrationOperations {
 
   private void requireActive(Stored row) {
     long now = clock.millis();
-    if (row.expires <= now || row.created > now + 5000) throw new OperationRejectedException();
+    if (row.expires <= now) throw new OperationRejectedException(OperationRejectedException.Reason.EXPIRED);
+    if (row.created > now + 5000) throw new OperationRejectedException();
   }
 
   private byte[] requestCommitment(byte[] request, RegistrationAuthentication authentication) {
