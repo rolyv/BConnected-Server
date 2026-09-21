@@ -43,7 +43,6 @@ import org.whispersystems.textsecuregcm.configuration.dynamic.DynamicConfigurati
 import org.whispersystems.textsecuregcm.controllers.SecureStorageController;
 import org.whispersystems.textsecuregcm.controllers.SecureValueRecovery2Controller;
 import org.whispersystems.textsecuregcm.experiment.ExperimentEnrollmentManager;
-import org.whispersystems.textsecuregcm.experiment.PushNotificationExperimentSamples;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
 import org.whispersystems.textsecuregcm.metrics.MetricsUtil;
 import org.whispersystems.textsecuregcm.metrics.MicrometerAwsSdkMetricPublisher;
@@ -116,7 +115,6 @@ public record CommandDependencies(
     PushNotificationSender apnSender,
     PushNotificationSender fcmSender,
     PushNotificationManager pushNotificationManager,
-    PushNotificationExperimentSamples pushNotificationExperimentSamples,
     FaultTolerantRedisClusterClient cacheCluster,
     FaultTolerantRedisClusterClient pushSchedulerCluster,
     ClientResources.Builder redisClusterClientResourcesBuilder,
@@ -449,10 +447,7 @@ public record CommandDependencies(
         apnSender, fcmSender, accountsManager, 0, 0, retryExecutor);
     PushNotificationManager pushNotificationManager = new PushNotificationManager(accountsManager,
         apnSender, fcmSender, pushNotificationScheduler);
-    PushNotificationExperimentSamples pushNotificationExperimentSamples =
-        gcpPilot ? null : new PushNotificationExperimentSamples(dynamoDbAsyncClient,
-            configuration.getDynamoDbTables().getPushNotificationExperimentSamples().getTableName(),
-            Clock.systemUTC());
+
 
     if (apnSender instanceof io.dropwizard.lifecycle.Managed managedApns) environment.lifecycle().manage(managedApns);
     environment.lifecycle().manage(disconnectionRequestManager);
@@ -470,7 +465,6 @@ public record CommandDependencies(
         apnSender,
         fcmSender,
         pushNotificationManager,
-        pushNotificationExperimentSamples,
         cacheCluster,
         pushSchedulerCluster,
         redisClientResourcesBuilder,

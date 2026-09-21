@@ -122,16 +122,11 @@ dynamoDbTables:
     expiration: P90D
   phoneNumberIdentifiers:
     tableName: pni_test
-  pushNotificationExperimentSamples:
-    tableName: Example_PushNotificationExperimentSamples
   redeemedReceipts:
     tableName: redeemed_receipts_test
   registrationRecovery:
     tableName: registration_recovery_passwords_test
     expiration: P300D # Duration of time until rows expire
-  scheduledJobs:
-    tableName: scheduled_jobs_test
-    expiration: P7D
   subscriptions:
     tableName: subscriptions_test
   verificationSessions:

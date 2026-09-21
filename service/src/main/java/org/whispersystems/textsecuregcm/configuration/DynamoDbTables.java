@@ -56,10 +56,8 @@ public class DynamoDbTables {
   private final IssuedReceiptsTableConfiguration issuedReceipts;
   private final TableWithExpiration onetimeDonations;
   private final Table phoneNumberIdentifiers;
-  private final Table pushNotificationExperimentSamples;
   private final Table redeemedReceipts;
   private final TableWithExpiration registrationRecovery;
-  private final TableWithExpiration scheduledJobs;
   private final Table subscriptions;
   private final Table verificationSessions;
 
@@ -73,10 +71,8 @@ public class DynamoDbTables {
       @JsonProperty("issuedReceipts") final IssuedReceiptsTableConfiguration issuedReceipts,
       @JsonProperty("onetimeDonations") final TableWithExpiration onetimeDonations,
       @JsonProperty("phoneNumberIdentifiers") final Table phoneNumberIdentifiers,
-      @JsonProperty("pushNotificationExperimentSamples") final Table pushNotificationExperimentSamples,
       @JsonProperty("redeemedReceipts") final Table redeemedReceipts,
       @JsonProperty("registrationRecovery") final TableWithExpiration registrationRecovery,
-      @JsonProperty("scheduledJobs") final TableWithExpiration scheduledJobs,
       @JsonProperty("subscriptions") final Table subscriptions,
       @JsonProperty("verificationSessions") final Table verificationSessions) {
 
@@ -89,10 +85,8 @@ public class DynamoDbTables {
     this.issuedReceipts = issuedReceipts;
     this.onetimeDonations = onetimeDonations;
     this.phoneNumberIdentifiers = phoneNumberIdentifiers;
-    this.pushNotificationExperimentSamples = pushNotificationExperimentSamples;
     this.redeemedReceipts = redeemedReceipts;
     this.registrationRecovery = registrationRecovery;
-    this.scheduledJobs = scheduledJobs;
     this.subscriptions = subscriptions;
     this.verificationSessions = verificationSessions;
   }
@@ -153,12 +147,6 @@ public class DynamoDbTables {
 
   @NotNull
   @Valid
-  public Table getPushNotificationExperimentSamples() {
-    return pushNotificationExperimentSamples;
-  }
-
-  @NotNull
-  @Valid
   public Table getRedeemedReceipts() {
     return redeemedReceipts;
   }
@@ -167,12 +155,6 @@ public class DynamoDbTables {
   @Valid
   public TableWithExpiration getRegistrationRecovery() {
     return registrationRecovery;
-  }
-
-  @NotNull
-  @Valid
-  public TableWithExpiration getScheduledJobs() {
-    return scheduledJobs;
   }
 
   @NotNull

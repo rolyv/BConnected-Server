@@ -8,8 +8,6 @@ package org.whispersystems.textsecuregcm.storage;
 import java.util.Collections;
 import java.util.List;
 import org.whispersystems.textsecuregcm.backup.BackupsDb;
-import org.whispersystems.textsecuregcm.experiment.PushNotificationExperimentSamples;
-import org.whispersystems.textsecuregcm.scheduler.JobScheduler;
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
 import software.amazon.awssdk.services.dynamodb.model.GlobalSecondaryIndex;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
@@ -135,20 +133,6 @@ public final class DynamoDbExtensionSchema {
             .build()),
         List.of(), List.of()),
 
-    PUSH_NOTIFICATION_EXPERIMENT_SAMPLES("push_notification_experiment_samples_test",
-        PushNotificationExperimentSamples.KEY_EXPERIMENT_NAME,
-        PushNotificationExperimentSamples.ATTR_ACI_AND_DEVICE_ID,
-        List.of(
-            AttributeDefinition.builder()
-                .attributeName(PushNotificationExperimentSamples.KEY_EXPERIMENT_NAME)
-                .attributeType(ScalarAttributeType.S)
-                .build(),
-            AttributeDefinition.builder()
-                .attributeName(PushNotificationExperimentSamples.ATTR_ACI_AND_DEVICE_ID)
-                .attributeType(ScalarAttributeType.B)
-                .build()),
-        List.of(), List.of()),
-
     PNI("pni_test",
         PhoneNumberIdentifiers.KEY_E164,
         null,
@@ -217,21 +201,6 @@ public final class DynamoDbExtensionSchema {
             .attributeType(ScalarAttributeType.S)
             .build()),
         List.of(), List.of()),
-
-    SCHEDULED_JOBS("scheduled_jobs_test",
-        JobScheduler.KEY_SCHEDULER_NAME,
-        JobScheduler.ATTR_RUN_AT,
-        List.of(AttributeDefinition.builder()
-                .attributeName(JobScheduler.KEY_SCHEDULER_NAME)
-                .attributeType(ScalarAttributeType.S)
-                .build(),
-
-            AttributeDefinition.builder()
-                .attributeName(JobScheduler.ATTR_RUN_AT)
-                .attributeType(ScalarAttributeType.B)
-                .build()),
-        List.of(),
-        List.of()),
 
     SUBSCRIPTIONS("subscriptions_test",
         Subscriptions.KEY_USER,
