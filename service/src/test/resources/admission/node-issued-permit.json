@@ -1,0 +1,20 @@
+{
+  "description": "Synthetic Node issuer interoperability vector. Public key and signed assertion only; no private material.",
+  "kid": "fixture-1",
+  "publicKeySpkiBase64": "MCowBQYDK2VwAyEAqDw4WopuK26LG74Ow1kMG86IBeVgUIOfCn78VWhjqBc=",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqDw4WopuK26LG74Ow1kMG86IBeVgUIOfCn78VWhjqBc=\n-----END PUBLIC KEY-----\n",
+  "issuedAtMs": 1800000000000,
+  "binding": {
+    "memberId": "00000000-0000-4000-8000-000000000001",
+    "approvalEpoch": 1,
+    "signalOperationId": "00000000-0000-4000-8000-000000000002",
+    "registrationAttemptHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "deviceKeyCommitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "serverRequestCommitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "phoneBinding": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "serverVerificationSessionHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6ImZpeHR1cmUtMSIsInR5cCI6ImJjb25uZWN0ZWQtYWRtaXNzaW9uLXYxIn0.eyJpc3MiOiJiY29ubmVjdGVkLWNvbW11bml0eSIsImF1ZCI6ImJjb25uZWN0ZWQtc2lnbmFsLXJlZ2lzdHJhdGlvbiIsImp0aSI6IlFYNWVwQ1BLai14U3oxZmItOGdaeEdMNW15M28tbjFCU3lyRXF3T0k4SEkiLCJtZW1iZXJJZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImFwcHJvdmFsRXBvY2giOjEsInNpZ25hbE9wZXJhdGlvbklkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwicmVnaXN0cmF0aW9uQXR0ZW1wdEhhc2giOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwiZGV2aWNlS2V5Q29tbWl0bWVudCI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJzZXJ2ZXJSZXF1ZXN0Q29tbWl0bWVudCI6ImNjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2MiLCJwaG9uZUJpbmRpbmciOiJkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkIiwic2VydmVyVmVyaWZpY2F0aW9uU2Vzc2lvbkhhc2giOiJlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlIiwiaWF0IjoxODAwMDAwMDAwLCJleHAiOjE4MDAwMDAwMzB9.CzO3tZJrfIjAr023oEZ37Oimbzhz8Qg_Y89ds5waFEjaSYO29V_ne19n8mozXtzYM17YF52Gq4KvjR50J3V7Aw",
+  "permitId": "QX5epCPKj-xSz1fb-8gZxGL5my3o-n1BSyrEqwOI8HI",
+  "expiresAt": 1800000030000
+}
