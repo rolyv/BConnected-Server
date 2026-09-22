@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.entities.MessageProtos.Envelope;
+import org.whispersystems.textsecuregcm.admission.AdmissionMessageSendGuard;
 import org.whispersystems.textsecuregcm.identity.AciServiceIdentifier;
 import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
@@ -72,12 +73,15 @@ public class ReceiptSender {
 
               try {
                 if (guard != null) guard.requireCurrent(); // Account-cache lookup may have waited.
-                messageSender.sendMessages(destinationAccount,
+                if (guard == null) messageSender.sendMessages(destinationAccount,
                     destinationIdentifier,
                     messagesByDeviceId,
                     registrationIdsByDeviceId,
                     Optional.empty(),
                     UserAgentTagUtil.SERVER_UA);
+                else messageSender.sendMessages(destinationAccount, destinationIdentifier, messagesByDeviceId,
+                    registrationIdsByDeviceId, Optional.empty(), UserAgentTagUtil.SERVER_UA,
+                    AdmissionMessageSendGuard.receipt(sourceIdentifier, sourceDeviceId, guard));
               } catch (final Exception e) {
                 logger.warn("Could not send delivery receipt", e);
               }

@@ -144,6 +144,7 @@ public final class AdmissionWebSocketSessionManager implements Managed {
     }
 
     public AuthenticatedDevice principal() { return principal; }
+    @Override public AdmissionEntitlementGate.DeviceAuthorization admissionAuthorization() { return principal.admissionAuthorization(); }
     public void requireCurrent() { recheck(lease, principal); }
     @Override public Executor executor() { return deliveries; }
     @Override public void requireCurrent(UUID expectedAccount, Device expectedDevice) {

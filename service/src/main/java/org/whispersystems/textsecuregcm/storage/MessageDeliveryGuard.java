@@ -7,6 +7,10 @@ import java.util.concurrent.Executor;
 
 /** One immutable device proof for one delivery/acknowledgment use, including asynchronous waits. */
 public interface MessageDeliveryGuard {
+  /** Exact captured admission proof for guarded server receipt forwarding; absent for legacy uses. */
+  default org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate.DeviceAuthorization admissionAuthorization() {
+    return null;
+  }
   void requireCurrent();
 
   void requireCurrent(UUID expectedAccount, Device expectedDevice);

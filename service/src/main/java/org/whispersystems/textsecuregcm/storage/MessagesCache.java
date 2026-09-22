@@ -235,6 +235,15 @@ public class MessagesCache {
         .whenComplete((_, _) -> sample.stop(insertTimer));
   }
 
+  public CompletableFuture<Boolean> insert(final UUID messageGuid, final UUID destinationAccountIdentifier,
+      final byte destinationDeviceId, final MessageProtos.Envelope message,
+      final org.whispersystems.textsecuregcm.admission.AdmissionMessageSendGuard guard) {
+    final MessageProtos.Envelope messageWithGuid = message.toBuilder().setServerGuid(UUIDUtil.toByteString(messageGuid)).build();
+    final Timer.Sample sample = Timer.start();
+    return insertScript.executeAsync(destinationAccountIdentifier, destinationDeviceId, messageWithGuid, guard)
+        .toCompletableFuture().whenComplete((_, _) -> sample.stop(insertTimer));
+  }
+
   public CompletableFuture<byte[]> insertSharedMultiRecipientMessagePayload(
       final SealedSenderMultiRecipientMessage sealedSenderMultiRecipientMessage) {
 

@@ -60,6 +60,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.auth.Anonymous;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
+import org.whispersystems.textsecuregcm.admission.AdmissionCapabilityGuard;
+import org.whispersystems.textsecuregcm.admission.AdmissionMessageSendGuard;
 import org.whispersystems.textsecuregcm.auth.CombinedUnidentifiedSenderAccessKeys;
 import org.whispersystems.textsecuregcm.auth.GroupSendTokenHeader;
 import org.whispersystems.textsecuregcm.auth.OptionalAccess;
@@ -105,6 +107,7 @@ public class MessageController {
   private final RateLimiters rateLimiters;
   private final CardinalityEstimator messageByteLimitEstimator;
   private final MessageSender messageSender;
+  private final boolean requireCurrentMembership;
   private final AccountsManager accountsManager;
   private final PhoneNumberIdentifierStore phoneNumberIdentifiers;
   private final ReportMessageManager reportMessageManager;
@@ -154,6 +157,14 @@ public class MessageController {
       final ServerSecretParams serverSecretParams,
       final SpamChecker spamChecker,
       final Clock clock) {
+    this(rateLimiters, messageByteLimitEstimator, messageSender, accountsManager, phoneNumberIdentifiers,
+        reportMessageManager, serverSecretParams, spamChecker, clock, false);
+  }
+
+  public MessageController(RateLimiters rateLimiters, CardinalityEstimator messageByteLimitEstimator,
+      MessageSender messageSender, AccountsManager accountsManager, PhoneNumberIdentifierStore phoneNumberIdentifiers,
+      ReportMessageManager reportMessageManager, ServerSecretParams serverSecretParams, SpamChecker spamChecker,
+      Clock clock, boolean requireCurrentMembership) {
     this.rateLimiters = rateLimiters;
     this.messageByteLimitEstimator = messageByteLimitEstimator;
     this.messageSender = messageSender;
@@ -163,6 +174,7 @@ public class MessageController {
     this.serverSecretParams = serverSecretParams;
     this.spamChecker = spamChecker;
     this.clock = clock;
+    this.requireCurrentMembership = requireCurrentMembership;
   }
 
   @Path("/{destination}")
@@ -216,6 +228,11 @@ public class MessageController {
 
       @Context final ContainerRequestContext context) throws RateLimitExceededException {
 
+    if (requireCurrentMembership) {
+      if (source.isEmpty() || isStory) throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
+      AdmissionCapabilityGuard.http(source.get(), true).run();
+    }
+
     if (groupSendToken != null) {
       if (source.isPresent() || accessKey.isPresent()) {
         throw new BadRequestException("Group send endorsement tokens should not be combined with other authentication");
@@ -233,8 +250,9 @@ public class MessageController {
         sendStoryMessage(destinationIdentifier, messages, context);
       } else if (source.isPresent()) {
         final AuthenticatedDevice authenticatedDevice = source.get();
-        final Account account = accountsManager.getByAccountIdentifier(authenticatedDevice.accountIdentifier())
-            .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED));
+        final Account account = AdmissionCapabilityGuard.http(authenticatedDevice, requireCurrentMembership)
+            .accountForCredentialIssuance(() -> accountsManager.getByAccountIdentifier(authenticatedDevice.accountIdentifier())
+                .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED)));
 
         if (account.isIdentifiedBy(destinationIdentifier)) {
           needsSync = false;
@@ -404,12 +422,16 @@ public class MessageController {
         : Optional.empty();
 
     try {
-      messageSender.sendMessages(destination,
+      if (requireCurrentMembership) messageSender.sendMessages(destination, destinationIdentifier, messagesByDeviceId,
+          registrationIdsByDeviceId, syncMessageSenderDeviceId, userAgent, AdmissionMessageSendGuard.http(sender));
+      else messageSender.sendMessages(destination,
           destinationIdentifier,
           messagesByDeviceId,
           registrationIdsByDeviceId,
           syncMessageSenderDeviceId,
           userAgent);
+    } catch (final AdmissionMessageSendGuard.Failure failure) {
+      throw failure.http();
     } catch (final MismatchedDevicesException e) {
       if (!e.getMismatchedDevices().staleDeviceIds().isEmpty()) {
         if (messageType == MessageType.SYNC) {
@@ -487,6 +509,8 @@ public class MessageController {
       @NotNull SealedSenderMultiRecipientMessage multiRecipientMessage,
 
       @Context ContainerRequestContext context) {
+
+    if (requireCurrentMembership) throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
 
     if (timestamp < 0 || timestamp > MAX_TIMESTAMP) {
       throw new BadRequestException("Illegal timestamp");

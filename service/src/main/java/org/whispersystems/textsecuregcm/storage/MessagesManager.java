@@ -33,6 +33,7 @@ import org.signal.libsignal.protocol.SealedSenderMultiRecipientMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.entities.MessageProtos.Envelope;
+import org.whispersystems.textsecuregcm.admission.AdmissionMessageSendGuard;
 import org.whispersystems.textsecuregcm.experiment.ExperimentEnrollmentManager;
 import org.whispersystems.textsecuregcm.identity.AciServiceIdentifier;
 import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
@@ -118,6 +119,29 @@ public class MessagesManager {
    */
   public Map<Byte, Boolean> insert(final UUID accountIdentifier, final Map<Byte, Envelope> messagesByDeviceId) {
     return insertAsync(accountIdentifier, messagesByDeviceId).join();
+  }
+
+  public Map<Byte, Boolean> insert(final UUID accountIdentifier, final Map<Byte, Envelope> messagesByDeviceId,
+      final AdmissionMessageSendGuard guard) {
+    guard.run();
+    if (hasFoundationDbStore()) throw new IllegalStateException("Admission sends require the native pilot store");
+    // The pilot permits one recipient device; validate every destination before scheduling any insertion.
+    messagesByDeviceId.forEach((device, message) -> { guard.requireDestination(accountIdentifier, device); guard.requireEnvelope(message); });
+    final Map<Byte, Boolean> presence = new ConcurrentHashMap<>();
+    CompletableFuture.allOf(messagesByDeviceId.entrySet().stream().map(entry -> {
+      final UUID messageGuid = UUID.randomUUID();
+      return messagesCache.insert(messageGuid, accountIdentifier, entry.getKey(), entry.getValue(), guard)
+          .thenAccept(present -> {
+            final ServiceIdentifier source = ServiceIdentifier.fromByteString(entry.getValue().getSourceServiceId());
+            if (!accountIdentifier.equals(source.uuid())) {
+              reportMessageManager.store(source.toServiceIdentifierString(), messageGuid);
+            }
+            presence.put(entry.getKey(), present);
+          });
+    })
+        .toArray(CompletableFuture[]::new)).join();
+    guard.run();
+    return presence;
   }
 
   private CompletableFuture<Map<Byte, Boolean>> insertAsync(final UUID accountIdentifier, final Map<Byte, Envelope> messagesByDeviceId) {

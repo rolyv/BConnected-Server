@@ -28,6 +28,8 @@ import org.signal.chat.messages.SendMessageType;
 import org.signal.chat.messages.SendSyncMessageRequest;
 import org.signal.chat.messages.SimpleMessagesGrpc;
 import org.whispersystems.textsecuregcm.auth.grpc.AuthenticatedDevice;
+import org.whispersystems.textsecuregcm.admission.AdmissionCapabilityGuard;
+import org.whispersystems.textsecuregcm.admission.AdmissionMessageSendGuard;
 import org.whispersystems.textsecuregcm.auth.grpc.AuthenticationUtil;
 import org.whispersystems.textsecuregcm.controllers.MessageDeliveryNotAllowedException;
 import org.whispersystems.textsecuregcm.controllers.MismatchedDevicesException;
@@ -66,6 +68,7 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
   private final MessageDispatcher messageDispatcher;
   private final Clock clock;
   private final AdmissionGrpcSessionManager admissionSessions;
+  private final boolean requireCurrentMembership;
 
   private static final SendMessageAuthenticatedSenderResponse SEND_MESSAGE_SUCCESS_RESPONSE =
       SendMessageAuthenticatedSenderResponse.newBuilder().setSuccess(Empty.getDefaultInstance()).build();
@@ -88,6 +91,15 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
       final MessageSender messageSender, final CardinalityEstimator messageByteLimitEstimator,
       final SpamChecker spamChecker, final MessageDispatcher messageDispatcher, final Clock clock,
       final AdmissionGrpcSessionManager admissionSessions) {
+    this(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender,
+        messageByteLimitEstimator, spamChecker, messageDispatcher, clock, admissionSessions, false);
+  }
+
+  public MessagesGrpcService(final AccountsManager accountsManager, final ReportMessageManager reportMessageManager,
+      final PhoneNumberIdentifierStore phoneNumberIdentifiers, final RateLimiters rateLimiters,
+      final MessageSender messageSender, final CardinalityEstimator messageByteLimitEstimator,
+      final SpamChecker spamChecker, final MessageDispatcher messageDispatcher, final Clock clock,
+      final AdmissionGrpcSessionManager admissionSessions, final boolean requireCurrentMembership) {
 
     this.accountsManager = accountsManager;
     this.reportMessageManager = reportMessageManager;
@@ -99,6 +111,7 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
     this.messageDispatcher = messageDispatcher;
     this.clock = clock;
     this.admissionSessions = admissionSessions;
+    this.requireCurrentMembership = requireCurrentMembership;
   }
 
   @Override
@@ -161,9 +174,11 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
       throws RateLimitExceededException {
 
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
+    AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership).run();
     final AciServiceIdentifier senderServiceIdentifier = new AciServiceIdentifier(authenticatedDevice.accountIdentifier());
-    final Account sender = accountsManager.getByServiceIdentifier(senderServiceIdentifier)
-        .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials"));
+    final Account sender = AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership)
+        .accountForCredentialIssuance(() -> accountsManager.getByServiceIdentifier(senderServiceIdentifier)
+            .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials")));
 
     final ServiceIdentifier destinationServiceIdentifier =
         GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getDestination());
@@ -173,6 +188,7 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
     }
 
     final Optional<Account> maybeDestination = accountsManager.getByServiceIdentifier(destinationServiceIdentifier);
+    AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership).run();
     if (maybeDestination.isEmpty()) {
       return SendMessageAuthenticatedSenderResponse.newBuilder()
           .setDestinationNotFound(NotFound.getDefaultInstance())
@@ -196,9 +212,11 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
       throws RateLimitExceededException {
 
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
+    AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership).run();
     final AciServiceIdentifier senderServiceIdentifier = new AciServiceIdentifier(authenticatedDevice.accountIdentifier());
-    final Account sender = accountsManager.getByServiceIdentifier(senderServiceIdentifier)
-        .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials"));
+    final Account sender = AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership)
+        .accountForCredentialIssuance(() -> accountsManager.getByServiceIdentifier(senderServiceIdentifier)
+            .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials")));
 
     return sendMessage(sender,
         senderServiceIdentifier,
@@ -269,7 +287,11 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
             entry -> entry.getValue().getRegistrationId()));
 
     try {
-      messageSender.sendMessages(destination,
+      if (requireCurrentMembership) messageSender.sendMessages(destination, destinationServiceIdentifier,
+          messagesByDeviceId, registrationIdsByDeviceId,
+          messageType == MessageType.SYNC ? Optional.of(sender.deviceId()) : Optional.empty(),
+          RequestAttributesUtil.getUserAgent().orElse(null), AdmissionMessageSendGuard.grpc(sender));
+      else messageSender.sendMessages(destination,
           destinationServiceIdentifier,
           messagesByDeviceId,
           registrationIdsByDeviceId,
@@ -277,6 +299,10 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
           RequestAttributesUtil.getUserAgent().orElse(null));
 
       return SEND_MESSAGE_SUCCESS_RESPONSE;
+    } catch (final AdmissionMessageSendGuard.Failure failure) {
+      if (failure.recipientDenied()) return SendMessageAuthenticatedSenderResponse.newBuilder()
+          .setDestinationNotFound(NotFound.getDefaultInstance()).build();
+      throw failure.grpc();
     } catch (final MismatchedDevicesException e) {
       return SendMessageAuthenticatedSenderResponse.newBuilder()
           .setMismatchedDevices(buildMismatchedDevices(destinationServiceIdentifier, e.getMismatchedDevices()))

@@ -56,6 +56,7 @@ public class MessagesAnonymousGrpcService extends SimpleMessagesAnonymousGrpc.Me
   private final CardinalityEstimator messageByteLimitEstimator;
   private final SpamChecker spamChecker;
   private final Clock clock;
+  private final boolean anonymousSendingEnabled;
 
   private static final SendMessageResponse SEND_MESSAGE_SUCCESS_RESPONSE = SendMessageResponse
       .newBuilder()
@@ -69,6 +70,14 @@ public class MessagesAnonymousGrpcService extends SimpleMessagesAnonymousGrpc.Me
       final CardinalityEstimator messageByteLimitEstimator,
       final SpamChecker spamChecker,
       final Clock clock) {
+    this(accountsManager, rateLimiters, messageSender, groupSendTokenUtil, messageByteLimitEstimator,
+        spamChecker, clock, true);
+  }
+
+  public MessagesAnonymousGrpcService(final AccountsManager accountsManager, final RateLimiters rateLimiters,
+      final MessageSender messageSender, final GroupSendTokenUtil groupSendTokenUtil,
+      final CardinalityEstimator messageByteLimitEstimator, final SpamChecker spamChecker,
+      final Clock clock, final boolean anonymousSendingEnabled) {
 
     this.accountsManager = accountsManager;
     this.rateLimiters = rateLimiters;
@@ -77,11 +86,13 @@ public class MessagesAnonymousGrpcService extends SimpleMessagesAnonymousGrpc.Me
     this.messageByteLimitEstimator = messageByteLimitEstimator;
     this.spamChecker = spamChecker;
     this.clock = clock;
+    this.anonymousSendingEnabled = anonymousSendingEnabled;
   }
 
   @Override
   public SendMessageResponse sendSingleRecipientMessage(final SendSealedSenderMessageRequest request)
       throws RateLimitExceededException {
+    if (!anonymousSendingEnabled) throw GrpcExceptions.unavailable("Owned anonymous admission is unavailable");
 
     final ServiceIdentifier destinationServiceIdentifier =
         GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getDestination());
@@ -130,6 +141,7 @@ public class MessagesAnonymousGrpcService extends SimpleMessagesAnonymousGrpc.Me
   @Override
   public SendMessageResponse sendStory(final SendStoryMessageRequest request)
       throws RateLimitExceededException {
+    if (!anonymousSendingEnabled) throw GrpcExceptions.unavailable("Owned anonymous admission is unavailable");
 
     final ServiceIdentifier destinationServiceIdentifier =
         GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getDestination());
@@ -237,6 +249,7 @@ public class MessagesAnonymousGrpcService extends SimpleMessagesAnonymousGrpc.Me
 
   @Override
   public SendMultiRecipientMessageResponse sendMultiRecipientMessage(final SendMultiRecipientMessageRequest request) {
+    if (!anonymousSendingEnabled) throw GrpcExceptions.unavailable("Owned anonymous admission is unavailable");
 
     final SealedSenderMultiRecipientMessage multiRecipientMessage =
         parseAndValidateMultiRecipientMessage(request.getMessage().getPayload().toByteArray());
@@ -256,6 +269,7 @@ public class MessagesAnonymousGrpcService extends SimpleMessagesAnonymousGrpc.Me
 
   @Override
   public SendMultiRecipientMessageResponse sendMultiRecipientStory(final SendMultiRecipientStoryRequest request) {
+    if (!anonymousSendingEnabled) throw GrpcExceptions.unavailable("Owned anonymous admission is unavailable");
 
     final SealedSenderMultiRecipientMessage multiRecipientMessage =
         parseAndValidateMultiRecipientMessage(request.getMessage().getPayload().toByteArray());

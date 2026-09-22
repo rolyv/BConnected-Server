@@ -21,10 +21,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import kotlin.Pair;
 import org.signal.libsignal.protocol.SealedSenderMultiRecipientMessage;
+import org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate;
+import org.whispersystems.textsecuregcm.admission.AdmissionMessageSendGuard;
 import org.whispersystems.textsecuregcm.configuration.dynamic.DynamicConfiguration;
 import org.whispersystems.textsecuregcm.controllers.MessageDeliveryNotAllowedException;
 import org.whispersystems.textsecuregcm.controllers.MismatchedDevices;
@@ -56,6 +59,8 @@ public class MessageSender {
   private final MessagesManager messagesManager;
   private final PushNotificationManager pushNotificationManager;
   private final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager;
+  private final AdmissionEntitlementGate admissionGate;
+  private final Executor admissionExecutor;
 
   private final List<MessageDeliveryListener> messageDeliveryListeners = new ArrayList<>();
 
@@ -82,9 +87,18 @@ public class MessageSender {
   public MessageSender(final MessagesManager messagesManager,
       final PushNotificationManager pushNotificationManager,
       final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager) {
+    this(messagesManager, pushNotificationManager, dynamicConfigurationManager, null, null);
+  }
+
+  public MessageSender(final MessagesManager messagesManager,
+      final PushNotificationManager pushNotificationManager,
+      final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager,
+      final AdmissionEntitlementGate admissionGate, final Executor admissionExecutor) {
     this.messagesManager = messagesManager;
     this.pushNotificationManager = pushNotificationManager;
     this.dynamicConfigurationManager = dynamicConfigurationManager;
+    this.admissionGate = admissionGate;
+    this.admissionExecutor = admissionExecutor;
   }
 
   public void addMessageDeliveryListener(final MessageDeliveryListener messageDeliveryListener) {
@@ -117,6 +131,24 @@ public class MessageSender {
       @Nullable final String userAgent)
       throws MismatchedDevicesException, MessageTooLargeException, MessageDeliveryNotAllowedException {
 
+    sendMessages(destination, destinationIdentifier, messagesByDeviceId, registrationIdsByDeviceId,
+        syncMessageSenderDeviceId, userAgent, null);
+  }
+
+  public void sendMessages(final Account requestedDestination,
+      final ServiceIdentifier destinationIdentifier,
+      final Map<Byte, Envelope> messagesByDeviceId,
+      final Map<Byte, Integer> registrationIdsByDeviceId,
+      final Optional<Byte> syncMessageSenderDeviceId,
+      @Nullable final String userAgent, @Nullable final AdmissionMessageSendGuard.Source source)
+      throws MismatchedDevicesException, MessageTooLargeException, MessageDeliveryNotAllowedException {
+
+    final AdmissionMessageSendGuard guard = admissionGate == null ? null : AdmissionMessageSendGuard.authorize(
+        admissionGate, source, requestedDestination.getAccountIdentifier(), destinationIdentifier, admissionExecutor);
+    // A stale account cache must not select replacement device registrations or push tokens.
+    final Account destination = guard == null ? requestedDestination : guard.destination();
+    if (guard != null) messagesByDeviceId.values().forEach(guard::requireEnvelope);
+
     if (dynamicConfigurationManager.getConfiguration().getMessageDeliveryConfiguration().isReadOnly()) {
       throw new MessageDeliveryNotAllowedException();
     }
@@ -130,13 +162,22 @@ public class MessageSender {
         syncMessageSenderDeviceId,
         platformTag);
 
-    messagesManager.insert(destination.getAccountIdentifier(), messagesByDeviceId)
+    final Map<Byte, Boolean> presence;
+    try {
+      presence = guard == null ? messagesManager.insert(destination.getAccountIdentifier(), messagesByDeviceId)
+          : messagesManager.insert(destination.getAccountIdentifier(), messagesByDeviceId, guard);
+    } catch (RuntimeException failure) {
+      throw guard == null ? failure : AdmissionMessageSendGuard.unwrapDispatchFailure(failure);
+    }
+    if (guard != null) guard.run();
+    presence
         .forEach((deviceId, destinationPresent) -> {
           final Envelope message = messagesByDeviceId.get(deviceId);
 
           if (!destinationPresent && !message.getEphemeral()) {
             try {
-              pushNotificationManager.sendNewMessageNotification(destination, deviceId, message.getUrgent());
+              if (guard == null) pushNotificationManager.sendNewMessageNotification(destination, deviceId, message.getUrgent());
+              else pushNotificationManager.sendNewMessageNotification(destination, deviceId, message.getUrgent(), guard);
             } catch (final NotPushRegisteredException ignored) {
             }
           }
@@ -198,6 +239,9 @@ public class MessageSender {
       final boolean isUrgent,
       @Nullable final String userAgent)
       throws MultiRecipientMismatchedDevicesException, MessageTooLargeException, MessageDeliveryNotAllowedException {
+
+    // The upstream fan-out has anonymous/UAK/ZK authorization only; none carries an owned sender proof.
+    if (admissionGate != null) throw new MessageDeliveryNotAllowedException();
 
     if (dynamicConfigurationManager.getConfiguration().getMessageDeliveryConfiguration().isReadOnly()) {
       throw new MessageDeliveryNotAllowedException();

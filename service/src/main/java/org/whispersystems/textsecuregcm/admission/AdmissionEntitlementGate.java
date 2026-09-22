@@ -42,6 +42,10 @@ public final class AdmissionEntitlementGate {
     }
   }
 
+  static final class RecipientDeniedException extends RuntimeException {
+    private RecipientDeniedException() { super("Current recipient unavailable"); }
+  }
+
   /**
    * Non-serializable, privately constructed account-membership evidence. It does not expose a
    * reusable boolean or extend the private service's original request-start freshness budget.
@@ -61,6 +65,12 @@ public final class AdmissionEntitlementGate {
     /** Recheck live local state and the original receipt; never refresh or activate. */
     public void requireCurrent(UUID expectedAci) {
       owner.requireCurrent(this, expectedAci);
+    }
+
+    /** A detached recipient snapshot; callers must retain and recheck this authorization at use. */
+    public Account accountForMessageSend(UUID expectedAci) {
+      requireCurrent(expectedAci);
+      return accountSnapshot(snapshot);
     }
 
     @Override
@@ -141,18 +151,7 @@ public final class AdmissionEntitlementGate {
      */
     public Account accountForCredentialIssuance(UUID expectedAci, byte expectedDeviceId) {
       requireCurrent(expectedAci, expectedDeviceId);
-      try {
-        var json = SystemMapper.jsonMapper();
-        var row = json.readTree(membership.snapshot.account());
-        var account = json.treeToValue(row.required("data"), Account.class);
-        account.setAccountIdentifier(projection.aci());
-        account.setNumber(projection.number(), projection.pni());
-        account.setVersion(row.required("version").intValue());
-        if (account.getAccountIdentityKey() == null) throw unavailable();
-        return account;
-      } catch (IOException | IllegalArgumentException | NullPointerException malformed) {
-        throw unavailable();
-      }
+      return accountSnapshot(membership.snapshot);
     }
 
     /** Metadata from the credential-verified snapshot, not a separate cached account read. */
@@ -180,6 +179,39 @@ public final class AdmissionEntitlementGate {
     requireAci(aci);
     Snapshot original = transaction(connection -> readLocked(connection, aci));
     return authorizeSnapshot(original);
+  }
+
+  /** Both original proofs are checked under one native transaction, including its elapsed budget. */
+  void requireCurrentSend(DeviceAuthorization sender, UUID senderAci, byte senderDevice,
+      Authorization recipient, UUID recipientAci) {
+    if (sender == null || sender.deviceId != senderDevice || sender.membership.owner != this
+        || recipient == null || recipient.owner != this) throw denied();
+    transaction(connection -> {
+      // FOR SHARE locks are compatible across sends; no remote request holds these locks.
+      requireCurrent(connection, sender.membership, senderAci);
+      try { requireCurrent(connection, recipient, recipientAci); }
+      catch (DeniedException denied) { throw new RecipientDeniedException(); }
+      requireReceipt(sender.membership.snapshot, sender.membership.receipt);
+      requireReceipt(recipient.snapshot, recipient.receipt);
+      return null;
+    });
+    requireReceipt(sender.membership.snapshot, sender.membership.receipt);
+    requireReceipt(recipient.snapshot, recipient.receipt);
+  }
+
+  private static Account accountSnapshot(Snapshot snapshot) {
+    try {
+      var json = SystemMapper.jsonMapper();
+      var row = json.readTree(snapshot.account());
+      var account = json.treeToValue(row.required("data"), Account.class);
+      account.setAccountIdentifier(UUID.fromString(row.required("aci").textValue()));
+      account.setNumber(row.required("number").textValue(), UUID.fromString(row.required("pni").textValue()));
+      account.setVersion(row.required("version").intValue());
+      if (account.getAccountIdentityKey() == null) throw unavailable();
+      return account;
+    } catch (IOException | IllegalArgumentException | NullPointerException malformed) {
+      throw unavailable();
+    }
   }
 
   /** Password is transient and is never retained by either authorization type. */

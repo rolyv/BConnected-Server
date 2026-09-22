@@ -15,6 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledExecutorService;
 import org.whispersystems.textsecuregcm.entities.MessageProtos;
+import org.whispersystems.textsecuregcm.admission.AdmissionMessageSendGuard;
 import org.whispersystems.textsecuregcm.push.ClientEvent;
 import org.whispersystems.textsecuregcm.push.NewMessageAvailableEvent;
 import org.whispersystems.textsecuregcm.push.RedisMessageAvailabilityManager;
@@ -53,6 +54,11 @@ class MessagesCacheInsertScript {
    * otherwise
    */
   CompletionStage<Boolean> executeAsync(final UUID destinationUuid, final byte destinationDevice, final MessageProtos.Envelope envelope) {
+    return executeAsync(destinationUuid, destinationDevice, envelope, null);
+  }
+
+  CompletionStage<Boolean> executeAsync(final UUID destinationUuid, final byte destinationDevice,
+      final MessageProtos.Envelope envelope, final AdmissionMessageSendGuard guard) {
     assert envelope.hasServerGuid();
     assert envelope.hasServerTimestamp();
 
@@ -69,7 +75,9 @@ class MessagesCacheInsertScript {
     ));
 
     return ResilienceUtil.getGeneralRedisRetry(MessagesCache.RETRY_NAME)
-        .executeCompletionStage(retryExecutor, () -> insertScript.executeBinaryAsync(keys, args))
+        .executeCompletionStage(retryExecutor, () -> guard == null ? insertScript.executeBinaryAsync(keys, args)
+            : insertScript.executeBinaryAsync(keys, args,
+                () -> { guard.requireDestination(destinationUuid, destinationDevice); guard.requireEnvelope(envelope); }, guard.executor()))
         .thenApply(result -> (boolean) result);
   }
 }

@@ -96,6 +96,35 @@ public class ClusterLuaScript {
         executeAsync(connection, keys.toArray(BYTE_ARRAY_ARRAY), args.toArray(BYTE_ARRAY_ARRAY)));
   }
 
+  /** Recheck after worker and connection waits, including the asynchronous NOSCRIPT fallback. */
+  public CompletableFuture<Object> executeBinaryAsync(final List<byte[]> keys, final List<byte[]> args,
+      final Runnable requireCurrent, final java.util.concurrent.Executor executor) {
+    final byte[][] keyArray = keys.toArray(BYTE_ARRAY_ARRAY);
+    final byte[][] argArray = args.toArray(BYTE_ARRAY_ARRAY);
+    return guardedDispatch(requireCurrent, executor, () -> redisCluster.withBinaryCluster(connection -> {
+      requireCurrent.run();
+      return connection.async().evalsha(sha, scriptOutputType, keyArray, argArray).toCompletableFuture();
+    })).exceptionallyCompose(failure -> {
+      if (org.whispersystems.textsecuregcm.util.ExceptionUtils.unwrap(failure) instanceof RedisNoScriptException) {
+        return guardedDispatch(requireCurrent, executor, () -> redisCluster.withBinaryCluster(connection -> {
+          requireCurrent.run();
+          return connection.async().eval(script, scriptOutputType, keyArray, argArray).toCompletableFuture();
+        }));
+      }
+      return CompletableFuture.failedFuture(failure);
+    });
+  }
+
+  private static CompletableFuture<Object> guardedDispatch(Runnable requireCurrent,
+      java.util.concurrent.Executor executor, java.util.function.Supplier<CompletableFuture<Object>> dispatch) {
+    try {
+      return CompletableFuture.supplyAsync(() -> { requireCurrent.run(); return dispatch.get(); }, executor)
+          .thenCompose(future -> future);
+    } catch (RuntimeException rejected) {
+      return CompletableFuture.failedFuture(rejected);
+    }
+  }
+
   public Flux<Object> executeBinaryReactive(final List<byte[]> keys, final List<byte[]> args) {
     return redisCluster.withBinaryCluster(connection ->
         executeReactive(connection, keys.toArray(BYTE_ARRAY_ARRAY), args.toArray(BYTE_ARRAY_ARRAY)));

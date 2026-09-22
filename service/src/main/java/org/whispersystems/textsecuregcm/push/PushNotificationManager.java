@@ -14,11 +14,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 import java.util.function.BiConsumer;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.whispersystems.textsecuregcm.identity.IdentityType;
+import org.whispersystems.textsecuregcm.admission.AdmissionMessageSendGuard;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
@@ -30,6 +32,7 @@ public class PushNotificationManager {
   private final PushNotificationSender apnSender;
   private final PushNotificationSender fcmSender;
   private final PushNotificationScheduler pushNotificationScheduler;
+  private final Semaphore guardedPushes;
 
   private static final Duration VERIFICATION_CODE_TTL = Duration.ofMinutes(10);
 
@@ -44,10 +47,20 @@ public class PushNotificationManager {
       final PushNotificationSender fcmSender,
       final PushNotificationScheduler pushNotificationScheduler) {
 
+    this(accountsManager, apnSender, fcmSender, pushNotificationScheduler, 64);
+  }
+
+  @VisibleForTesting
+  public PushNotificationManager(final AccountsManager accountsManager, final PushNotificationSender apnSender,
+      final PushNotificationSender fcmSender, final PushNotificationScheduler pushNotificationScheduler,
+      final int maxGuardedPushes) {
+    if (maxGuardedPushes < 1) throw new IllegalArgumentException("Positive guarded push limit required");
+
     this.accountsManager = accountsManager;
     this.apnSender = apnSender;
     this.fcmSender = fcmSender;
     this.pushNotificationScheduler = pushNotificationScheduler;
+    this.guardedPushes = new Semaphore(maxGuardedPushes);
   }
 
   public CompletableFuture<Optional<SendPushNotificationResult>> sendNewMessageNotification(final Account destination, final byte destinationDeviceId, final boolean urgent) throws NotPushRegisteredException {
@@ -56,6 +69,32 @@ public class PushNotificationManager {
 
     return sendNotification(new PushNotification(tokenAndType.first(), tokenAndType.second(),
         PushNotification.NotificationType.NOTIFICATION, null, destination, device, urgent, null));
+  }
+
+  /**
+   * Pilot pushes retain the originating send proof. They cannot enter the legacy twenty-minute
+   * scheduler, whose durable entries contain no sender authorization. Dispatch both urgent and
+   * background pushes on the bounded admission executor with their original priority.
+   */
+  public CompletableFuture<Optional<SendPushNotificationResult>> sendNewMessageNotification(final Account destination,
+      final byte destinationDeviceId, final boolean urgent, final AdmissionMessageSendGuard guard)
+      throws NotPushRegisteredException {
+    guard.requireDestination(destination.getAccountIdentifier(), destinationDeviceId);
+    final Account authoritative = guard.destination();
+    final Device device = authoritative.getDevice(destinationDeviceId).orElseThrow(NotPushRegisteredException::new);
+    final Pair<String, PushNotification.TokenType> tokenAndType = getToken(device);
+    final PushNotification notification = new PushNotification(tokenAndType.first(), tokenAndType.second(),
+        PushNotification.NotificationType.NOTIFICATION, null, authoritative, device, urgent, null);
+    // Keep the permit until the provider future completes, not merely until the SQL worker returns.
+    if (!guardedPushes.tryAcquire()) throw AdmissionMessageSendGuard.unavailable();
+    try {
+      // Keep the release stage private: cancellation of a caller-visible dependent must not suppress it.
+      return sendNotification(notification, guard).whenComplete((_, _) -> guardedPushes.release())
+          .thenApply(result -> result);
+    } catch (RuntimeException failure) {
+      guardedPushes.release();
+      throw failure;
+    }
   }
 
   public CompletableFuture<SendPushNotificationResult> sendRegistrationChallengeNotification(final String deviceToken, final PushNotification.TokenType tokenType, final String challengeToken) {
@@ -123,6 +162,11 @@ public class PushNotificationManager {
 
   @VisibleForTesting
   CompletableFuture<Optional<SendPushNotificationResult>> sendNotification(final PushNotification pushNotification) {
+    return sendNotification(pushNotification, null);
+  }
+
+  private CompletableFuture<Optional<SendPushNotificationResult>> sendNotification(final PushNotification pushNotification,
+      final AdmissionMessageSendGuard guard) {
     final PushNotificationSender sender = switch (pushNotification.tokenType()) {
       case FCM -> fcmSender;
       case APN -> apnSender;
@@ -131,7 +175,7 @@ public class PushNotificationManager {
     if (sender.isUnavailable()) {
       return sender.sendNotification(pushNotification).thenApply(Optional::of);
     }
-    if (!pushNotification.urgent()) {
+    if (guard == null && !pushNotification.urgent()) {
       // Schedule a notification for some time in the future (possibly even now!) rather than sending a notification
       // directly
       return pushNotificationScheduler
@@ -141,7 +185,8 @@ public class PushNotificationManager {
           .toCompletableFuture();
     }
 
-    return sender.sendNotification(pushNotification).whenComplete((result, throwable) -> {
+    return (guard == null ? sender.sendNotification(pushNotification)
+        : guard.dispatch(() -> sender.sendNotification(pushNotification))).whenComplete((result, throwable) -> {
       if (throwable == null) {
         Tags tags = Tags.of("tokenType", pushNotification.tokenType().name(),
             "notificationType", pushNotification.notificationType().name(),

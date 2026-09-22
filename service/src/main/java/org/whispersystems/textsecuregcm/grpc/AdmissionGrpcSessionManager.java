@@ -161,6 +161,7 @@ public final class AdmissionGrpcSessionManager implements Managed {
     private final class Guard implements MessageDeliveryGuard {
       private final DeviceAuthorization proof;
       Guard(DeviceAuthorization proof) { this.proof = proof; }
+      @Override public DeviceAuthorization admissionAuthorization() { return proof; }
       @Override public Executor executor() { return deliveries; }
       @Override public void requireCurrent() {
         requireOpen(proof);
