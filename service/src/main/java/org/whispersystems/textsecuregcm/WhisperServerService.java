@@ -271,7 +271,6 @@ import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
-import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseManager;
 import org.whispersystems.textsecuregcm.storage.ClientReleaseStore;
 import org.whispersystems.textsecuregcm.storage.DonationPermits;
@@ -304,7 +303,6 @@ import org.whispersystems.textsecuregcm.storage.SubscriptionManager;
 import org.whispersystems.textsecuregcm.storage.Subscriptions;
 import org.whispersystems.textsecuregcm.storage.VerificationSessionManager;
 import org.whispersystems.textsecuregcm.storage.VerificationSessionStore;
-import org.whispersystems.textsecuregcm.storage.VerificationSessions;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckManager;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckStore;
 import org.whispersystems.textsecuregcm.storage.devicecheck.AppleDeviceCheckTrustAnchor;
@@ -602,8 +600,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         dynamoDbClient,
         clock);
 
-    final VerificationSessionStore verificationSessions = postgres != null ? postgres.verificationSessions() : new VerificationSessions(dynamoDbClient,
-        config.getDynamoDbTables().getVerificationSessions().getTableName(), clock);
+    final VerificationSessionStore verificationSessions = postgres.verificationSessions();
 
     final ClientResources sharedClientResources = ClientResources.builder()
         .commandLatencyRecorder(
@@ -803,8 +800,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     MessagesManager messagesManager =
         new MessagesManager(messageStore, messagesCache, foundationDbMessageStore, redisMessageAvailabilityManager,
             reportMessageManager, messageDeletionAsyncExecutor, Clock.systemUTC(), experimentEnrollmentManager);
-    final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods = postgres != null ? postgres.waitingPeriods() : new ChangeNumberWaitingPeriods(
-        config.getDynamoDbTables().getChangeNumberWaitingPeriods().getTableName(), dynamoDbClient);
+    final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods = postgres.waitingPeriods();
     final ChangeNumberWaitingPeriodManager changeNumberWaitingPeriodManager = new ChangeNumberWaitingPeriodManager(
         changeNumberWaitingPeriods, config.getChangeNumber().postRegistrationWaitingPeriod(), clock);
     AccountLockManager accountLockManager = postgres != null ? postgres.accountLocks() : new AccountLockManager(dynamoDbClient,

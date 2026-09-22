@@ -61,15 +61,6 @@ public final class DynamoDbExtensionSchema {
             .attributeType(ScalarAttributeType.B).build()),
         Collections.emptyList(), Collections.emptyList()),
 
-    CHANGE_NUMBER_WAITING_PERIODS("change_number_waiting_periods_test",
-        ChangeNumberWaitingPeriods.KEY_ACCOUNT_UUID,
-        null,
-        List.of(AttributeDefinition.builder()
-            .attributeName(ChangeNumberWaitingPeriods.KEY_ACCOUNT_UUID)
-            .attributeType(ScalarAttributeType.B)
-            .build()),
-        List.of(), List.of()),
-
     TRANSACTION_PARTICIPANTS("transaction_participants_test",
         TRANSACTION_PARTITION,
         TRANSACTION_SORT,
@@ -246,15 +237,6 @@ public final class DynamoDbExtensionSchema {
         List.of(AttributeDefinition.builder()
             .attributeName(Accounts.ATTR_USERNAME_HASH)
             .attributeType(ScalarAttributeType.B)
-            .build()),
-        List.of(), List.of()),
-
-    VERIFICATION_SESSIONS("verification_sessions_test",
-        VerificationSessions.KEY_KEY,
-        null,
-        List.of(AttributeDefinition.builder()
-            .attributeName(VerificationSessions.KEY_KEY)
-            .attributeType(ScalarAttributeType.S)
             .build()),
         List.of(), List.of());
 

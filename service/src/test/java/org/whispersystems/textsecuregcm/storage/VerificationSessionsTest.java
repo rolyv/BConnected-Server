@@ -6,6 +6,7 @@
 package org.whispersystems.textsecuregcm.storage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -20,23 +21,21 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.whispersystems.textsecuregcm.registration.VerificationSession;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema.Tables;
 import org.whispersystems.textsecuregcm.telephony.CarrierData;
-import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
+import org.whispersystems.textsecuregcm.util.SystemMapper;
 
 class VerificationSessionsTest {
 
   private static final Clock clock = Clock.systemUTC();
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(Tables.VERIFICATION_SESSIONS);
+  static final PostgresAccountKeyTestExtension POSTGRES = new PostgresAccountKeyTestExtension();
 
-  private VerificationSessions verificationSessions;
+  private VerificationSessionStore verificationSessions;
 
   @BeforeEach
   void setUp() {
-    verificationSessions = new VerificationSessions(
-        DYNAMO_DB_EXTENSION.getDynamoDbClient(), Tables.VERIFICATION_SESSIONS.tableName(), clock);
+    verificationSessions = new VerificationSessionsPostgres(POSTGRES.dataSource(), clock);
   }
 
   @Test
@@ -66,11 +65,13 @@ class VerificationSessionsTest {
           List.of(VerificationSession.Information.PUSH_CHALLENGE), Collections.emptyList(), null, null, true,
           clock.millis(), clock.millis(), Duration.ofMinutes(1).toSeconds());
 
+      assertFalse(SystemMapper.jsonMapper().readTree(
+          SystemMapper.jsonMapper().writeValueAsString(session)).has("expirationEpochSeconds"));
       verificationSessions.insert(sessionId, session);
 
       assertEquals(session, verificationSessions.findForKey(sessionId).orElseThrow());
 
-      assertThrows(ConditionalCheckFailedException.class, () -> verificationSessions.insert(sessionId, session),
+      assertThrows(IllegalStateException.class, () -> verificationSessions.insert(sessionId, session),
           "inserting with the same key should fail conditional checks");
 
       final VerificationSession updatedSession = new VerificationSession(sessionId, null, new CarrierData("Test", CarrierData.LineType.MOBILE, Optional.of("123"), Optional.empty(), Optional.empty(), Optional.empty()), Collections.emptyList(),

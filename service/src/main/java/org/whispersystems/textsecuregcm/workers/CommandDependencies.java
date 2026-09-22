@@ -62,7 +62,6 @@ import org.whispersystems.textsecuregcm.storage.Accounts;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodManager;
 import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriodStore;
-import org.whispersystems.textsecuregcm.storage.ChangeNumberWaitingPeriods;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
 import org.whispersystems.textsecuregcm.storage.FoundationDbVersion;
 import org.whispersystems.textsecuregcm.storage.IssuedReceiptsManager;
@@ -364,8 +363,7 @@ public record CommandDependencies(
         configuration.getDynamoDbTables().getDeletedAccountsLock().getTableName());
     PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager =
         new PhoneNumberRecoveryPasswordsManager(phoneNumberRecoveryPasswords);
-    final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods = postgres != null ? postgres.waitingPeriods() : new ChangeNumberWaitingPeriods(
-        configuration.getDynamoDbTables().getChangeNumberWaitingPeriods().getTableName(), dynamoDbClient);
+    final ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods = postgres.waitingPeriods();
     final ChangeNumberWaitingPeriodManager changeNumberWaitingPeriodManager = new ChangeNumberWaitingPeriodManager(
         changeNumberWaitingPeriods, configuration.getChangeNumber().postRegistrationWaitingPeriod(), clock);
     final WebAuthnCeremonyManager webAuthnCeremonyManager = new WebAuthnCeremonyManager(

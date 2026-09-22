@@ -48,7 +48,6 @@ public class DynamoDbTables {
 
   private final AccountsTableConfiguration accounts;
 
-  private final Table changeNumberWaitingPeriods;
   private final Table backups;
   private final Table deletedAccounts;
   private final Table deletedAccountsLock;
@@ -59,11 +58,9 @@ public class DynamoDbTables {
   private final Table redeemedReceipts;
   private final TableWithExpiration registrationRecovery;
   private final Table subscriptions;
-  private final Table verificationSessions;
 
   public DynamoDbTables(
       @JsonProperty("accounts") final AccountsTableConfiguration accounts,
-      @JsonProperty("changeNumberWaitingPeriods") final Table changeNumberWaitingPeriods,
       @JsonProperty("backups") final Table backups,
       @JsonProperty("deletedAccounts") final Table deletedAccounts,
       @JsonProperty("deletedAccountsLock") final Table deletedAccountsLock,
@@ -73,11 +70,9 @@ public class DynamoDbTables {
       @JsonProperty("phoneNumberIdentifiers") final Table phoneNumberIdentifiers,
       @JsonProperty("redeemedReceipts") final Table redeemedReceipts,
       @JsonProperty("registrationRecovery") final TableWithExpiration registrationRecovery,
-      @JsonProperty("subscriptions") final Table subscriptions,
-      @JsonProperty("verificationSessions") final Table verificationSessions) {
+      @JsonProperty("subscriptions") final Table subscriptions) {
 
     this.accounts = accounts;
-    this.changeNumberWaitingPeriods = changeNumberWaitingPeriods;
     this.backups = backups;
     this.deletedAccounts = deletedAccounts;
     this.deletedAccountsLock = deletedAccountsLock;
@@ -88,19 +83,12 @@ public class DynamoDbTables {
     this.redeemedReceipts = redeemedReceipts;
     this.registrationRecovery = registrationRecovery;
     this.subscriptions = subscriptions;
-    this.verificationSessions = verificationSessions;
   }
 
   @NotNull
   @Valid
   public AccountsTableConfiguration getAccounts() {
     return accounts;
-  }
-
-  @NotNull
-  @Valid
-  public Table getChangeNumberWaitingPeriods() {
-    return changeNumberWaitingPeriods;
   }
 
   @NotNull
@@ -163,9 +151,4 @@ public class DynamoDbTables {
     return subscriptions;
   }
 
-  @NotNull
-  @Valid
-  public Table getVerificationSessions() {
-    return verificationSessions;
-  }
 }

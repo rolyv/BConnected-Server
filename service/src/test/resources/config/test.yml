@@ -100,8 +100,6 @@ dynamoDbTables:
     usedLinkDeviceTokensTableName: used_link_device_tokens_test
   backups:
     tableName: backups_test
-  changeNumberWaitingPeriods:
-    tableName: change_number_waiting_periods_test
   deletedAccounts:
     tableName: deleted_accounts_test
   deletedAccountsLock:
@@ -129,8 +127,6 @@ dynamoDbTables:
     expiration: P300D # Duration of time until rows expire
   subscriptions:
     tableName: subscriptions_test
-  verificationSessions:
-    tableName: verification_sessions_test
 
 cacheCluster: # Redis server configuration for cache cluster
   type: local

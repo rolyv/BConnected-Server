@@ -16,21 +16,17 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema.Tables;
 
 class ChangeNumberWaitingPeriodsTest {
 
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION =
-      new DynamoDbExtension(Tables.CHANGE_NUMBER_WAITING_PERIODS);
+  static final PostgresAccountKeyTestExtension POSTGRES = new PostgresAccountKeyTestExtension();
 
-  private ChangeNumberWaitingPeriods changeNumberWaitingPeriods;
+  private ChangeNumberWaitingPeriodStore changeNumberWaitingPeriods;
 
   @BeforeEach
   void setUp() {
-    changeNumberWaitingPeriods = new ChangeNumberWaitingPeriods(
-        Tables.CHANGE_NUMBER_WAITING_PERIODS.tableName(),
-        DYNAMO_DB_EXTENSION.getDynamoDbClient());
+    changeNumberWaitingPeriods = new ChangeNumberWaitingPeriodsPostgres(POSTGRES.dataSource(), java.time.Clock.systemUTC());
   }
 
   @Test

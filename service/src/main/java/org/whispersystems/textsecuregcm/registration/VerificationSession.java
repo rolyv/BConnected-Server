@@ -6,10 +6,10 @@
 package org.whispersystems.textsecuregcm.registration;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.time.Instant;
 import java.util.List;
 import javax.annotation.Nullable;
-import org.whispersystems.textsecuregcm.storage.SerializedExpireableJsonDynamoStore;
 import org.whispersystems.textsecuregcm.telephony.CarrierData;
 
 /**
@@ -47,9 +47,9 @@ public record VerificationSession(
     boolean allowedToRequestCode,
     long createdTimestamp,
     long updatedTimestamp,
-    long remoteExpirationSeconds) implements SerializedExpireableJsonDynamoStore.Expireable {
+    long remoteExpirationSeconds) {
 
-  @Override
+  @JsonIgnore
   public long getExpirationEpochSeconds() {
     return Instant.ofEpochMilli(updatedTimestamp).plusSeconds(remoteExpirationSeconds).getEpochSecond();
   }

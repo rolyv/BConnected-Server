@@ -95,8 +95,6 @@ dynamoDbTables:
     usedLinkDeviceTokensTableName: Example_Accounts_UsedLinkDeviceTokens
   backups:
     tableName: Example_Backups
-  changeNumberWaitingPeriods:
-    tableName: Example_ChangeNumberWaitingPeriods
   deletedAccounts:
     tableName: Example_DeletedAccounts
   deletedAccountsLock:
@@ -124,8 +122,6 @@ dynamoDbTables:
     expiration: P300D # Duration of time until rows expire
   subscriptions:
     tableName: Example_Subscriptions
-  verificationSessions:
-    tableName: Example_VerificationSessions
 
 cacheCluster: # Redis server configuration for cache cluster
   configurationUri: redis://redis.example.com:6379/
