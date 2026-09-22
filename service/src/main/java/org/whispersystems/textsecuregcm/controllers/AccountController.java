@@ -4,6 +4,7 @@
  */
 package org.whispersystems.textsecuregcm.controllers;
 
+import org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy;
 import io.dropwizard.auth.Auth;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -81,6 +82,8 @@ public class AccountController {
   public static final int USERNAME_HASH_LENGTH = 32;
   public static final int MAXIMUM_USERNAME_CIPHERTEXT_LENGTH = 128;
 
+  private final AccountOperationsPolicy operationsPolicy;
+
   private final Set<PushNotification.TokenType> enabledPushTypes;
   private final AccountsManager accounts;
   private final RateLimiters rateLimiters;
@@ -100,6 +103,15 @@ public class AccountController {
       final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
       final UsernameHashZkProofVerifier usernameHashZkProofVerifier,
       final Set<PushNotification.TokenType> enabledPushTypes) {
+    this(accounts, rateLimiters, phoneNumberRecoveryPasswordsManager, usernameHashZkProofVerifier, enabledPushTypes, AccountOperationsPolicy.STANDARD);
+  }
+
+  public AccountController(final AccountsManager accounts, final RateLimiters rateLimiters,
+      final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
+      final UsernameHashZkProofVerifier usernameHashZkProofVerifier,
+      final Set<PushNotification.TokenType> enabledPushTypes,
+      final AccountOperationsPolicy operationsPolicy) {
+    this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
     this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accounts = accounts;
     this.rateLimiters = rateLimiters;
@@ -213,6 +225,7 @@ public class AccountController {
       @Schema(description = "The ID of the device for which to set a name; if omitted, the authenticated device will be targeted for a name change",
           requiredMode = Schema.RequiredMode.NOT_REQUIRED)
       final Byte deviceId) {
+    operationsPolicy.requireDeviceTarget(deviceId == null ? auth.deviceId() : deviceId);
 
     final Account account = accounts.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED));
@@ -240,6 +253,7 @@ public class AccountController {
       @Auth AuthenticatedDevice auth,
       @HeaderParam(HeaderUtils.X_SIGNAL_AGENT) String signalAgent,
       @NotNull @Valid AccountAttributes attributes) {
+    if (attributes.recoveryPassword().isPresent()) operationsPolicy.requireRecoveryPasswordChanges();
 
     final Account account = accounts.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED));

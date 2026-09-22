@@ -4,6 +4,7 @@
  */
 package org.whispersystems.textsecuregcm.controllers;
 
+import org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.net.HttpHeaders;
 import io.dropwizard.auth.Auth;
@@ -93,6 +94,8 @@ public class DeviceController {
 
   static final int MAX_DEVICES = 6;
 
+  private final AccountOperationsPolicy operationsPolicy;
+
   private final Set<PushNotification.TokenType> enabledPushTypes;
   private final AccountsManager accounts;
   private final RateLimiters rateLimiters;
@@ -129,6 +132,14 @@ public class DeviceController {
   public DeviceController(final AccountsManager accounts, final RateLimiters rateLimiters,
       final PersistentTimer persistentTimer,
       final Set<PushNotification.TokenType> enabledPushTypes) {
+    this(accounts, rateLimiters, persistentTimer, enabledPushTypes, AccountOperationsPolicy.STANDARD);
+  }
+
+  public DeviceController(final AccountsManager accounts, final RateLimiters rateLimiters,
+      final PersistentTimer persistentTimer,
+      final Set<PushNotification.TokenType> enabledPushTypes,
+      final AccountOperationsPolicy operationsPolicy) {
+    this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
     this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accounts = accounts;
     this.rateLimiters = rateLimiters;
@@ -163,6 +174,7 @@ public class DeviceController {
   @Path("/{device_id}")
   @ChangesLinkedDevices
   public void removeDevice(@Auth AuthenticatedDevice auth, @PathParam("device_id") byte deviceId) {
+    operationsPolicy.requireLinkedDevices();
     if (auth.deviceId() != Device.PRIMARY_ID && auth.deviceId() != deviceId) {
       throw new WebApplicationException(Response.Status.UNAUTHORIZED);
     }
@@ -204,6 +216,7 @@ public class DeviceController {
       description = "If present, an positive integer indicating the number of seconds before a subsequent attempt could succeed"))
   public LinkDeviceToken createDeviceToken(@Auth AuthenticatedDevice auth)
       throws RateLimitExceededException, DeviceLimitExceededException {
+    operationsPolicy.requireLinkedDevices();
 
     final Account account = accounts.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Response.Status.UNAUTHORIZED));
@@ -244,6 +257,7 @@ public class DeviceController {
       @HeaderParam(HttpHeaders.USER_AGENT) @Nullable String userAgent,
       @NotNull @Valid LinkDeviceRequest linkDeviceRequest)
       throws RateLimitExceededException, DeviceLimitExceededException {
+    operationsPolicy.requireLinkedDevices();
     final Account account = accounts.checkDeviceLinkingToken(linkDeviceRequest.verificationCode())
         .flatMap(accounts::getByAccountIdentifier)
         .orElseThrow(ForbiddenException::new);
@@ -374,6 +388,7 @@ public class DeviceController {
               """) final int timeoutSeconds,
 
       @HeaderParam(HttpHeaders.USER_AGENT) String userAgent) {
+    operationsPolicy.requireLinkedDevices();
     final AtomicInteger linkedDeviceListenerCounter = getCounterForLinkedDeviceListeners(userAgent);
     linkedDeviceListenerCounter.incrementAndGet();
 
@@ -462,6 +477,7 @@ public class DeviceController {
 
       @Valid
       final RestoreAccountRequest restoreAccountRequest) {
+    operationsPolicy.requireLinkedDevices();
 
     return accounts.recordRestoreAccountRequest(token, restoreAccountRequest);
   }
@@ -495,6 +511,7 @@ public class DeviceController {
                 The amount of time (in seconds) to wait for a response. If a transfer archive for the authenticated
                 device is not available within the given amount of time, this endpoint will return a status of HTTP/204.
               """) final int timeoutSeconds) {
+    operationsPolicy.requireLinkedDevices();
 
     return accounts.waitForRestoreAccountRequest(token, Duration.ofSeconds(timeoutSeconds))
         .thenApply(maybeRequestReceived -> maybeRequestReceived
@@ -519,6 +536,7 @@ public class DeviceController {
   @ApiResponse(responseCode = "429", description = "Rate-limited; try again after the prescribed delay")
   public CompletionStage<Void> recordTransferArchiveUploaded(@Auth final AuthenticatedDevice authenticatedDevice,
       @NotNull @Valid final TransferArchiveUploadedRequest transferArchiveUploadedRequest) {
+    operationsPolicy.requireLinkedDevices();
     return rateLimiters.getUploadTransferArchiveLimiter()
         .validateAsync(authenticatedDevice.accountIdentifier())
         .thenCompose(ignored -> accounts.getByAccountIdentifierAsync(authenticatedDevice.accountIdentifier()))
@@ -564,6 +582,7 @@ public class DeviceController {
               """) final int timeoutSeconds,
 
       @HeaderParam(HttpHeaders.USER_AGENT) @Nullable String userAgent) {
+    operationsPolicy.requireLinkedDevices();
 
 
     final String rateLimiterKey = authenticatedDevice.accountIdentifier() + ":" + authenticatedDevice.deviceId();

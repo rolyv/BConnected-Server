@@ -4,6 +4,7 @@
  */
 package org.whispersystems.textsecuregcm;
 
+import org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy;
 import static java.util.Objects.requireNonNull;
 import static org.whispersystems.textsecuregcm.metrics.MetricsUtil.name;
 
@@ -1143,14 +1144,16 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     final List<ServerServiceDefinition> authenticatedServices = Stream.of(
             new AccountsGrpcService(accountsManager, rateLimiters, usernameHashZkProofVerifier,
-                phoneNumberRecoveryPasswordsManager, Clock.systemUTC(), changeNumberManager),
+                phoneNumberRecoveryPasswordsManager, Clock.systemUTC(), changeNumberManager,
+                gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
             gcpPilot ? null : new CallingGrpcService(cloudflareTurnCredentialsManager, rateLimiters),
             new CredentialsGrpcService(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, rateLimiters, Clock.systemUTC(), ExternalServiceDefinitions.createExternalServiceList(config, Clock.systemUTC()), !gcpPilot),
             new KeysGrpcService(accountsManager, keysManager, rateLimiters),
             new ProfileGrpcService(clock, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager, config.getBadges(), profileCdnPolicyGenerator, chatGenericZkSecretParams, profileBadgeConverter, rateLimiters),
             new MessagesGrpcService(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender, messageByteLimitCardinalityEstimator, spamChecker, messageDispatcher, Clock.systemUTC(), admissionGrpcSessions),
             gcpPilot ? null : new BackupsGrpcService(accountsManager, backupAuthManager, backupMetrics),
-            new DevicesGrpcService(accountsManager, config.enabledPushTypes()),
+            new DevicesGrpcService(accountsManager, config.enabledPushTypes(),
+                gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
             new AttachmentsGrpcService(experimentEnrollmentManager, rateLimiters, gcsAttachmentGenerator,
                 tusAttachmentGenerator, stickerPolicyGenerator,
                 config.getAttachments().maxAttachmentUploadSizeInBytes(), Clock.systemUTC()),
@@ -1313,8 +1316,10 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     final List<Object> commonControllers = Lists.newArrayList(
         mediaDownloads == null ? null : new MediaDownloadController(mediaDownloads, rateLimiters),
         new AccountController(accountsManager, rateLimiters, phoneNumberRecoveryPasswordsManager,
-            usernameHashZkProofVerifier, config.enabledPushTypes()),
-        new AccountControllerV2(accountsManager, changeNumberManager),
+            usernameHashZkProofVerifier, config.enabledPushTypes(),
+            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
+        new AccountControllerV2(accountsManager, changeNumberManager,
+            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
         new AttachmentControllerV4(rateLimiters, gcsAttachmentGenerator, tusAttachmentGenerator,
             experimentEnrollmentManager, config.getAttachments().maxAttachmentUploadSizeInBytes()),
         gcpPilot ? null : new ArchiveController(accountsManager, backupAuthManager, backupManager, backupMetrics, config.getAttachments().maxAttachmentUploadSizeInBytes(), config.getAttachments().maxMessageBackupUploadSizeInBytes()),
@@ -1323,7 +1328,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         gcpPilot ? null : new CallQualitySurveyController(callQualitySurveyManager),
         new CertificateController(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, callingPreV101GenericZkSecretParams, clock, !gcpPilot),
         new ChallengeController(accountsManager, rateLimitChallengeManager, challengeConstraintChecker),
-        new DeviceController(accountsManager, rateLimiters, persistentTimer, config.enabledPushTypes()),
+        new DeviceController(accountsManager, rateLimiters, persistentTimer, config.enabledPushTypes(),
+            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
         gcpPilot ? null : new DeviceCheckController(clock, accountsManager, backupAuthManager, appleDeviceCheckManager, rateLimiters,
             config.getDeviceCheck().backupRedemptionDuration()),
         new DirectoryV2Controller(directoryV2CredentialsGenerator),

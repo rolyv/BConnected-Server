@@ -5,6 +5,7 @@
 
 package org.whispersystems.textsecuregcm.controllers;
 
+import org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy;
 import com.google.common.net.HttpHeaders;
 import io.dropwizard.auth.Auth;
 import io.swagger.v3.oas.annotations.Operation;
@@ -57,11 +58,20 @@ import org.whispersystems.textsecuregcm.storage.Device;
 @io.swagger.v3.oas.annotations.tags.Tag(name = "Account")
 public class AccountControllerV2 {
 
+  private final AccountOperationsPolicy operationsPolicy;
+
   private final AccountsManager accountsManager;
   private final ChangeNumberManager changeNumberManager;
 
   public AccountControllerV2(final AccountsManager accountsManager,
       final ChangeNumberManager changeNumberManager) {
+    this(accountsManager, changeNumberManager, AccountOperationsPolicy.STANDARD);
+  }
+
+  public AccountControllerV2(final AccountsManager accountsManager,
+      final ChangeNumberManager changeNumberManager,
+      final AccountOperationsPolicy operationsPolicy) {
+    this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
 
     this.accountsManager = accountsManager;
     this.changeNumberManager = changeNumberManager;
@@ -89,6 +99,7 @@ public class AccountControllerV2 {
       @HeaderParam(HttpHeaders.USER_AGENT) final String userAgentString,
       @Context final ContainerRequestContext requestContext)
       throws RateLimitExceededException, InterruptedException, RegistrationLockFailureException {
+    operationsPolicy.requirePhoneNumberChange();
 
     if (authenticatedDevice.deviceId() != Device.PRIMARY_ID) {
       throw new ForbiddenException();

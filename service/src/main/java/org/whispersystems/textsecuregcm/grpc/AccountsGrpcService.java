@@ -5,6 +5,7 @@
 
 package org.whispersystems.textsecuregcm.grpc;
 
+import org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy;
 import com.google.protobuf.ByteString;
 import io.grpc.StatusRuntimeException;
 import java.io.IOException;
@@ -140,6 +141,8 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
+  private final AccountOperationsPolicy operationsPolicy;
+
   private final AccountsManager accountsManager;
   private final RateLimiters rateLimiters;
   private final UsernameHashZkProofVerifier usernameHashZkProofVerifier;
@@ -156,6 +159,17 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
       final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
       final Clock clock,
       final ChangeNumberManager changeNumberManager) {
+    this(accountsManager, rateLimiters, usernameHashZkProofVerifier, phoneNumberRecoveryPasswordsManager, clock, changeNumberManager, AccountOperationsPolicy.STANDARD);
+  }
+
+  public AccountsGrpcService(final AccountsManager accountsManager,
+      final RateLimiters rateLimiters,
+      final UsernameHashZkProofVerifier usernameHashZkProofVerifier,
+      final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
+      final Clock clock,
+      final ChangeNumberManager changeNumberManager,
+      final AccountOperationsPolicy operationsPolicy) {
+    this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
 
     this.accountsManager = accountsManager;
     this.rateLimiters = rateLimiters;
@@ -367,6 +381,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public SetRegistrationRecoveryPasswordResponse setRegistrationRecoveryPassword(final SetRegistrationRecoveryPasswordRequest request) {
+    operationsPolicy.requireRecoveryPasswordChanges();
     final Account account = getAuthenticatedAccount();
     final byte[] recoveryPassword = request.getRegistrationRecoveryPassword().toByteArray();
 
@@ -417,6 +432,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
   @Override
   public ChangeNumberResponse changeNumber(final ChangeNumberRequest request)
       throws RateLimitExceededException, InterruptedException {
+    operationsPolicy.requirePhoneNumberChange();
 
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedPrimaryDevice();
 

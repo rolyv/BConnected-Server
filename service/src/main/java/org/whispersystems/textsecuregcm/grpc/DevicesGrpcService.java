@@ -5,6 +5,7 @@
 
 package org.whispersystems.textsecuregcm.grpc;
 
+import org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Empty;
 import java.util.EnumSet;
@@ -39,6 +40,8 @@ import org.whispersystems.textsecuregcm.util.FeatureUnavailableException;
 
 public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
 
+  private final AccountOperationsPolicy operationsPolicy;
+
   private final Set<PushNotification.TokenType> enabledPushTypes;
   private final AccountsManager accountsManager;
 
@@ -48,6 +51,13 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
 
   public DevicesGrpcService(final AccountsManager accountsManager,
       final Set<PushNotification.TokenType> enabledPushTypes) {
+    this(accountsManager, enabledPushTypes, AccountOperationsPolicy.STANDARD);
+  }
+
+  public DevicesGrpcService(final AccountsManager accountsManager,
+      final Set<PushNotification.TokenType> enabledPushTypes,
+      final AccountOperationsPolicy operationsPolicy) {
+    this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
     this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accountsManager = accountsManager;
   }
@@ -86,6 +96,7 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
 
   @Override
   public RemoveDeviceResponse removeDevice(final RemoveDeviceRequest request) {
+    operationsPolicy.requireLinkedDevices();
     if (request.getId() == Device.PRIMARY_ID) {
       throw GrpcExceptions.invalidArguments("cannot remove primary device");
     }
@@ -103,6 +114,7 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
 
   @Override
   public SetDeviceNameResponse setDeviceName(final SetDeviceNameRequest request) {
+    operationsPolicy.requireDeviceTarget(DeviceIdUtil.validate(request.getId()));
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
 
     final byte deviceId = DeviceIdUtil.validate(request.getId());

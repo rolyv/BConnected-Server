@@ -37,7 +37,7 @@ idle cleanup until a guarded activity transition is implemented and tested.
 ## Still required before opening enrollment
 
 This is not complete capability or revocation enforcement. Cross-store delivery/acknowledgment
-boundaries beyond the guarded native queue deletion, credential issuance, device-link routes, and anonymous
+boundaries beyond the guarded native queue deletion, credential issuance, and anonymous
 Stories/group/media operations still require their own use-time gates and bounded revocation
 handling. Retaining a proof does not automatically enforce it at those sites.
 Registration controllers stay absent and the confirmation worker stays unscheduled. No public
@@ -72,8 +72,8 @@ inversion.
 Initially anonymous or proofless pilot chat upgrades are rejected. Pilot provisioning upgrades are
 also rejected and the REST provisioning controller is omitted for the one-iPhone policy. This is a
 **temporary closed-runtime boundary**: anonymous Stories and group sending remain required before
-release, including the 8,000-member announcements use case. Other deferred account-management
-routes need their own explicit policy. Server-initiated delivery and acknowledgments do not pass
+release, including the 8,000-member announcements use case. Deferred account-management methods
+use the explicit policy below. Server-initiated delivery and acknowledgments do not pass
 the request filter; their separate dispatch guards are described below.
 
 The high-frequency private entitlement reads have not been capacity-tested for 8,000 connected
@@ -148,6 +148,24 @@ gate unary sends, every recipient, anonymous sending, previously issued capabili
 already accepted by transport buffers. The Redis and downstream receipt limits described above
 remain. No provider traffic or deployment is implied by these source tests.
 
+## Deferred pilot account management
+
+GCP composition explicitly passes `AccountOperationsPolicy.PILOT_PRIMARY_ONLY` to both REST and
+gRPC account/device controllers. Device-link token issuance, linking, linked-device removal and
+naming, link/transfer waiters, restore-account notification, transfer-archive operations, number
+changes and recovery-password changes reject before any handler dependency calls. HTTP uses503
+and gRPC UNAVAILABLE through the existing disabled-feature mapping; no successful no-op is returned.
+Wire validation and authentication can reject earlier. The anonymous restore endpoints receive the
+same policy even though they have no `@Auth` parameter. Provisioning remains omitted separately.
+
+Ordinary primary-device reads, names, push registration and capability updates retain their existing
+behavior. An `/attributes` request carrying a nonempty recovery password rejects the whole mutation;
+pilot clients must omit it on ordinary attribute updates. The isolated enrollment snapshot/native
+primary account creator is not modified, including its existing optional recovery-password field.
+Its public route remains unregistered, and legacy account registration/recovery stays omitted.
+The policy controls available operations; it does not replace use-time entitlement guards on the
+retained mutable methods or enable deferred flows via an internal manager API.
+
 ## Verification
 
 The 2026-09-21 focused reactor run passed 115 tests (110 service and five WebSocket-resource
@@ -174,3 +192,8 @@ cases, 22 delivery cases, 36 entitlement cases and 62 retained dispatcher/servic
 includes actual bridge readiness, authenticated in-process delivery/ACK, stopped initialization,
 late renewal cancellation, executor rejection, original-proof expiry and guarded story discard.
 No failures, errors or skips; evidence: `.local/admission-grpc-tests.log` (2026-09-22).
+The deferred account-policy suite passed 451 tests with no failures, errors or skips, including 17
+new actual REST/gRPC policy cases and 27 native primary enrollment cases. Synthetic valid link and
+number-change requests prove rejection before dependency interactions; primary APNs/device reads
+remain available. Retained account/device regressions cover the standard constructor behavior.
+Evidence: `.local/pilot-account-operations-tests.log` (2026-09-22).
