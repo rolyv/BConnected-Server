@@ -102,12 +102,13 @@ public final class AdmissionEntitlementGate {
      * request is opened, so a full deletion pool cannot starve waiting for another proof connection.
      */
     public void requireCurrent(Connection connection, UUID expectedAci, byte expectedDeviceId, long expectedCreated) {
-      if (expectedDeviceId != deviceId || expectedCreated != deviceCreated) throw denied();
+      if (expectedDeviceId != deviceId) throw denied();
+      if (expectedCreated != deviceCreated) throw unavailable();
       membership.owner.requireCurrent(connection, membership, expectedAci);
     }
 
     public void requireCurrent(UUID expectedAci, byte expectedDeviceId, long expectedCreated) {
-      if (expectedCreated != deviceCreated) throw denied();
+      if (expectedCreated != deviceCreated) throw unavailable();
       requireCurrent(expectedAci, expectedDeviceId);
     }
 

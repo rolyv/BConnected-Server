@@ -37,7 +37,7 @@ idle cleanup until a guarded activity transition is implemented and tested.
 ## Still required before opening enrollment
 
 This is not complete capability or revocation enforcement. Cross-store delivery/acknowledgment
-boundaries, gRPC streams, credential issuance, device-link routes, and anonymous
+boundaries beyond the guarded native queue deletion, credential issuance, device-link routes, and anonymous
 Stories/group/media operations still require their own use-time gates and bounded revocation
 handling. Retaining a proof does not automatically enforce it at those sites.
 Registration controllers stay absent and the confirmation worker stays unscheduled. No public
@@ -113,9 +113,40 @@ This is a dispatch and native-transaction boundary, **not atomic authorization a
 or network queue**. Redis deletion, including its asynchronous retries/remote execution, is not
 atomic with PostgreSQL account state or the receipt deadline. A cache deletion may already have
 occurred when a later check rejects the operation. Downstream receipt message enqueue, socket
-transport buffering, gRPC message streams and anonymous Stories/group capabilities need further
+transport buffering and anonymous Stories/group capabilities need further
 use-time enforcement. No new public route, outbox scheduling, real provider request or deployment
 is enabled by this source checkpoint.
+
+## Authenticated gRPC message streams
+
+`GCP_PILOT` supplies a mandatory `AdmissionGrpcSessionManager` to `MessagesGrpcService`.
+Opening a stream requires a primary-device proof and checks its unchanged native account/device
+generation before using the cached account to initialize the message queue. Missing or stale cache
+state is unavailable, not proof that the password is invalid. Initialization runs on a bounded
+delivery executor. Cancellation while that initialization waits cannot leave a renewing lease.
+
+The stream renews its immutable credential proof with fresh private entitlement using the same
+old-lease publication fence as WebSockets. Independent deadlines terminate it with UNAVAILABLE
+while renewal or delivery workers are blocked. There are separate 64-worker delivery and renewal
+executors without queues or caller-runs fallback; SQL never executes on the deadline thread.
+Late renewal completion cannot revive a cancelled stream.
+
+Encrypted responses and queue-empty notifications pass a native proof check after downstream demand
+and the final delivery-worker wait. One response may be buffered; a healthy renewal can authorize a
+later client demand rather than forcing reconnection because the client paused. The check captures
+one proof and retains it through its own SQL wait. An actual simple-grpc readiness test verifies no
+observer emission after expiry, and an in-process authenticated service test covers delivery and ACK.
+
+ACK and story-discard effects capture their proof before worker dispatch and use the same guarded
+queue and PostgreSQL deletion APIs as WebSockets. Later ACKs may use a legitimately renewed lease;
+already queued effects cannot borrow it. Expiry closes input ACK/message subscriptions even at zero
+demand: cancellation is explicit because Reactor's secondary-error path alone does not cancel its
+main publisher. Pilot stream closure does not schedule push from a cached identity.
+
+This covers authenticated message retrieval, its ACKs and story-discard operations. It does not
+gate unary sends, every recipient, anonymous sending, previously issued capabilities, or bytes
+already accepted by transport buffers. The Redis and downstream receipt limits described above
+remain. No provider traffic or deployment is implied by these source tests.
 
 ## Verification
 
@@ -138,3 +169,8 @@ regressions. It tests queued-send rejection, healthy renewed ACKs, story-drop gu
 races, receipt waits, exact generation binding, and rollback after real SQL message-row waits.
 All issuer, phone-provider and socket responses are synthetic. Evidence:
 `.local/admission-delivery-tests.log` in the enclosing workspace.
+The gRPC checkpoint passed 141 tests on isolated PostgreSQL 18.6, including 21 new native gRPC
+cases, 22 delivery cases, 36 entitlement cases and 62 retained dispatcher/service cases. Coverage
+includes actual bridge readiness, authenticated in-process delivery/ACK, stopped initialization,
+late renewal cancellation, executor rejection, original-proof expiry and guarded story discard.
+No failures, errors or skips; evidence: `.local/admission-grpc-tests.log` (2026-09-22).

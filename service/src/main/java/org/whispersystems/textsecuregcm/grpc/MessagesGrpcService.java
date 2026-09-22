@@ -65,6 +65,7 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
   private final SpamChecker spamChecker;
   private final MessageDispatcher messageDispatcher;
   private final Clock clock;
+  private final AdmissionGrpcSessionManager admissionSessions;
 
   private static final SendMessageAuthenticatedSenderResponse SEND_MESSAGE_SUCCESS_RESPONSE =
       SendMessageAuthenticatedSenderResponse.newBuilder().setSuccess(Empty.getDefaultInstance()).build();
@@ -78,6 +79,15 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
       final SpamChecker spamChecker,
       final MessageDispatcher messageDispatcher,
       final Clock clock) {
+    this(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender,
+        messageByteLimitEstimator, spamChecker, messageDispatcher, clock, null);
+  }
+
+  public MessagesGrpcService(final AccountsManager accountsManager, final ReportMessageManager reportMessageManager,
+      final PhoneNumberIdentifierStore phoneNumberIdentifiers, final RateLimiters rateLimiters,
+      final MessageSender messageSender, final CardinalityEstimator messageByteLimitEstimator,
+      final SpamChecker spamChecker, final MessageDispatcher messageDispatcher, final Clock clock,
+      final AdmissionGrpcSessionManager admissionSessions) {
 
     this.accountsManager = accountsManager;
     this.reportMessageManager = reportMessageManager;
@@ -88,21 +98,33 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
     this.spamChecker = spamChecker;
     this.messageDispatcher = messageDispatcher;
     this.clock = clock;
+    this.admissionSessions = admissionSessions;
   }
 
   @Override
   public Flow.Publisher<GetMessagesResponse> getMessages(final Flow.Publisher<GetMessagesRequest> request) throws Exception {
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
+    // Preserve request metadata before leaving the gRPC context for a bounded blocking worker.
+    final String userAgent = RequestAttributesUtil.getUserAgent().orElse(null);
+    if (admissionSessions != null) {
+      return JdkFlowAdapter.publisherToFlowPublisher(admissionSessions.withSession(authenticatedDevice,
+          session -> getMessages(request, authenticatedDevice, userAgent, session)));
+    }
+    return JdkFlowAdapter.publisherToFlowPublisher(getMessages(request, authenticatedDevice, userAgent, null));
+  }
+
+  private Flux<GetMessagesResponse> getMessages(Flow.Publisher<GetMessagesRequest> request,
+      AuthenticatedDevice authenticatedDevice, String userAgent, AdmissionGrpcSessionManager.Session session) {
     final Account account = accountsManager
         .getByAccountIdentifier(authenticatedDevice.accountIdentifier())
-        .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials"));
+        .orElseThrow(() -> session == null ? GrpcExceptions.invalidCredentials("invalid credentials") : GrpcExceptions.unavailable());
     final Device device = account.getDevice(authenticatedDevice.deviceId())
-        .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials"));
-    final String userAgent = RequestAttributesUtil.getUserAgent().orElse(null);
+        .orElseThrow(() -> session == null ? GrpcExceptions.invalidCredentials("invalid credentials") : GrpcExceptions.unavailable());
+    if (session != null) session.requireDevice(account.getAccountIdentifier(), device);
 
     final Flux<GetMessagesRequest> requestFlux = JdkFlowAdapter.flowPublisherToFlux(request);
 
-    return JdkFlowAdapter.publisherToFlowPublisher(requestFlux.switchOnFirst((firstSignal, flux) -> {
+    return requestFlux.switchOnFirst((firstSignal, flux) -> {
       @Nullable final GetMessagesRequest streamRequest = firstSignal.get();
       if (streamRequest == null) {
         // Just forward the error or completion signal
@@ -112,9 +134,14 @@ public class MessagesGrpcService extends SimpleMessagesGrpc.MessagesImplBase {
         throw GrpcExceptions.fieldViolation("request", "the first request must be GetMessageOptions");
       }
       final boolean dropStories = streamRequest.getOptions().getDropStories();
-      return messageDispatcher.getMessages(dropStories, userAgent, account, device,
-          flux.skip(1).map(MessagesGrpcService::extractAckGuid));
-    }));
+      return session == null
+          ? messageDispatcher.getMessages(dropStories, userAgent, account, device,
+              flux.skip(1).map(MessagesGrpcService::extractAckGuid))
+          : reactor.core.publisher.Mono.fromFuture(() -> session.execute(guard ->
+              java.util.concurrent.CompletableFuture.completedFuture(messageDispatcher.getMessages(
+                  dropStories, userAgent, account, device, flux.skip(1).map(MessagesGrpcService::extractAckGuid), session))))
+              .flatMapMany(java.util.function.Function.identity());
+    });
   }
 
   private static UUID extractAckGuid(final GetMessagesRequest ack) throws StatusRuntimeException {

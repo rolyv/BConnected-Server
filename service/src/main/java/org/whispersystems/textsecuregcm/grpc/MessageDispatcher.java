@@ -31,6 +31,9 @@ import org.whispersystems.textsecuregcm.storage.ConflictingMessageConsumerExcept
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.storage.MessageStream;
 import org.whispersystems.textsecuregcm.storage.MessageStreamEntry;
+import org.whispersystems.textsecuregcm.storage.MessageDeliveryGuard;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.util.UUIDUtil;
 import org.whispersystems.textsecuregcm.util.ua.UserAgent;
@@ -129,6 +132,13 @@ public class MessageDispatcher {
       final Account account,
       final Device device,
       final Flux<UUID> acknowledgedMessageGuids) {
+    return getMessages(shouldDropStories, userAgentString, account, device, acknowledgedMessageGuids, null);
+  }
+
+  public Flux<GetMessagesResponse> getMessages(final boolean shouldDropStories,
+      @Nullable final String userAgentString, final Account account, final Device device,
+      final Flux<UUID> acknowledgedMessageGuids, final AdmissionGrpcSessionManager.Session session) {
+    if (session != null) session.requireDevice(account.getAccountIdentifier(), device);
 
     final MessageStream messageStream = messagesManager.getMessages(account.getAccountIdentifier(), device);
     @Nullable final UserAgent userAgent = UserAgentUtil.maybeParseUserAgentString(userAgentString);
@@ -151,7 +161,8 @@ public class MessageDispatcher {
             final UUID serverGuid = UUIDUtil.fromByteString(envelope.getServerGuid());
             if (envelope.getStory() && shouldDropStories) {
               // Just immediately delete stories if the device doesn't want them
-              yield Mono.fromFuture(() -> messageStream.acknowledgeMessage(serverGuid, envelope.getServerTimestamp()))
+              yield Mono.fromFuture(() -> authorized(session, guard -> acknowledge(messageStream,
+                      serverGuid, envelope.getServerTimestamp(), guard)))
                   .then(Mono.empty());
             }
 
@@ -178,23 +189,32 @@ public class MessageDispatcher {
         .map(_ -> true)
         .concatWith(ackPermits.asFlux());
     final Mono<GetMessagesResponse> ackCompletions = acknowledgedMessageGuids
-        .flatMap(guid -> {
+        .flatMap(guid -> Mono.fromFuture(() -> authorized(session, guard -> {
           final PendingAcknowledgementTracker.UnacknowledgedEnvelope unacked = pendingAcknowledgementTracker.takeUnacknowledgedEnvelope(guid);
           if (unacked == null) {
             // This is fine, the client may have sent a duplicate-ack
-            return Mono.empty();
+            return CompletableFuture.completedFuture(false);
           }
           messageMetrics.measureOutgoingMessageLatency(
               unacked.getServerTimestamp(), MessageMetrics.GRPC_CHANNEL, device.isPrimary(),
               unacked.isUrgent(), unacked.isEphemeral(), userAgent, clientReleaseManager);
 
-          maybeSendDeliveryReceipt(device, unacked);
-
-          return Mono.fromFuture(() -> messageStream.acknowledgeMessage(unacked.getServerGuid(), unacked.getServerTimestamp()))
-              .doOnSuccess(_ -> unacked.handleMessageAcknowledged())
-              // Just have to emit some value that indicates we can release a permit
-              .thenReturn(true);
-        }, MAX_UNACKED_MESSAGES)
+          if (guard == null) maybeSendDeliveryReceipt(device, unacked);
+          CompletableFuture<Void> acknowledged = acknowledge(messageStream, unacked.getServerGuid(),
+              unacked.getServerTimestamp(), guard);
+          if (guard != null && unacked.getSourceServiceId() != null) {
+            acknowledged = acknowledged.thenRunAsync(() -> {
+              guard.requireCurrent();
+              receiptSender.sendReceipt(unacked.getDestinationServiceId(), device.getId(),
+                  unacked.getSourceServiceId(), unacked.getClientTimestamp(), guard);
+            }, guard.executor());
+          }
+          return acknowledged.thenApply(_ -> {
+            unacked.handleMessageAcknowledged();
+            return true;
+          });
+        })), session == null ? MAX_UNACKED_MESSAGES : 8)
+        .filter(Boolean::booleanValue)
         .doOnNext(_ -> ackPermits.tryEmitNext(true))
         .ignoreElements()
         .cast(GetMessagesResponse.class);
@@ -208,7 +228,18 @@ public class MessageDispatcher {
             pendingAcknowledgementTracker.queueDrained(),
             // Emit an invalid credentials error if we receive a disconnection request
             disconnectionSignal(account, device, userAgent))
-        .doFinally(_ -> maybeSchedulePush(account, device));
+        .doFinally(_ -> { if (session == null) maybeSchedulePush(account, device); });
+  }
+
+  private static <T> CompletableFuture<T> authorized(AdmissionGrpcSessionManager.Session session,
+      Function<MessageDeliveryGuard, CompletableFuture<T>> action) {
+    return session == null ? action.apply(null) : session.execute(action);
+  }
+
+  private static CompletableFuture<Void> acknowledge(MessageStream stream, UUID guid, long timestamp,
+      MessageDeliveryGuard guard) {
+    return guard == null ? stream.acknowledgeMessage(guid, timestamp)
+        : stream.acknowledgeMessage(guid, timestamp, guard);
   }
 
   /// If the device potentially has more messages available, schedule a push notification.

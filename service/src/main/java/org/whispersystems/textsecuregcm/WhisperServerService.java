@@ -187,6 +187,7 @@ import org.whispersystems.textsecuregcm.grpc.LoginPurchaseGrpcService;
 import org.whispersystems.textsecuregcm.grpc.MessageDispatcher;
 import org.whispersystems.textsecuregcm.grpc.MessagesAnonymousGrpcService;
 import org.whispersystems.textsecuregcm.grpc.MessagesGrpcService;
+import org.whispersystems.textsecuregcm.grpc.AdmissionGrpcSessionManager;
 import org.whispersystems.textsecuregcm.grpc.MetricServerInterceptor;
 import org.whispersystems.textsecuregcm.grpc.OneTimeDonationsGrpcService;
 import org.whispersystems.textsecuregcm.grpc.PaymentsGrpcService;
@@ -1125,6 +1126,11 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     final MessageDispatcher messageDispatcher = new MessageDispatcher(receiptSender, messagesManager, messageMetrics,
         pushNotificationManager, pushNotificationScheduler, messageDeliveryLoopMonitor, disconnectionRequestManager,
         clientReleaseManager);
+    final var admissionGrpcSessions = gcpPilot ? new AdmissionGrpcSessionManager(
+        ScheduledExecutorServiceBuilder.of(environment, "admissionGrpcDeadlines").threads(1).build(),
+        ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionGrpcRenewal", 64, environment),
+        ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionGrpcDelivery", 64, environment)) : null;
+    if (admissionGrpcSessions != null) environment.lifecycle().manage(admissionGrpcSessions);
 
     final CertificateGenerator certificateGenerator =
         new CertificateGenerator(config.getDeliveryCertificate().certificate(),
@@ -1146,7 +1152,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             new CredentialsGrpcService(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, rateLimiters, Clock.systemUTC(), ExternalServiceDefinitions.createExternalServiceList(config, Clock.systemUTC()), !gcpPilot),
             new KeysGrpcService(accountsManager, keysManager, rateLimiters),
             new ProfileGrpcService(clock, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager, config.getBadges(), profileCdnPolicyGenerator, chatGenericZkSecretParams, profileBadgeConverter, rateLimiters),
-            new MessagesGrpcService(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender, messageByteLimitCardinalityEstimator, spamChecker, messageDispatcher, Clock.systemUTC()),
+            new MessagesGrpcService(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender, messageByteLimitCardinalityEstimator, spamChecker, messageDispatcher, Clock.systemUTC(), admissionGrpcSessions),
             gcpPilot ? null : new BackupsGrpcService(accountsManager, backupAuthManager, backupMetrics),
             new DevicesGrpcService(accountsManager, config.enabledPushTypes()),
             new AttachmentsGrpcService(experimentEnrollmentManager, rateLimiters, gcsAttachmentGenerator,
