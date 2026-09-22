@@ -199,6 +199,24 @@ public final class AdmissionEntitlementGate {
     requireReceipt(recipient.snapshot, recipient.receipt);
   }
 
+  /** Key reads/publications join the operation's transaction; no HTTP or separate pool acquisition. */
+  void requireCurrentKeys(Connection connection, DeviceAuthorization caller, UUID callerAci, byte callerDevice,
+      Authorization target, UUID targetAci) {
+    if (caller == null || caller.deviceId != callerDevice || caller.membership.owner != this) throw denied();
+    requireCurrent(connection, caller.membership, callerAci);
+    if (target != null) {
+      try { requireCurrent(connection, target, targetAci); }
+      catch (DeniedException denied) { throw new RecipientDeniedException(); }
+    }
+    requireKeyReceipts(caller, target);
+  }
+
+  void requireKeyReceipts(DeviceAuthorization caller, Authorization target) {
+    if (caller == null || caller.membership.owner != this || (target != null && target.owner != this)) throw denied();
+    requireReceipt(caller.membership.snapshot, caller.membership.receipt);
+    if (target != null) requireReceipt(target.snapshot, target.receipt);
+  }
+
   private static Account accountSnapshot(Snapshot snapshot) {
     try {
       var json = SystemMapper.jsonMapper();

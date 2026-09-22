@@ -35,9 +35,16 @@ public class KeysAnonymousGrpcService extends SimpleKeysAnonymousGrpc.KeysAnonym
   private final AccountsManager accountsManager;
   private final KeysManager keysManager;
   private final GroupSendTokenUtil groupSendTokenUtil;
+  private final boolean anonymousKeysEnabled;
 
   public KeysAnonymousGrpcService(
       final AccountsManager accountsManager, final KeysManager keysManager, final ServerSecretParams serverSecretParams, final Clock clock) {
+    this(accountsManager, keysManager, serverSecretParams, clock, true);
+  }
+
+  public KeysAnonymousGrpcService(AccountsManager accountsManager, KeysManager keysManager,
+      ServerSecretParams serverSecretParams, Clock clock, boolean anonymousKeysEnabled) {
+    this.anonymousKeysEnabled = anonymousKeysEnabled;
     this.accountsManager = accountsManager;
     this.keysManager = keysManager;
     groupSendTokenUtil = new GroupSendTokenUtil(serverSecretParams, clock);
@@ -45,6 +52,7 @@ public class KeysAnonymousGrpcService extends SimpleKeysAnonymousGrpc.KeysAnonym
 
   @Override
   public GetPreKeysAnonymousResponse getPreKeys(final GetPreKeysAnonymousRequest request) {
+    if (!anonymousKeysEnabled) throw io.grpc.Status.UNAVAILABLE.withDescription("Anonymous key admission unavailable").asRuntimeException();
     final ServiceIdentifier serviceIdentifier =
         GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getRequest().getTargetIdentifier());
 
@@ -90,6 +98,8 @@ public class KeysAnonymousGrpcService extends SimpleKeysAnonymousGrpc.KeysAnonym
 
   @Override
   public Flow.Publisher<CheckIdentityKeyResponse> checkIdentityKeys(final Flow.Publisher<CheckIdentityKeyRequest> requests) {
+    if (!anonymousKeysEnabled) return JdkFlowAdapter.publisherToFlowPublisher(Mono.error(
+        io.grpc.Status.UNAVAILABLE.withDescription("Anonymous key admission unavailable").asRuntimeException()));
     return JdkFlowAdapter.publisherToFlowPublisher(JdkFlowAdapter.flowPublisherToFlux(requests)
         .map(request -> Tuples.of(GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getTargetIdentifier()),
             request.getFingerprint().toByteArray()))

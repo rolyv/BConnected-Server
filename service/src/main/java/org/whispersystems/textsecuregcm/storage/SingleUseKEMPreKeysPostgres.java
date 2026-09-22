@@ -28,78 +28,85 @@ public class SingleUseKEMPreKeysPostgres implements SingleUseKEMPreKeyStorage {
   @Override
   public CompletableFuture<Void> store(final UUID identifier, final byte deviceId, final List<KEMSignedPreKey> preKeys) {
     final List<KEMSignedPreKey> snapshot = List.copyOf(preKeys);
-    return transaction(identifier, connection -> {
-      deleteForDevice(connection, identifier, deviceId);
-      try (var statement = connection.prepareStatement("""
-          INSERT INTO signal.single_use_kem_prekeys (account_id, device_id, key_id, public_key, signature)
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT (account_id, device_id, key_id) DO UPDATE SET public_key = EXCLUDED.public_key, signature = EXCLUDED.signature
-          """)) {
-        int pending = 0;
-        for (final KEMSignedPreKey preKey : snapshot) {
-          if (!KeyIdUtil.keyIdValid(preKey.keyId())) {
-            throw new IllegalArgumentException("Pre-key ID is outside the supported range");
-          }
-          statement.setObject(1, identifier);
-          statement.setByte(2, deviceId);
-          statement.setLong(3, preKey.keyId());
-          statement.setBytes(4, preKey.serializedPublicKey());
-          statement.setBytes(5, preKey.signature());
-          statement.addBatch();
-          if (++pending == 100) {
-            statement.executeBatch();
-            statement.clearBatch();
-            pending = 0;
-          }
+    return transaction(identifier, connection -> store(connection, identifier, deviceId, snapshot));
+  }
+
+  static Void store(final Connection connection, final UUID identifier, final byte deviceId, final List<KEMSignedPreKey> preKeys) throws SQLException {
+    final List<KEMSignedPreKey> snapshot = List.copyOf(preKeys);
+    deleteForDevice(connection, identifier, deviceId);
+    try (var statement = connection.prepareStatement("""
+        INSERT INTO signal.single_use_kem_prekeys (account_id, device_id, key_id, public_key, signature)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (account_id, device_id, key_id) DO UPDATE SET public_key = EXCLUDED.public_key, signature = EXCLUDED.signature
+        """)) {
+      int pending = 0;
+      for (final KEMSignedPreKey preKey : snapshot) {
+        if (!KeyIdUtil.keyIdValid(preKey.keyId())) {
+          throw new IllegalArgumentException("Pre-key ID is outside the supported range");
         }
-        if (pending > 0) statement.executeBatch();
+        statement.setObject(1, identifier);
+        statement.setByte(2, deviceId);
+        statement.setLong(3, preKey.keyId());
+        statement.setBytes(4, preKey.serializedPublicKey());
+        statement.setBytes(5, preKey.signature());
+        statement.addBatch();
+        if (++pending == 100) {
+          statement.executeBatch();
+          statement.clearBatch();
+          pending = 0;
+        }
       }
-      return null;
-    });
+      if (pending > 0) statement.executeBatch();
+    }
+    return null;
   }
 
   @Override
   public CompletableFuture<Optional<KEMSignedPreKey>> take(final UUID identifier, final byte deviceId) {
-    return transaction(identifier, connection -> {
-      try (var statement = connection.prepareStatement("""
-          DELETE FROM signal.single_use_kem_prekeys
-          WHERE account_id = ? AND device_id = ? AND key_id = (
-            SELECT key_id FROM signal.single_use_kem_prekeys
-            WHERE account_id = ? AND device_id = ? ORDER BY key_id LIMIT 1 FOR UPDATE
-          )
-          RETURNING key_id, public_key, signature
-          """)) {
-        statement.setObject(1, identifier);
-        statement.setByte(2, deviceId);
-        statement.setObject(3, identifier);
-        statement.setByte(4, deviceId);
-        try (var result = statement.executeQuery()) {
-          if (!result.next()) return Optional.empty();
-          try {
-            return Optional.of(new KEMSignedPreKey(result.getLong("key_id"), new KEMPublicKey(result.getBytes("public_key")), result.getBytes("signature")));
-          } catch (InvalidKeyException e) {
-            // Fail and roll back the deletion rather than consume a key we cannot return to the caller.
-            throw new IllegalStateException("Stored KEM pre-key has invalid libsignal encoding", e);
-          }
+    return transaction(identifier, connection -> take(connection, identifier, deviceId));
+  }
+
+  static Optional<KEMSignedPreKey> take(final Connection connection, final UUID identifier, final byte deviceId) throws SQLException {
+    try (var statement = connection.prepareStatement("""
+        DELETE FROM signal.single_use_kem_prekeys
+        WHERE account_id = ? AND device_id = ? AND key_id = (
+          SELECT key_id FROM signal.single_use_kem_prekeys
+          WHERE account_id = ? AND device_id = ? ORDER BY key_id LIMIT 1 FOR UPDATE
+        )
+        RETURNING key_id, public_key, signature
+        """)) {
+      statement.setObject(1, identifier);
+      statement.setByte(2, deviceId);
+      statement.setObject(3, identifier);
+      statement.setByte(4, deviceId);
+      try (var result = statement.executeQuery()) {
+        if (!result.next()) return Optional.empty();
+        try {
+          return Optional.of(new KEMSignedPreKey(result.getLong("key_id"), new KEMPublicKey(result.getBytes("public_key")), result.getBytes("signature")));
+        } catch (InvalidKeyException e) {
+          // Fail and roll back the deletion rather than consume a key we cannot return to the caller.
+          throw new IllegalStateException("Stored KEM pre-key has invalid libsignal encoding", e);
         }
       }
-    });
+    }
   }
 
   @Override
   public CompletableFuture<Integer> getCount(final UUID identifier, final byte deviceId) {
-    return transaction(identifier, connection -> {
-      try (var statement = connection.prepareStatement("""
-          SELECT count(*) FROM signal.single_use_kem_prekeys WHERE account_id = ? AND device_id = ?
-          """)) {
-        statement.setObject(1, identifier);
-        statement.setByte(2, deviceId);
-        try (var result = statement.executeQuery()) {
-          result.next();
-          return Math.toIntExact(result.getLong(1));
-        }
+    return transaction(identifier, connection -> getCount(connection, identifier, deviceId));
+  }
+
+  static Integer getCount(final Connection connection, final UUID identifier, final byte deviceId) throws SQLException {
+    try (var statement = connection.prepareStatement("""
+        SELECT count(*) FROM signal.single_use_kem_prekeys WHERE account_id = ? AND device_id = ?
+        """)) {
+      statement.setObject(1, identifier);
+      statement.setByte(2, deviceId);
+      try (var result = statement.executeQuery()) {
+        result.next();
+        return Math.toIntExact(result.getLong(1));
       }
-    });
+    }
   }
 
   @Override
@@ -142,11 +149,7 @@ public class SingleUseKEMPreKeysPostgres implements SingleUseKEMPreKeyStorage {
           // All operations, including account-wide deletion, use the same account lock. Acquiring it in its own
           // READ COMMITTED statement makes subsequent reads see the preceding operation's committed result.
           // A 64-bit hash collision can only serialize unrelated accounts; it cannot mix their rows.
-          try (var lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(?)")) {
-            lock.setLong(1, identifier.getMostSignificantBits()
-                ^ Long.rotateLeft(identifier.getLeastSignificantBits(), 17) ^ 0x42434B4D5052454BL);
-            lock.execute();
-          }
+          lock(connection, identifier);
           final T result = operation.apply(connection);
           connection.commit();
           return result;
@@ -162,6 +165,14 @@ public class SingleUseKEMPreKeysPostgres implements SingleUseKEMPreKeyStorage {
         throw new CompletionException("PostgreSQL KEM pre-key operation failed", e);
       }
     }, executor);
+  }
+
+  static void lock(final Connection connection, final UUID identifier) throws SQLException {
+    try (var lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(?)")) {
+      lock.setLong(1, identifier.getMostSignificantBits()
+          ^ Long.rotateLeft(identifier.getLeastSignificantBits(), 17) ^ 0x42434B4D5052454BL);
+      lock.execute();
+    }
   }
 
   @FunctionalInterface

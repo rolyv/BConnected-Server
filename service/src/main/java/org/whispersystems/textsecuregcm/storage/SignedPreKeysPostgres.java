@@ -64,23 +64,31 @@ public final class SignedPreKeysPostgres<K extends SignedPreKey<?>> implements S
   @Override
   public CompletableFuture<Optional<K>> find(final UUID identifier, final byte deviceId) {
     return CompletableFuture.supplyAsync(() -> {
-      try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement("""
-          SELECT key_id, public_key, signature FROM signal.signed_prekeys
-          WHERE identifier = ? AND device_id = ? AND kind = ?
-          """)) {
-        statement.setObject(1, identifier);
-        statement.setByte(2, deviceId);
-        statement.setString(3, kind);
-        try (var result = statement.executeQuery()) {
-          if (!result.next()) return Optional.empty();
-          final long keyId = result.getLong("key_id");
-          if (!KeyIdUtil.keyIdValid(keyId)) throw new IllegalStateException("Stored signed pre-key ID is out of range");
-          return Optional.of(decoder.decode(keyId, result.getBytes("public_key"), result.getBytes("signature")));
-        }
-      } catch (SQLException | InvalidKeyException e) {
+      try (var connection = dataSource.getConnection()) {
+        return find(connection, identifier, deviceId);
+      } catch (SQLException e) {
         throw new CompletionException("PostgreSQL signed pre-key read failed", e);
       }
     }, executor);
+  }
+
+  Optional<K> find(final java.sql.Connection connection, final UUID identifier, final byte deviceId) throws SQLException {
+    try (var statement = connection.prepareStatement("""
+        SELECT key_id, public_key, signature FROM signal.signed_prekeys
+        WHERE identifier = ? AND device_id = ? AND kind = ?
+        """)) {
+      statement.setObject(1, identifier);
+      statement.setByte(2, deviceId);
+      statement.setString(3, kind);
+      try (var result = statement.executeQuery()) {
+        if (!result.next()) return Optional.empty();
+        final long keyId = result.getLong("key_id");
+        if (!KeyIdUtil.keyIdValid(keyId)) throw new IllegalStateException("Stored signed pre-key ID is out of range");
+        return Optional.of(decoder.decode(keyId, result.getBytes("public_key"), result.getBytes("signature")));
+      } catch (InvalidKeyException e) {
+        throw new CompletionException("PostgreSQL signed pre-key read failed", e);
+      }
+    }
   }
 
   @Override

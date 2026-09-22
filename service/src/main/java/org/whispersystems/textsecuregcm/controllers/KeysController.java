@@ -50,6 +50,9 @@ import org.signal.libsignal.zkgroup.ServerSecretParams;
 import org.signal.libsignal.zkgroup.VerificationFailedException;
 import org.signal.libsignal.zkgroup.groupsend.GroupSendDerivedKeyPair;
 import org.signal.libsignal.zkgroup.groupsend.GroupSendFullToken;
+import org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate;
+import org.whispersystems.textsecuregcm.admission.AdmissionKeyGuard;
+import org.whispersystems.textsecuregcm.storage.AdmittedKeysPostgres;
 import org.whispersystems.textsecuregcm.auth.Anonymous;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
 import org.whispersystems.textsecuregcm.auth.GroupSendTokenHeader;
@@ -87,6 +90,8 @@ public class KeysController {
   private final AccountsManager accounts;
   private final ServerSecretParams serverSecretParams;
   private final Clock clock;
+  private final AdmissionEntitlementGate admissionGate;
+  private final AdmittedKeysPostgres admittedKeys;
 
   private static final String STORE_KEYS_COUNTER_NAME = MetricsUtil.name(KeysController.class, "storeKeys");
   private static final String PRIMARY_DEVICE_TAG_NAME = "isPrimary";
@@ -96,6 +101,14 @@ public class KeysController {
   private static final CompletableFuture<?>[] EMPTY_FUTURE_ARRAY = new CompletableFuture[0];
 
   public KeysController(RateLimiters rateLimiters, KeysManager keysManager, AccountsManager accounts, ServerSecretParams serverSecretParams, Clock clock) {
+    this(rateLimiters, keysManager, accounts, serverSecretParams, clock, null, null);
+  }
+
+  public KeysController(RateLimiters rateLimiters, KeysManager keysManager, AccountsManager accounts,
+      ServerSecretParams serverSecretParams, Clock clock, AdmissionEntitlementGate admissionGate,
+      AdmittedKeysPostgres admittedKeys) {
+    this.admissionGate = admissionGate;
+    this.admittedKeys = admittedKeys;
     this.rateLimiters = rateLimiters;
     this.keysManager = keysManager;
     this.accounts = accounts;
@@ -112,6 +125,8 @@ public class KeysController {
   @ApiResponse(responseCode = "401", description = "Account authentication check failed.")
   public CompletableFuture<PreKeyCount> getStatus(@Auth final AuthenticatedDevice auth,
       @QueryParam("identity") @DefaultValue("aci") final IdentityType identityType) {
+
+    if (admissionGate != null) return admitted(auth, guard -> admittedKeys.count(guard, identityType));
 
     return accounts.getByAccountIdentifierAsync(auth.accountIdentifier())
         .thenCompose(maybeAccount -> {
@@ -148,6 +163,14 @@ public class KeysController {
           description="whether this operation applies to the account (aci) or phone-number (pni) identity")
       @QueryParam("identity") @DefaultValue("aci") final IdentityType identityType,
       @HeaderParam(HttpHeaders.USER_AGENT) final String userAgent) {
+
+    if (admissionGate != null) return admitted(auth, guard -> {
+      checkSignedPreKeySignatures(setKeysRequest, getIdentityKey(guard.account(), identityType), userAgent);
+      return admittedKeys.publish(guard, identityType,
+          setKeysRequest.preKeys().isEmpty() ? null : setKeysRequest.preKeys(), setKeysRequest.signedPreKey(),
+          setKeysRequest.pqPreKeys().isEmpty() ? null : setKeysRequest.pqPreKeys(), setKeysRequest.pqLastResortPreKey())
+          .thenApply(Util.ASYNC_EMPTY_RESPONSE);
+    });
 
     return accounts.getByAccountIdentifierAsync(auth.accountIdentifier())
         .thenCompose(maybeAccount -> {
@@ -258,6 +281,12 @@ public class KeysController {
       @Auth final AuthenticatedDevice auth,
       @RequestBody @NotNull @Valid final CheckKeysRequest checkKeysRequest) {
 
+    if (admissionGate != null) return admitted(auth, guard -> {
+      final Account account = guard.account();
+      return admittedKeys.repeated(guard, checkKeysRequest.identityType())
+          .thenApply(keys -> checkDigest(account, checkKeysRequest, keys.ec(), keys.kem()));
+    });
+
     return accounts.getByAccountIdentifierAsync(auth.accountIdentifier())
         .thenCompose(maybeAccount -> {
           final Account account = maybeAccount.orElseThrow(() -> new WebApplicationException(Response.Status.UNAUTHORIZED));
@@ -276,47 +305,7 @@ public class KeysController {
                 final Optional<ECSignedPreKey> maybeSignedPreKey = ecSignedPreKeyFuture.join();
                 final Optional<KEMSignedPreKey> maybeLastResortKey = lastResortKeyFuture.join();
 
-                final boolean digestsMatch;
-
-                if (maybeSignedPreKey.isPresent() && maybeLastResortKey.isPresent()) {
-                  final IdentityKey identityKey = getIdentityKey(account, checkKeysRequest.identityType());
-                  final ECSignedPreKey ecSignedPreKey = maybeSignedPreKey.get();
-                  final KEMSignedPreKey lastResortKey = maybeLastResortKey.get();
-
-                  final MessageDigest messageDigest;
-
-                  try {
-                    messageDigest = MessageDigest.getInstance("SHA-256");
-                  } catch (final NoSuchAlgorithmException e) {
-                    throw new AssertionError("Every implementation of the Java platform is required to support SHA-256", e);
-                  }
-
-                  messageDigest.update(identityKey.serialize());
-
-                  {
-                    final ByteBuffer ecSignedPreKeyIdBuffer = ByteBuffer.allocate(Long.BYTES);
-                    ecSignedPreKeyIdBuffer.putLong(ecSignedPreKey.keyId());
-                    ecSignedPreKeyIdBuffer.flip();
-
-                    messageDigest.update(ecSignedPreKeyIdBuffer);
-                    messageDigest.update(ecSignedPreKey.serializedPublicKey());
-                  }
-
-                  {
-                    final ByteBuffer lastResortKeyIdBuffer = ByteBuffer.allocate(Long.BYTES);
-                    lastResortKeyIdBuffer.putLong(lastResortKey.keyId());
-                    lastResortKeyIdBuffer.flip();
-
-                    messageDigest.update(lastResortKeyIdBuffer);
-                    messageDigest.update(lastResortKey.serializedPublicKey());
-                  }
-
-                  digestsMatch = MessageDigest.isEqual(messageDigest.digest(), checkKeysRequest.digest());
-                } else {
-                  digestsMatch = false;
-                }
-
-                return Response.status(digestsMatch ? Response.Status.OK : Response.Status.CONFLICT).build();
+                return checkDigest(account, checkKeysRequest, maybeSignedPreKey, maybeLastResortKey);
               });
         });
   }
@@ -347,6 +336,31 @@ public class KeysController {
 
       @HeaderParam(HttpHeaders.USER_AGENT) String userAgent)
       throws RateLimitExceededException {
+
+    if (admissionGate != null) {
+      if (maybeAuthenticatedDevice.isEmpty() || accessKey.isPresent() || groupSendToken.isPresent())
+        throw new WebApplicationException(503); // no owned anonymous caller proof exists
+      try {
+        final var auth = maybeAuthenticatedDevice.orElseThrow();
+        final var source = AdmissionKeyGuard.http(admissionGate, auth);
+        final var parsedDevice = parseDeviceId(deviceId);
+        if (parsedDevice.isPresent() && parsedDevice.get() != Device.PRIMARY_ID) throw new NotFoundException();
+        final var cached = accounts.getByServiceIdentifier(targetIdentifier).orElseThrow(NotFoundException::new);
+        final var guard = source.forTarget(cached.getAccountIdentifier(), targetIdentifier);
+        final Account target = guard.account();
+        rateLimiters.getPreKeysLimiter().validate(getPreKeysLimiterKey(source.account(), auth, targetIdentifier, target, deviceId));
+        final var keys = admittedKeys.take(guard, targetIdentifier.identityType()).join().orElseThrow(NotFoundException::new);
+        final var device = target.getPrimaryDevice();
+        final int registration = targetIdentifier.identityType() == IdentityType.ACI ? device.getAccountRegistrationId()
+            : device.getPhoneNumberIdentityRegistrationId().orElseThrow(NotFoundException::new);
+        final var response = new PreKeyResponse(getIdentityKey(target, targetIdentifier.identityType()),
+            List.of(new PreKeyResponseItem(Device.PRIMARY_ID, registration, keys.ecSignedPreKey(),
+                keys.ecPreKey().orElse(null), keys.kemSignedPreKey())));
+        guard.requireCurrent();
+        return response;
+      } catch (AdmissionKeyGuard.Failure failure) { throw failure.http(); }
+      catch (java.util.concurrent.CompletionException failure) { throw AdmissionKeyGuard.failure(failure).http(); }
+    }
 
     if (maybeAuthenticatedDevice.isEmpty() && accessKey.isEmpty() && groupSendToken.isEmpty()) {
       throw new WebApplicationException(Response.Status.UNAUTHORIZED);
@@ -408,6 +422,60 @@ public class KeysController {
     }
 
     return new PreKeyResponse(identityKey, responseItems);
+  }
+
+  private static Response checkDigest(Account account, CheckKeysRequest request,
+      Optional<ECSignedPreKey> maybeSignedPreKey, Optional<KEMSignedPreKey> maybeLastResortKey) {
+    final boolean digestsMatch;
+
+    if (maybeSignedPreKey.isPresent() && maybeLastResortKey.isPresent()) {
+      final IdentityKey identityKey = getIdentityKey(account, request.identityType());
+      final ECSignedPreKey ecSignedPreKey = maybeSignedPreKey.get();
+      final KEMSignedPreKey lastResortKey = maybeLastResortKey.get();
+
+      final MessageDigest messageDigest;
+
+      try {
+        messageDigest = MessageDigest.getInstance("SHA-256");
+      } catch (final NoSuchAlgorithmException e) {
+        throw new AssertionError("Every implementation of the Java platform is required to support SHA-256", e);
+      }
+
+      messageDigest.update(identityKey.serialize());
+
+      {
+        final ByteBuffer ecSignedPreKeyIdBuffer = ByteBuffer.allocate(Long.BYTES);
+        ecSignedPreKeyIdBuffer.putLong(ecSignedPreKey.keyId());
+        ecSignedPreKeyIdBuffer.flip();
+
+        messageDigest.update(ecSignedPreKeyIdBuffer);
+        messageDigest.update(ecSignedPreKey.serializedPublicKey());
+      }
+
+      {
+        final ByteBuffer lastResortKeyIdBuffer = ByteBuffer.allocate(Long.BYTES);
+        lastResortKeyIdBuffer.putLong(lastResortKey.keyId());
+        lastResortKeyIdBuffer.flip();
+
+        messageDigest.update(lastResortKeyIdBuffer);
+        messageDigest.update(lastResortKey.serializedPublicKey());
+      }
+
+      digestsMatch = MessageDigest.isEqual(messageDigest.digest(), request.digest());
+    } else {
+      digestsMatch = false;
+    }
+
+    return Response.status(digestsMatch ? Response.Status.OK : Response.Status.CONFLICT).build();
+  }
+
+  private <T> CompletableFuture<T> admitted(AuthenticatedDevice principal,
+      java.util.function.Function<AdmissionKeyGuard, CompletableFuture<T>> operation) {
+    try {
+      final var guard = AdmissionKeyGuard.http(admissionGate, principal);
+      return operation.apply(guard).thenApply(result -> { guard.requireCurrent(); return result; })
+          .exceptionally(error -> { throw AdmissionKeyGuard.failure(error).http(); });
+    } catch (AdmissionKeyGuard.Failure failure) { throw failure.http(); }
   }
 
   private List<Device> parseDeviceId(String deviceId, Account account) {

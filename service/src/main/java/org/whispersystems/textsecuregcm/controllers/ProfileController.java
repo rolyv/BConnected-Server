@@ -121,6 +121,7 @@ public class ProfileController {
   private final ServerZkProfileOperations zkProfileOperations;
 
   private final Executor batchIdentityCheckExecutor;
+  private final boolean anonymousIdentityChecksEnabled;
 
   private static final String EXPIRING_PROFILE_KEY_CREDENTIAL_TYPE = "expiringProfileKey";
 
@@ -140,6 +141,25 @@ public class ProfileController {
       final ServerSecretParams serverSecretParams,
       final ServerZkProfileOperations zkProfileOperations,
       final Executor batchIdentityCheckExecutor) {
+    this(clock, rateLimiters, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager,
+        profileBadgeConverter, badgesConfiguration, policyGenerator, serverSecretParams, zkProfileOperations,
+        batchIdentityCheckExecutor, true);
+  }
+
+  public ProfileController(
+      final Clock clock,
+      final RateLimiters rateLimiters,
+      final AccountsManager accountsManager,
+      final ProfilesManager profilesManager,
+      final Supplier<AsnInfoProvider> asnInfoProviderSupplier,
+      final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager,
+      final ProfileBadgeConverter profileBadgeConverter,
+      final BadgesConfiguration badgesConfiguration,
+      final AvatarUploadPolicyGenerator policyGenerator,
+      final ServerSecretParams serverSecretParams,
+      final ServerZkProfileOperations zkProfileOperations,
+      final Executor batchIdentityCheckExecutor, final boolean anonymousIdentityChecksEnabled) {
+    this.anonymousIdentityChecksEnabled = anonymousIdentityChecksEnabled;
     this.clock = clock;
     this.rateLimiters = rateLimiters;
     this.accountsManager = accountsManager;
@@ -375,6 +395,7 @@ public class ProfileController {
   @ApiResponse(responseCode = "400", description = "Invalid request format or validation failed.")
   @ApiResponse(responseCode = "429", description = "Rate limit exceeded.")
   public CompletableFuture<BatchIdentityCheckResponse> runBatchIdentityCheck(@NotNull @Valid final BatchIdentityCheckRequest request) {
+    if (!anonymousIdentityChecksEnabled) throw new WebApplicationException(503);
     return CompletableFuture.supplyAsync(() -> {
           List<BatchIdentityCheckResponse.Element> responseElements = Collections.synchronizedList(new ArrayList<>());
 

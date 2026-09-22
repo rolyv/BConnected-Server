@@ -72,6 +72,11 @@ class KeysGrpcHelper {
       return Optional.empty();
     }
 
+    return Optional.of(bundle(targetAccount, targetServiceIdentifier, preKeysByDeviceId));
+  }
+
+  static AccountPreKeyBundles bundle(Account targetAccount, ServiceIdentifier targetServiceIdentifier,
+      Map<Byte, KeysManager.DevicePreKeys> preKeysByDeviceId) {
     final IdentityKey identityKey = switch (targetServiceIdentifier.identityType()) {
       case ACI -> targetAccount.getAccountIdentityKey();
       case PNI -> targetAccount.getPhoneNumberIdentityKey()
@@ -117,7 +122,7 @@ class KeysGrpcHelper {
       preKeyBundlesBuilder.putDevicePreKeys(deviceId, builder.build());
     });
 
-    return Optional.of(preKeyBundlesBuilder.build());
+    return preKeyBundlesBuilder.build();
   }
 
   public static ECPreKey checkEcPreKey(final EcPreKey preKey, final StatusRuntimeException invalidPublicKeyException) {
