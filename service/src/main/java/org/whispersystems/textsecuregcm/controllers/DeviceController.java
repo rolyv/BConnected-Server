@@ -94,6 +94,7 @@ public class DeviceController {
 
   static final int MAX_DEVICES = 6;
 
+  private final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates;
   private final AccountOperationsPolicy operationsPolicy;
 
   private final Set<PushNotification.TokenType> enabledPushTypes;
@@ -139,6 +140,14 @@ public class DeviceController {
       final PersistentTimer persistentTimer,
       final Set<PushNotification.TokenType> enabledPushTypes,
       final AccountOperationsPolicy operationsPolicy) {
+    this(accounts, rateLimiters, persistentTimer, enabledPushTypes, operationsPolicy, null);
+  }
+
+  public DeviceController(final AccountsManager accounts, final RateLimiters rateLimiters,
+      final PersistentTimer persistentTimer, final Set<PushNotification.TokenType> enabledPushTypes,
+      final AccountOperationsPolicy operationsPolicy,
+      final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates) {
+    this.admittedUpdates = admittedUpdates;
     this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
     this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accounts = accounts;
@@ -434,6 +443,11 @@ public class DeviceController {
   @Produces(MediaType.APPLICATION_JSON)
   @Path("/capabilities")
   public void setCapabilities(@Auth final AuthenticatedDevice auth, @NotNull final Map<String, Boolean> capabilities) {
+    if (admittedUpdates != null) {
+      admittedUpdates.http(auth, a -> a.getDevice(Device.PRIMARY_ID).orElseThrow()
+          .setCapabilities(DeviceCapabilityAdapter.mapToSet(capabilities)));
+      return;
+    }
     accounts.updateDevice(auth.accountIdentifier(), auth.deviceId(),
         d -> d.setCapabilities(DeviceCapabilityAdapter.mapToSet(capabilities)));
   }

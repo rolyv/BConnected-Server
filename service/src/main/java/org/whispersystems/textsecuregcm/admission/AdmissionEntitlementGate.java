@@ -319,6 +319,31 @@ public final class AdmissionEntitlementGate {
     receipt.requireFreshCurrentEntitlement();
   }
 
+  /** Seal exactly one permitted self-update without renewing its original private-service receipt. */
+  Authorization accountMutationResult(Connection connection, DeviceAuthorization caller, Account written) {
+    final Authorization original = caller.membership;
+    if (original.owner != this || caller.deviceId != org.whispersystems.textsecuregcm.storage.Device.PRIMARY_ID
+        || !original.snapshot.binding().aci().equals(written.getAccountIdentifier())) throw denied();
+    try {
+      if (connection.getAutoCommit()
+          || connection.getTransactionIsolation() != Connection.TRANSACTION_READ_COMMITTED) throw unavailable();
+      requireReceipt(original.snapshot, original.receipt);
+      final Snapshot current = readLocked(connection, written.getAccountIdentifier());
+      final var expected = (com.fasterxml.jackson.databind.node.ObjectNode)
+          SystemMapper.jsonMapper().readTree(original.snapshot.account());
+      expected.set("data", SystemMapper.jsonMapper().readTree(SystemMapper.jsonMapper().writeValueAsString(written)));
+      expected.put("version", written.getVersion() + 1);
+      if (!expected.equals(SystemMapper.jsonMapper().readTree(current.account()))
+          || !original.snapshot.binding().equals(current.binding())
+          || !original.snapshot.admission().equals(current.admission())
+          || !original.snapshot.confirmation().equals(current.confirmation())) throw unavailable();
+      requireReceipt(current, original.receipt);
+      return new Authorization(this, current, original.receipt);
+    } catch (java.io.IOException | SQLException failure) {
+      throw unavailable();
+    }
+  }
+
   private static Snapshot readLocked(Connection connection, UUID aci) throws SQLException {
     final String account;
     // Separate statements preserve the account -> admission -> outbox lock order. FOR SHARE also

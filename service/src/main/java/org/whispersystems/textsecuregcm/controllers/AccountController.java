@@ -82,6 +82,7 @@ public class AccountController {
   public static final int USERNAME_HASH_LENGTH = 32;
   public static final int MAXIMUM_USERNAME_CIPHERTEXT_LENGTH = 128;
 
+  private final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates;
   private final AccountOperationsPolicy operationsPolicy;
 
   private final Set<PushNotification.TokenType> enabledPushTypes;
@@ -111,12 +112,60 @@ public class AccountController {
       final UsernameHashZkProofVerifier usernameHashZkProofVerifier,
       final Set<PushNotification.TokenType> enabledPushTypes,
       final AccountOperationsPolicy operationsPolicy) {
+    this(accounts, rateLimiters, phoneNumberRecoveryPasswordsManager, usernameHashZkProofVerifier,
+        enabledPushTypes, operationsPolicy, null);
+  }
+
+  public AccountController(final AccountsManager accounts, final RateLimiters rateLimiters,
+      final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager,
+      final UsernameHashZkProofVerifier usernameHashZkProofVerifier,
+      final Set<PushNotification.TokenType> enabledPushTypes, final AccountOperationsPolicy operationsPolicy,
+      final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates) {
+    this.admittedUpdates = admittedUpdates;
     this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
     this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accounts = accounts;
     this.rateLimiters = rateLimiters;
     this.phoneNumberRecoveryPasswordsManager = phoneNumberRecoveryPasswordsManager;
     this.usernameHashZkProofVerifier = usernameHashZkProofVerifier;
+  }
+
+  private void updateAccount(AuthenticatedDevice auth, java.util.function.Consumer<Account> mutation) {
+    if (admittedUpdates != null) admittedUpdates.http(auth, mutation);
+    else accounts.update(auth.accountIdentifier(), mutation);
+  }
+
+  private void updateDevice(AuthenticatedDevice auth, java.util.function.Consumer<Device> mutation) {
+    if (admittedUpdates != null) admittedUpdates.http(auth, a -> mutation.accept(a.getDevice(Device.PRIMARY_ID).orElseThrow()));
+    else accounts.updateDevice(auth.accountIdentifier(), auth.deviceId(), mutation);
+  }
+
+  private static void applyAttributes(Account a, byte deviceId, String signalAgent, AccountAttributes attributes) {
+    a.getDevice(deviceId).ifPresent(d -> {
+      d.setFetchesMessages(attributes.getFetchesMessages());
+      d.setName(attributes.getName());
+      d.setLastSeen(Util.todayInMillis());
+      d.setCapabilities(attributes.getCapabilities());
+      if (StringUtils.isNotBlank(signalAgent)) {
+        d.setUserAgent(signalAgent);
+      }
+    });
+
+    if (StringUtils.isNotEmpty(attributes.getRegistrationLock()) && a.getNumber().isEmpty()) {
+      throw new BadRequestException("account does not have a phone number");
+    }
+
+    a.setRegistrationLockFromAttributes(attributes);
+    a.setUnidentifiedAccessKey(attributes.getUnidentifiedAccessKey());
+    a.setUnrestrictedUnidentifiedAccess(attributes.isUnrestrictedUnidentifiedAccess());
+
+    if (attributes.isDiscoverableByPhoneNumber() && a.getNumber().isEmpty()) {
+      throw new BadRequestException("account does not have a phone number");
+    }
+
+    a.setDiscoverableByPhoneNumber(attributes.isDiscoverableByPhoneNumber());
+
+    attributes.recoveryPassword().ifPresent(a::setAccountRecoveryPassword);
   }
 
   private void requirePushProvider(final PushNotification.TokenType type) {
@@ -133,6 +182,14 @@ public class AccountController {
       @NotNull @Valid GcmRegistrationId registrationId) {
 
     requirePushProvider(PushNotification.TokenType.FCM);
+    if (admittedUpdates != null) {
+      updateDevice(auth, device -> {
+        if (!Objects.equals(device.getGcmId(), registrationId.gcmRegistrationId())) {
+          device.setApnId(null); device.setGcmId(registrationId.gcmRegistrationId()); device.setFetchesMessages(false);
+        }
+      });
+      return;
+    }
     final String currentGcmId = accounts.getByAccountIdentifier(auth.accountIdentifier())
         .flatMap(account -> account.getDevice(auth.deviceId()))
         .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED))
@@ -142,7 +199,7 @@ public class AccountController {
       return;
     }
 
-    accounts.updateDevice(auth.accountIdentifier(), auth.deviceId(), device -> {
+    updateDevice(auth, device -> {
       device.setApnId(null);
       device.setGcmId(registrationId.gcmRegistrationId());
       device.setFetchesMessages(false);
@@ -152,7 +209,7 @@ public class AccountController {
   @DELETE
   @Path("/gcm/")
   public void deleteGcmRegistrationId(@Auth AuthenticatedDevice auth) {
-    accounts.updateDevice(auth.accountIdentifier(), auth.deviceId(), d -> {
+    updateDevice(auth, d -> {
       d.setGcmId(null);
       d.setFetchesMessages(false);
       d.setUserAgent("OWA");
@@ -169,7 +226,7 @@ public class AccountController {
     requirePushProvider(PushNotification.TokenType.APN);
     // Unlike FCM tokens, we need current "last updated" timestamps for APNs tokens and so update device records
     // unconditionally
-    accounts.updateDevice(auth.accountIdentifier(), auth.deviceId(), d -> {
+    updateDevice(auth, d -> {
       d.setApnId(registrationId.apnRegistrationId());
       d.setGcmId(null);
       d.setFetchesMessages(false);
@@ -179,7 +236,7 @@ public class AccountController {
   @DELETE
   @Path("/apn/")
   public void deleteApnRegistrationId(@Auth AuthenticatedDevice auth) {
-    accounts.updateDevice(auth.accountIdentifier(), auth.deviceId(), d -> {
+    updateDevice(auth, d -> {
       d.setApnId(null);
       d.setFetchesMessages(false);
       d.setUserAgent(d.isPrimary() ? "OWI" : "OWP");
@@ -193,8 +250,7 @@ public class AccountController {
     final SaltedTokenHash credentials = SaltedTokenHash.generateFor(accountLock.registrationLock());
 
     try {
-      accounts.update(auth.accountIdentifier(),
-          a -> a.setRegistrationLock(credentials.hash(), credentials.salt()));
+      updateAccount(auth, a -> a.setRegistrationLock(credentials.hash(), credentials.salt()));
     } catch (IllegalArgumentException _) {
       throw new BadRequestException();
     }
@@ -203,7 +259,7 @@ public class AccountController {
   @DELETE
   @Path("/registration_lock")
   public void removeRegistrationLock(@Auth AuthenticatedDevice auth) {
-    accounts.update(auth.accountIdentifier(), a -> a.setRegistrationLock(null, null));
+    updateAccount(auth, a -> a.setRegistrationLock(null, null));
   }
 
   @PUT
@@ -226,6 +282,11 @@ public class AccountController {
           requiredMode = Schema.RequiredMode.NOT_REQUIRED)
       final Byte deviceId) {
     operationsPolicy.requireDeviceTarget(deviceId == null ? auth.deviceId() : deviceId);
+    if (admittedUpdates != null) {
+      AccountOperationsPolicy.PILOT_PRIMARY_ONLY.requireDeviceTarget(deviceId == null ? auth.deviceId() : deviceId);
+      updateDevice(auth, d -> d.setName(deviceName.deviceName()));
+      return;
+    }
 
     final Account account = accounts.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED));
@@ -254,6 +315,12 @@ public class AccountController {
       @HeaderParam(HeaderUtils.X_SIGNAL_AGENT) String signalAgent,
       @NotNull @Valid AccountAttributes attributes) {
     if (attributes.recoveryPassword().isPresent()) operationsPolicy.requireRecoveryPasswordChanges();
+    if (admittedUpdates != null) {
+      // Recovery/linked-device publication remains unavailable in the pilot.
+      if (attributes.recoveryPassword().isPresent()) throw new FeatureUnavailableException("recovery password changes");
+      admittedUpdates.http(auth, a -> applyAttributes(a, auth.deviceId(), signalAgent, attributes));
+      return;
+    }
 
     final Account account = accounts.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED));
@@ -264,33 +331,7 @@ public class AccountController {
                 List.of(phoneNumberRecoveryPasswordsManager.buildTransactWriteItemForStorePassword(phoneNumberIdentifier, recoveryPassword))))
             .orElseGet(Collections::emptyList);
 
-    accounts.update(auth.accountIdentifier(), a -> {
-      a.getDevice(auth.deviceId()).ifPresent(d -> {
-        d.setFetchesMessages(attributes.getFetchesMessages());
-        d.setName(attributes.getName());
-        d.setLastSeen(Util.todayInMillis());
-        d.setCapabilities(attributes.getCapabilities());
-        if (StringUtils.isNotBlank(signalAgent)) {
-          d.setUserAgent(signalAgent);
-        }
-      });
-
-      if (StringUtils.isNotEmpty(attributes.getRegistrationLock()) && a.getNumber().isEmpty()) {
-        throw new BadRequestException("account does not have a phone number");
-      }
-
-      a.setRegistrationLockFromAttributes(attributes);
-      a.setUnidentifiedAccessKey(attributes.getUnidentifiedAccessKey());
-      a.setUnrestrictedUnidentifiedAccess(attributes.isUnrestrictedUnidentifiedAccess());
-
-      if (attributes.isDiscoverableByPhoneNumber() && a.getNumber().isEmpty()) {
-        throw new BadRequestException("account does not have a phone number");
-      }
-
-      a.setDiscoverableByPhoneNumber(attributes.isDiscoverableByPhoneNumber());
-
-      attributes.recoveryPassword().ifPresent(a::setAccountRecoveryPassword);
-    }, additionalWriteItems);
+    accounts.update(auth.accountIdentifier(), a -> applyAttributes(a, auth.deviceId(), signalAgent, attributes), additionalWriteItems);
   }
 
   @GET

@@ -859,6 +859,11 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         ? new org.whispersystems.textsecuregcm.storage.AdmittedKeysPostgres(postgres.dataSource(),
             ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionKeys", 64, environment)) : null;
 
+    final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedAccountUpdates = gcpPilot
+        ? new org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates(postgres.accounts(),
+            accountsManager::invalidateCacheAfterAdmittedUpdate, admissionGate,
+            ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionAccountUpdates", 64, environment)) : null;
+
     final MessageSender messageSender = new MessageSender(messagesManager, pushNotificationManager, dynamicConfigurationManager,
         admissionGate, gcpPilot ? ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionMessageSends", 64, environment) : null);
     final ReceiptSender receiptSender = new ReceiptSender(accountsManager, messageSender, receiptSenderExecutor);
@@ -1132,7 +1137,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             new MessagesGrpcService(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender, messageByteLimitCardinalityEstimator, spamChecker, messageDispatcher, Clock.systemUTC(), admissionGrpcSessions, gcpPilot),
             gcpPilot ? null : new BackupsGrpcService(accountsManager, backupAuthManager, backupMetrics),
             new DevicesGrpcService(accountsManager, config.enabledPushTypes(),
-                gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
+                gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD, admittedAccountUpdates),
             new AttachmentsGrpcService(experimentEnrollmentManager, rateLimiters, gcsAttachmentGenerator,
                 tusAttachmentGenerator,
                 config.getAttachments().maxAttachmentUploadSizeInBytes(), gcpPilot),
@@ -1296,7 +1301,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         mediaDownloads == null ? null : new MediaDownloadController(mediaDownloads, rateLimiters),
         new AccountController(accountsManager, rateLimiters, phoneNumberRecoveryPasswordsManager,
             usernameHashZkProofVerifier, config.enabledPushTypes(),
-            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
+            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD, admittedAccountUpdates),
         new AccountControllerV2(accountsManager, changeNumberManager,
             gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
         new AttachmentControllerV4(rateLimiters, gcsAttachmentGenerator, tusAttachmentGenerator,
@@ -1308,7 +1313,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         new CertificateController(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, callingPreV101GenericZkSecretParams, clock, !gcpPilot, gcpPilot),
         new ChallengeController(accountsManager, rateLimitChallengeManager, challengeConstraintChecker),
         new DeviceController(accountsManager, rateLimiters, persistentTimer, config.enabledPushTypes(),
-            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
+            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD, admittedAccountUpdates),
         gcpPilot ? null : new DeviceCheckController(clock, accountsManager, backupAuthManager, appleDeviceCheckManager, rateLimiters,
             config.getDeviceCheck().backupRedemptionDuration()),
         new DirectoryV2Controller(directoryV2CredentialsGenerator),

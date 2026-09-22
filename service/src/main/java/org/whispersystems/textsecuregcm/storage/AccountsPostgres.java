@@ -255,6 +255,25 @@ public final class AccountsPostgres implements AccountStore {
     updateWithMutations(a, List.of());
   }
 
+  void updateAdmitted(org.whispersystems.textsecuregcm.admission.AdmissionAccountMutationGuard guard,
+      Account original, java.util.function.Consumer<Account> mutation) {
+    transaction(c -> {
+      // Acquire UPDATE before the admission SHARE locks; concurrent self-updates must not both
+      // hold SHARE and deadlock while upgrading. No retry may replace the authenticated snapshot.
+      query(c, "SELECT * FROM signal.accounts WHERE aci=? FOR UPDATE", original.getAccountIdentifier());
+      guard.requireCurrent(c);
+      Account updated = AccountUtil.cloneAccountAsNotStale(original);
+      mutation.accept(updated);
+      updated = AccountUtil.cloneAccountAsNotStale(updated);
+      guard.validate(updated);
+      guard.requireCurrent(c);
+      write(c, updated, false);
+      guard.recordResult(c, updated); // exact written data + unchanged admission; failure rolls back
+      return null;
+    });
+    guard.requireFresh();
+  }
+
   @Override
   public void updateWithMutations(Account a, Collection<AccountMutation> mutations) {
     transaction(

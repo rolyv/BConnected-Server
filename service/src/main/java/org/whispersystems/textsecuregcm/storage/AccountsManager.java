@@ -1712,6 +1712,11 @@ public class AccountsManager extends RedisPubSubAdapter<String, String> implemen
                 connection.sync().del(keysToDelete.toArray(String[]::new)))));
   }
 
+  /** Evict native admitted self-updates without publishing a possibly superseded cached snapshot. */
+  public void invalidateCacheAfterAdmittedUpdate(final Account account) {
+    redisDelete(account);
+  }
+
   public CompletableFuture<Optional<DeviceInfo>> waitForNewLinkedDevice(
       final UUID accountIdentifier,
       final Device linkingDevice,

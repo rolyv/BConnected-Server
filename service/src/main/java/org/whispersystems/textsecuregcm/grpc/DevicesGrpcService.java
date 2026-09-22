@@ -40,6 +40,7 @@ import org.whispersystems.textsecuregcm.util.FeatureUnavailableException;
 
 public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
 
+  private final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates;
   private final AccountOperationsPolicy operationsPolicy;
 
   private final Set<PushNotification.TokenType> enabledPushTypes;
@@ -57,6 +58,13 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
   public DevicesGrpcService(final AccountsManager accountsManager,
       final Set<PushNotification.TokenType> enabledPushTypes,
       final AccountOperationsPolicy operationsPolicy) {
+    this(accountsManager, enabledPushTypes, operationsPolicy, null);
+  }
+
+  public DevicesGrpcService(final AccountsManager accountsManager,
+      final Set<PushNotification.TokenType> enabledPushTypes, final AccountOperationsPolicy operationsPolicy,
+      final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates) {
+    this.admittedUpdates = admittedUpdates;
     this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
     this.enabledPushTypes = Set.copyOf(enabledPushTypes);
     this.accountsManager = accountsManager;
@@ -126,6 +134,11 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
       throw GrpcExceptions.badAuthentication("linked device is not authorized to change target device name");
     }
 
+    if (admittedUpdates != null) {
+      AccountOperationsPolicy.PILOT_PRIMARY_ONLY.requireDeviceTarget(deviceId);
+      updateDevice(authenticatedDevice, device -> device.setName(request.getName().toByteArray()));
+      return SetDeviceNameResponse.newBuilder().setSuccess(Empty.getDefaultInstance()).build();
+    }
     final Account account = getAuthenticatedAccount();
 
     if (account.getDevice(deviceId).isEmpty()) {
@@ -163,6 +176,14 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
       default -> throw GrpcExceptions.fieldViolation("token_request", "No tokens specified");
     }
 
+    if (admittedUpdates != null) {
+      updateDevice(authenticatedDevice, device -> {
+        if (request.hasApnsTokenRequest() || !Objects.equals(device.getGcmId(), fcmToken)) {
+          device.setApnId(apnsToken); device.setGcmId(fcmToken); device.setFetchesMessages(false);
+        }
+      });
+      return SetPushTokenResponse.getDefaultInstance();
+    }
     final Account account = getAuthenticatedAccount();
 
     final Device device = account.getDevice(authenticatedDevice.deviceId())
@@ -185,7 +206,7 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
   public ClearPushTokenResponse clearPushToken(final ClearPushTokenRequest request) {
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
 
-    accountsManager.updateDevice(authenticatedDevice.accountIdentifier(), authenticatedDevice.deviceId(), device -> {
+    updateDevice(authenticatedDevice, device -> {
       if (StringUtils.isNotBlank(device.getApnId())) {
         device.setUserAgent(device.isPrimary() ? "OWI" : "OWP");
       } else if (StringUtils.isNotBlank(device.getGcmId())) {
@@ -208,10 +229,15 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
         .map(DeviceCapabilityUtil::fromGrpcDeviceCapability)
         .collect(Collectors.toSet());
 
-    accountsManager.updateDevice(authenticatedDevice.accountIdentifier(), authenticatedDevice.deviceId(),
+    updateDevice(authenticatedDevice,
         device -> device.setCapabilities(capabilities));
 
     return SetCapabilitiesResponse.getDefaultInstance();
+  }
+
+  private void updateDevice(AuthenticatedDevice auth, java.util.function.Consumer<Device> mutation) {
+    if (admittedUpdates != null) admittedUpdates.grpc(auth, a -> mutation.accept(a.getDevice(Device.PRIMARY_ID).orElseThrow()));
+    else accountsManager.updateDevice(auth.accountIdentifier(), auth.deviceId(), mutation);
   }
 
   private Account getAuthenticatedAccount() {
