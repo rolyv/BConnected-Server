@@ -12,7 +12,6 @@ import static org.mockito.Mockito.when;
 
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
-import java.time.Clock;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.signal.chat.attachments.AttachmentsGrpc;
@@ -39,8 +38,7 @@ class GcpAttachmentsGrpcServiceTest extends SimpleBaseGrpcTest<AttachmentsGrpcSe
     final RateLimiters limits = mock(RateLimiters.class);
     when(limits.getAttachmentLimiter()).thenReturn(limiter);
     when(limits.getAttachmentBytesLimiter()).thenReturn(limiter);
-    when(limits.getStickerPackLimiter()).thenReturn(limiter);
-    return new AttachmentsGrpcService(experiments, limits, gcs, null, null, 1000, Clock.systemUTC());
+    return new AttachmentsGrpcService(experiments, limits, gcs, null, 1000);
   }
 
   @Override
@@ -69,6 +67,7 @@ class GcpAttachmentsGrpcServiceTest extends SimpleBaseGrpcTest<AttachmentsGrpcSe
     final StatusRuntimeException error = assertThrows(StatusRuntimeException.class,
         () -> authenticatedServiceStub().getStickerUploadForm(GetStickerUploadFormRequest.newBuilder().setStickerCount(1).build()));
     assertThat(error.getStatus().getCode()).isEqualTo(Status.Code.UNAVAILABLE);
+    org.mockito.Mockito.verifyNoInteractions(gcs, limiter);
   }
 
   @Test

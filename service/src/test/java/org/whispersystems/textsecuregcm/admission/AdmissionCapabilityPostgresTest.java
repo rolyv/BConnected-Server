@@ -84,7 +84,7 @@ class AdmissionCapabilityPostgresTest {
     String name = io.grpc.inprocess.InProcessServerBuilder.generateName();
     server = io.grpc.inprocess.InProcessServerBuilder.forName(name).directExecutor()
         .addService(io.grpc.ServerInterceptors.intercept(new AttachmentsGrpcService(experiments, rates, uploads,
-            null, null, 1024, fixture.flow.http.clock, true), new MockRequestAttributesInterceptor(),
+            null, 1024, true), new MockRequestAttributesInterceptor(),
             new org.whispersystems.textsecuregcm.auth.grpc.RequireAuthenticationInterceptor(AccountAuthenticator.withAdmission(fixture.gate))))
         .build().start();
     channel = io.grpc.inprocess.InProcessChannelBuilder.forName(name).directExecutor().build();

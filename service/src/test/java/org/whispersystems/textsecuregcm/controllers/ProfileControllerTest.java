@@ -102,7 +102,8 @@ import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.limits.RateLimiter;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
 import org.whispersystems.textsecuregcm.mappers.RateLimitExceededExceptionMapper;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
+import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
+import org.whispersystems.textsecuregcm.avatars.TestAvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountBadge;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
@@ -130,8 +131,7 @@ class ProfileControllerTest {
   private static final RateLimiter rateLimiter = mock(RateLimiter.class);
   private static final RateLimiter usernameRateLimiter = mock(RateLimiter.class);
 
-  private static final PostPolicyGenerator postPolicyGenerator = new PostPolicyGenerator("us-west-1", "profile-bucket",
-      "accessKey", "accessSecret");
+  private static final AvatarUploadPolicyGenerator postPolicyGenerator = TestAvatarUploadPolicyGenerator.INSTANCE;
   private static final ServerZkProfileOperations zkProfileOperations = mock(ServerZkProfileOperations.class);
   private static final ServerSecretParams serverSecretParams = ServerSecretParams.generate();
 
@@ -494,6 +494,11 @@ class ProfileControllerTest {
 
     assertThat(profileArgumentCaptor.getValue().commitment()).isEqualTo(commitment.serialize());
     assertThat(profileArgumentCaptor.getValue().avatar()).isEqualTo(uploadAttributes.getKey());
+    final var fields = SystemMapper.jsonMapper().valueToTree(uploadAttributes);
+    assertThat(fields.path("algorithm").asText()).isEqualTo("TEST-POLICY");
+    assertThat(fields.path("acl").asText()).isEmpty();
+    assertThat(fields.path("credential").asText()).isEqualTo("fixture-credential");
+    assertThat(fields.path("signature").asText()).isEqualTo("fixture-signature");
     assertThat(profileArgumentCaptor.getValue().version()).isEqualTo(versionHex("someversion"));
     assertThat(profileArgumentCaptor.getValue().name()).isEqualTo(name);
     assertThat(profileArgumentCaptor.getValue().aboutEmoji()).isNull();

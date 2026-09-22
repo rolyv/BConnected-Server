@@ -32,7 +32,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.whispersystems.textsecuregcm.configuration.GcsAvatarConfiguration;
 import org.whispersystems.textsecuregcm.grpc.ProfileGrpcHelper;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
 
 class GcsAvatarStorageTest {
@@ -132,17 +131,6 @@ class GcsAvatarStorageTest {
     assertThat(rest.path("acl").asText()).isEmpty();
     assertThat(rest.path("policy").asText()).isEqualTo(grpc.getPolicy());
     assertThat(rest.path("signature").asText()).isEqualTo(grpc.getSignature());
-  }
-
-  @Test void legacyPolicyAdapterPreservesFieldsExactly() {
-    var legacy = new PostPolicyGenerator("us-east-1", BUCKET, "fixture-id", "fixture-secret");
-    var original = legacy.createFor(KEY, 4096, CLOCK.instant());
-    var adapted = new S3AvatarUploadPolicyGenerator(legacy).createFor(KEY, 4096, CLOCK.instant());
-    assertThat(adapted.signature()).isEqualTo(original.signature());
-    assertThat(adapted.encodedPolicy()).isEqualTo(original.encodedPolicy());
-    assertThat(adapted.credential()).isEqualTo(original.credential());
-    assertThat(adapted.acl()).isEqualTo("private");
-    assertThat(adapted.algorithm()).isEqualTo("AWS4-HMAC-SHA256");
   }
 
   @Test void invalidKeysLengthsAndConfigurationFailBeforeStorageAccess() {

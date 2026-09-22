@@ -30,9 +30,7 @@ import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialRequest;
 import org.signal.libsignal.zkgroup.profiles.ServerZkProfileOperations;
 import org.whispersystems.textsecuregcm.auth.UnidentifiedAccessChecksum;
 import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
-import org.whispersystems.textsecuregcm.avatars.S3AvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.badges.ProfileBadgeConverter;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.DeviceCapability;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
@@ -158,11 +156,6 @@ public class ProfileGrpcHelper {
               .setProfileKeyCredential(ByteString.copyFrom(profileKeyCredentialResponse.serialize()))
               .build();
         });
-  }
-
-  public static S3UploadForm generateAvatarUploadForm(final String objectName, final int uploadLength,
-      final PostPolicyGenerator policyGenerator, final Clock clock) {
-    return generateAvatarUploadForm(objectName, uploadLength, new S3AvatarUploadPolicyGenerator(policyGenerator), clock);
   }
 
   public static S3UploadForm generateAvatarUploadForm(final String objectName, final int uploadLength,

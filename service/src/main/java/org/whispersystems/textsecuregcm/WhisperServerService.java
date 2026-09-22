@@ -149,7 +149,6 @@ import org.whispersystems.textsecuregcm.controllers.RegistrationController;
 import org.whispersystems.textsecuregcm.controllers.RemoteConfigController;
 import org.whispersystems.textsecuregcm.controllers.SecureStorageController;
 import org.whispersystems.textsecuregcm.controllers.SecureValueRecovery2Controller;
-import org.whispersystems.textsecuregcm.controllers.StickerController;
 import org.whispersystems.textsecuregcm.controllers.SubscriptionController;
 import org.whispersystems.textsecuregcm.controllers.VerificationController;
 import org.whispersystems.textsecuregcm.currency.CoinGeckoClient;
@@ -257,7 +256,6 @@ import org.whispersystems.textsecuregcm.redis.ConnectionEventLogger;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClusterClient;
 import org.whispersystems.textsecuregcm.redis.PubSubRedisClient;
 import org.whispersystems.textsecuregcm.registration.RegistrationService;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
 import org.whispersystems.textsecuregcm.spam.ChallengeConstraintChecker;
@@ -360,10 +358,8 @@ import org.whispersystems.websocket.setup.WebSocketEnvironment;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
-import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
-import software.amazon.awssdk.services.s3.S3AsyncClient;
 
 public class WhisperServerService extends Application<WhisperServerConfiguration> {
 
@@ -545,13 +541,6 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
       fdb = null;
       messageDatabasesByEpoch = Map.of();
     }
-
-    final AwsCredentialsProvider cdnCredentialsProvider = gcpPilot ? null : config.getCdnConfiguration().credentials().build();
-    final S3AsyncClient asyncCdnS3Client = gcpPilot ? null : S3AsyncClient.builder()
-        .credentialsProvider(cdnCredentialsProvider)
-        .region(Region.of(config.getCdnConfiguration().region()))
-        .endpointOverride(config.getCdnConfiguration().endpointOverride())
-        .build();
 
     BlockingQueue<Runnable> messageDeletionQueue = new LinkedBlockingQueue<>();
     Metrics.gaugeCollectionSize(name(getClass(), "messageDeletionQueueSize"), Collections.emptyList(),
@@ -760,9 +749,9 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         storageServiceExecutor, retryExecutor, config.getSecureStorageServiceConfiguration());
     DisconnectionRequestManager disconnectionRequestManager = new DisconnectionRequestManager(pubsubClient,
         disconnectionRequestListenerExecutor, retryExecutor);
-    final org.whispersystems.textsecuregcm.avatars.GcsAvatarStorage gcsAvatars = gcpPilot
-        ? config.getGcpAvatars().build(messageDeletionAsyncExecutor, clock) : null;
-    if (gcsAvatars != null) environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
+    final org.whispersystems.textsecuregcm.avatars.GcsAvatarStorage gcsAvatars =
+        config.getGcpAvatars().build(messageDeletionAsyncExecutor, clock);
+    environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
       @Override public void stop() throws Exception { gcsAvatars.close(); }
     });
     final GcsMediaDownloadService mediaDownloads =
@@ -771,8 +760,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
       @Override public void stop() throws Exception { mediaDownloads.close(); }
     });
     ProfilesManager profilesManager = new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor,
-        gcpPilot ? gcsAvatars : new org.whispersystems.textsecuregcm.avatars.S3AvatarObjectStorage(
-            asyncCdnS3Client, config.getCdnConfiguration().bucket()));
+        gcsAvatars);
     MessagesCache messagesCache = new MessagesCache(messagesCluster, messageDeliveryScheduler,
         messageDeletionAsyncExecutor, retryExecutor, clock);
     final FoundationDbMessageStore foundationDbMessageStore = postgres != null ? null : new FoundationDbMessageStore(messageDatabasesByEpoch,
@@ -952,16 +940,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             config.getGcpAttachmentsConfiguration().email(), config.getGcpAttachmentsConfiguration().pathPrefix(),
             config.getGcpAttachmentsConfiguration().rsaSigningKey().value());
 
-    final org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator profileCdnPolicyGenerator = gcpPilot
-        ? gcsAvatars : new org.whispersystems.textsecuregcm.avatars.S3AvatarUploadPolicyGenerator(
-            new PostPolicyGenerator(config.getCdnConfiguration().region(), config.getCdnConfiguration().bucket(),
-                config.getCdnConfiguration().credentials().accessKeyId().value(),
-                config.getCdnConfiguration().credentials().secretAccessKey().value()));
-
-    final PostPolicyGenerator stickerPolicyGenerator = gcpPilot ? null : new PostPolicyGenerator(config.getCdnConfiguration().region(),
-        config.getCdnConfiguration().bucket(),
-        config.getCdnConfiguration().credentials().accessKeyId().value(),
-        config.getCdnConfiguration().credentials().secretAccessKey().value());
+    final org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator profileCdnPolicyGenerator = gcsAvatars;
 
     ServerSecretParams groupZkSecretParams = new ServerSecretParams(config.getGroupsZkConfig().serverSecret().value());
     GenericServerSecretParams callingPreV101GenericZkSecretParams = gcpPilot ? null : new GenericServerSecretParams(config.getCallingZkConfigPreV101().serverSecret().value());
@@ -1148,8 +1127,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             new DevicesGrpcService(accountsManager, config.enabledPushTypes(),
                 gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
             new AttachmentsGrpcService(experimentEnrollmentManager, rateLimiters, gcsAttachmentGenerator,
-                tusAttachmentGenerator, stickerPolicyGenerator,
-                config.getAttachments().maxAttachmentUploadSizeInBytes(), Clock.systemUTC(), gcpPilot),
+                tusAttachmentGenerator,
+                config.getAttachments().maxAttachmentUploadSizeInBytes(), gcpPilot),
             gcpPilot ? null : new PaymentsGrpcService(currencyManager),
             new ChallengeGrpcService(accountsManager, rateLimitChallengeManager, challengeConstraintChecker),
             gcpPilot ? null : new DonationsGrpcService(clock, zkReceiptOperations, redeemedReceiptsManager, accountsManager, config.getBadges(), ReceiptCredentialPresentation::new, donationPermitsManager, rateLimiters),
@@ -1342,7 +1321,6 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         new RemoteConfigController(remoteConfigsManager),
         config.isStorageEnabled() ? new SecureStorageController(storageCredentialsGenerator) : null,
         config.isSvr2Enabled() ? new SecureValueRecovery2Controller(svr2CredentialsGenerator, accountsManager) : null,
-        gcpPilot ? null : new StickerController(rateLimiters, stickerPolicyGenerator, Clock.systemUTC()),
         gcpPilot ? null : new VerificationController(registrationServiceClient, new VerificationSessionManager(verificationSessions),
             pushNotificationManager, registrationCaptchaManager, phoneNumberRecoveryPasswordsManager,
             phoneNumberIdentifiers, rateLimiters, accountsManager, carrierDataProvider, registrationFraudChecker,

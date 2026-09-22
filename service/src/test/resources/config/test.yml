@@ -227,12 +227,9 @@ apn: # Apple Push Notifications configuration
 fcm: # FCM configuration
   credentials: secret://fcm.credentials
 
-cdn:
-  bucket: cdn        # S3 Bucket name
-  credentials:
-    accessKeyId: secret://cdn.accessKey
-    secretAccessKey: secret://cdn.accessSecret
-  region: us-west-2  # AWS region
+gcpAvatars:
+  bucket: example-avatars
+  signingServiceAccount: signal@example-project.iam.gserviceaccount.com
 
 cdn3StorageManager:
   baseUri: https://storage-manager.example.com

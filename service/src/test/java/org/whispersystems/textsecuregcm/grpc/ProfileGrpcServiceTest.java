@@ -97,7 +97,8 @@ import org.whispersystems.textsecuregcm.entities.BadgeSvg;
 import org.whispersystems.textsecuregcm.identity.AciServiceIdentifier;
 import org.whispersystems.textsecuregcm.limits.RateLimiter;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
+import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
+import org.whispersystems.textsecuregcm.avatars.TestAvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountBadge;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
@@ -159,7 +160,7 @@ public class ProfileGrpcServiceTest extends SimpleBaseGrpcTest<ProfileGrpcServic
 
     @SuppressWarnings("unchecked") final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager = mock(DynamicConfigurationManager.class);
     final DynamicConfiguration dynamicConfiguration = mock(DynamicConfiguration.class);
-    final PostPolicyGenerator policyGenerator = new PostPolicyGenerator("us-west-1", "profile-bucket", "accessKey", "accessSecret");
+    final AvatarUploadPolicyGenerator policyGenerator = TestAvatarUploadPolicyGenerator.INSTANCE;
     final BadgesConfiguration badgesConfiguration = new BadgesConfiguration(
         List.of(new BadgeConfiguration(
             "TEST",
@@ -398,7 +399,7 @@ public class ProfileGrpcServiceTest extends SimpleBaseGrpcTest<ProfileGrpcServic
   @ParameterizedTest
   @MethodSource
   void setProfileUpload(final AvatarChange avatarChange, final boolean hasPreviousProfile,
-      final boolean expectHasS3UploadPath, final boolean expectDeleteS3Object) throws InvalidInputException {
+      final boolean expectHasAvatarUploadPath, final boolean expectDeleteAvatarObject) throws InvalidInputException {
     final String currentAvatar = "profiles/currentAvatar";
     final byte[] commitment = new ProfileKey(new byte[32]).getCommitment(new ServiceId.Aci(AUTHENTICATED_ACI)).serialize();
 
@@ -418,13 +419,16 @@ public class ProfileGrpcServiceTest extends SimpleBaseGrpcTest<ProfileGrpcServic
     assertTrue(response.hasResult());
     final SetProfileResult result = response.getResult();
 
-    if (expectHasS3UploadPath) {
+    if (expectHasAvatarUploadPath) {
       assertTrue(result.getV1AvatarUploadForm().getKey().startsWith("profiles/"));
+      assertEquals("TEST-POLICY", result.getV1AvatarUploadForm().getAlgorithm());
+      assertEquals("fixture-signature", result.getV1AvatarUploadForm().getSignature());
+      assertEquals("", result.getV1AvatarUploadForm().getAcl());
     } else {
       assertEquals("", result.getV1AvatarUploadForm().getKey());
     }
 
-    if (expectDeleteS3Object) {
+    if (expectDeleteAvatarObject) {
       verify(profilesManager).deleteAvatar(currentAvatar);
     } else {
       verify(profilesManager, never()).deleteAvatar(anyString());

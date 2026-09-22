@@ -8,7 +8,7 @@ package org.whispersystems.textsecuregcm.entities;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(description = "Profile avatar upload form; algorithm selects AWS or Google V4 multipart signing fields")
+@Schema(description = "Profile avatar upload form; algorithm identifies provider-specific multipart signing fields")
 public class ProfileAvatarUploadAttributes {
 
   @Schema(description = "Object key for the avatar")

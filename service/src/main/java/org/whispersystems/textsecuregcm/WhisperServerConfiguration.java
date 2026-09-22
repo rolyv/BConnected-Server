@@ -30,7 +30,6 @@ import org.whispersystems.textsecuregcm.configuration.BadgesConfiguration;
 import org.whispersystems.textsecuregcm.configuration.BraintreeConfiguration;
 import org.whispersystems.textsecuregcm.configuration.CallQualitySurveyConfiguration;
 import org.whispersystems.textsecuregcm.configuration.Cdn3StorageManagerConfiguration;
-import org.whispersystems.textsecuregcm.configuration.CdnConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ChangeNumberConfiguration;
 import org.whispersystems.textsecuregcm.configuration.CircuitBreakerConfiguration;
 import org.whispersystems.textsecuregcm.configuration.ClientReleaseConfiguration;
@@ -91,7 +90,7 @@ public class WhisperServerConfiguration extends Configuration {
   @NotNull @JsonProperty
   private RuntimeMode runtimeMode = RuntimeMode.LEGACY;
 
-  @Valid @JsonProperty
+  @Valid @NotNull @JsonProperty
   private GcsAvatarConfiguration gcpAvatars;
 
   @Valid @NotNull @JsonProperty
@@ -113,6 +112,13 @@ public class WhisperServerConfiguration extends Configuration {
   public RuntimeMode getRuntimeMode() { return runtimeMode; }
   public boolean isGcpPilot() { return runtimeMode == RuntimeMode.GCP_PILOT; }
   public GcsAvatarConfiguration getGcpAvatars() { return gcpAvatars; }
+
+  // SystemMapper intentionally tolerates unrelated unknown fields; reject this retired capability explicitly.
+  @com.fasterxml.jackson.annotation.JsonSetter("cdn")
+  public void rejectLegacyCdn(final com.fasterxml.jackson.databind.JsonNode ignored) {
+    throw new IllegalArgumentException("Legacy cdn configuration is no longer supported; configure gcpAvatars");
+  }
+
   @Valid @JsonProperty
   private GcsMediaDownloadConfiguration gcpMediaDownloads;
   public GcsMediaDownloadConfiguration getGcpMediaDownloads() {
@@ -159,17 +165,17 @@ public class WhisperServerConfiguration extends Configuration {
     if (isSvr2Enabled() && svr2 == null) errors.add("Enabled SVR2 requires svr2 configuration");
     if (postgres == null || postgres.messageRetention() == null || postgres.recoveryRetention() == null)
       errors.add("All runtime modes require PostgreSQL with explicit messageRetention and recoveryRetention");
+    if (gcpAvatars == null) errors.add("All runtime modes require gcpAvatars");
     if (isGcpPilot()) {
       if (!(dynamicConfig instanceof MonitoredFileObjectConfiguration) || !(asnTable instanceof MonitoredFileObjectConfiguration))
         errors.add("GCP_PILOT requires type:file dynamicConfig and asnTable sources");
       if (!(registrationService instanceof TelnyxRegistrationServiceConfiguration))
         errors.add("GCP_PILOT requires type:telnyx registrationService");
-      if (gcpAvatars == null) errors.add("GCP_PILOT requires gcpAvatars");
       if (gcpAttachments == null || !gcpAttachments.useIamSigning() || !gcpAttachments.isSigningConfigurationValid())
         errors.add("GCP_PILOT requires IAM signing for attachments");
     } else {
       final Object[] legacy = {stripe, braintree, googlePlayBilling, appleAppStore, appleDeviceCheck, deviceCheck,
-          dynamoDbClient, dynamoDbTables, cdn, cdn3StorageManager, svrb, paymentsService, subscription, oneTimeDonations,
+          dynamoDbClient, dynamoDbTables, cdn3StorageManager, svrb, paymentsService, subscription, oneTimeDonations,
           loginPurchase, turn, tus, callQualitySurvey, foundationDbMessages,
           callingZkConfig, callingZkConfigPreV101, keyTransparencyService, hlrLookup};
       if (java.util.Arrays.stream(legacy).anyMatch(java.util.Objects::isNull))
@@ -242,10 +248,6 @@ public class WhisperServerConfiguration extends Configuration {
   @Valid
   @JsonProperty
   private BackupConfiguration backup = new BackupConfiguration();
-
-  @Valid
-  @JsonProperty
-  private CdnConfiguration cdn;
 
   @Valid
   @JsonProperty
@@ -578,10 +580,6 @@ public class WhisperServerConfiguration extends Configuration {
 
   public ApnConfiguration getApnConfiguration() {
     return apn;
-  }
-
-  public CdnConfiguration getCdnConfiguration() {
-    return cdn;
   }
 
   public Cdn3StorageManagerConfiguration getCdn3StorageManagerConfiguration() {

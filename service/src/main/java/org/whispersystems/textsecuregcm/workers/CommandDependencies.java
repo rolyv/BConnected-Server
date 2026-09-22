@@ -93,10 +93,8 @@ import org.whispersystems.textsecuregcm.util.ManagedExecutors;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
-import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
-import software.amazon.awssdk.services.s3.S3AsyncClient;
 
 /**
  * Construct utilities commonly used by worker commands
@@ -271,12 +269,6 @@ public record CommandDependencies(
     DynamoDbClient dynamoDbClient = gcpPilot ? null : configuration.getDynamoDbClientConfiguration()
         .buildSyncClient(awsCredentialsProvider, new MicrometerAwsSdkMetricPublisher(awsSdkMetricsExecutor, "dynamoDbSyncCommand"));
 
-    final AwsCredentialsProvider cdnCredentialsProvider = gcpPilot ? null : configuration.getCdnConfiguration().credentials().build();
-    final S3AsyncClient asyncCdnS3Client = gcpPilot ? null : S3AsyncClient.builder()
-        .credentialsProvider(cdnCredentialsProvider)
-        .region(Region.of(configuration.getCdnConfiguration().region()))
-        .build();
-
 
     final PostgresPersistence postgres = PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
             configuration.getMessageRetention(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, configuration.getRecoveryRetention(), configuration.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionExecutor);
@@ -336,14 +328,13 @@ public record CommandDependencies(
         Clock.systemUTC(),
         configuration.getFoundationDbMessagesConfiguration().batchPriorityTransactionTimeout(),
         configuration.getFoundationDbMessagesConfiguration().batchPriorityTransactionRetryLimit());
-    final org.whispersystems.textsecuregcm.avatars.GcsAvatarStorage gcsAvatars = gcpPilot
-        ? configuration.getGcpAvatars().build(messageDeletionExecutor, clock) : null;
-    if (gcsAvatars != null) environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
+    final org.whispersystems.textsecuregcm.avatars.GcsAvatarStorage gcsAvatars =
+        configuration.getGcpAvatars().build(messageDeletionExecutor, clock);
+    environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
       @Override public void stop() throws Exception { gcsAvatars.close(); }
     });
     ProfilesManager profilesManager = new ProfilesManager(profileStore, profileAvatars, cacheCluster, retryExecutor,
-        gcpPilot ? gcsAvatars : new org.whispersystems.textsecuregcm.avatars.S3AvatarObjectStorage(
-            asyncCdnS3Client, configuration.getCdnConfiguration().bucket()));
+        gcsAvatars);
     ReportMessageStore reportMessageStore = postgres.reportMessages();
     ReportMessageManager reportMessageManager = new ReportMessageManager(reportMessageStore, rateLimitersCluster,
         configuration.getReportMessageConfiguration().getCounterTtl());

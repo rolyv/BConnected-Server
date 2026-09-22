@@ -36,9 +36,7 @@ import org.whispersystems.textsecuregcm.badges.ProfileBadgeConverter;
 import org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
 import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
-import org.whispersystems.textsecuregcm.avatars.S3AvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.ProfilesManager;
@@ -57,40 +55,6 @@ public class ProfileAnonymousGrpcService extends SimpleProfileAnonymousGrpc.Prof
   private final RateLimiters rateLimiters;
 
   private final Clock clock;
-
-  public ProfileAnonymousGrpcService(
-      final AccountsManager accountsManager,
-      final ProfilesManager profilesManager,
-      final ProfileBadgeConverter profileBadgeConverter,
-      final PostPolicyGenerator policyGenerator,
-      final GenericServerSecretParams genericServerSecretParams,
-      final ServerSecretParams serverSecretParams,
-      final RateLimiters rateLimiters,
-      final Clock clock) {
-    this(accountsManager,
-        profilesManager,
-        profileBadgeConverter,
-        policyGenerator,
-        genericServerSecretParams,
-        rateLimiters,
-        clock,
-        new ServerZkProfileOperations(serverSecretParams),
-        new GroupSendTokenUtil(serverSecretParams, clock));
-  }
-
-  @VisibleForTesting
-  ProfileAnonymousGrpcService(final AccountsManager accountsManager,
-      final ProfilesManager profilesManager,
-      final ProfileBadgeConverter profileBadgeConverter,
-      final PostPolicyGenerator policyGenerator,
-      final GenericServerSecretParams genericServerSecretParams,
-      final RateLimiters rateLimiters,
-      final Clock clock,
-      final ServerZkProfileOperations zkProfileOperations,
-      final GroupSendTokenUtil groupSendTokenUtil) {
-    this(accountsManager, profilesManager, profileBadgeConverter, new S3AvatarUploadPolicyGenerator(policyGenerator),
-        genericServerSecretParams, rateLimiters, clock, zkProfileOperations, groupSendTokenUtil);
-  }
 
   public ProfileAnonymousGrpcService(final AccountsManager accountsManager,
       final ProfilesManager profilesManager,

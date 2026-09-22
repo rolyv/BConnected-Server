@@ -67,7 +67,6 @@ import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialRequest;
 import org.signal.libsignal.zkgroup.profiles.ServerZkProfileOperations;
 import org.whispersystems.textsecuregcm.asn.AsnInfoProvider;
 import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
-import org.whispersystems.textsecuregcm.avatars.S3AvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.auth.Anonymous;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
 import org.whispersystems.textsecuregcm.auth.GroupSendTokenHeader;
@@ -92,7 +91,6 @@ import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.limits.RateLimitedByIp;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
 import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountBadge;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
@@ -128,25 +126,6 @@ public class ProfileController {
 
   private static final String VERSION_NOT_FOUND_COUNTER_NAME = name(ProfileController.class, "versionNotFound");
   private static final String DUPLICATE_AUTHENTICATION_COUNTER_NAME = name(ProfileController.class, "duplicateAuthentication");
-
-  public ProfileController(
-      final Clock clock,
-      final RateLimiters rateLimiters,
-      final AccountsManager accountsManager,
-      final ProfilesManager profilesManager,
-      final Supplier<AsnInfoProvider> asnInfoProviderSupplier,
-      final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager,
-      final ProfileBadgeConverter profileBadgeConverter,
-      final BadgesConfiguration badgesConfiguration,
-      final PostPolicyGenerator policyGenerator,
-      final ServerSecretParams serverSecretParams,
-      final ServerZkProfileOperations zkProfileOperations,
-      final Executor batchIdentityCheckExecutor) {
-    this(clock, rateLimiters, accountsManager, profilesManager, asnInfoProviderSupplier,
-        dynamicConfigurationManager, profileBadgeConverter, badgesConfiguration,
-        new S3AvatarUploadPolicyGenerator(policyGenerator), serverSecretParams, zkProfileOperations,
-        batchIdentityCheckExecutor);
-  }
 
   public ProfileController(
       final Clock clock,

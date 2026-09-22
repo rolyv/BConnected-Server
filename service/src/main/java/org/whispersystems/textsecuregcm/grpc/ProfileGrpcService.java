@@ -50,9 +50,7 @@ import org.whispersystems.textsecuregcm.configuration.dynamic.DynamicConfigurati
 import org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
 import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
-import org.whispersystems.textsecuregcm.avatars.S3AvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountBadge;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
@@ -80,22 +78,6 @@ public class ProfileGrpcService extends SimpleProfileGrpc.ProfileImplBase {
   private record AvatarData(Optional<String> currentAvatar,
                             Optional<String>  finalAvatar,
                             Optional<S3UploadForm> uploadAttributes) {}
-
-  public ProfileGrpcService(
-      final Clock clock,
-      final AccountsManager accountsManager,
-      final ProfilesManager profilesManager,
-      final Supplier<AsnInfoProvider> asnInfoProviderSupplier,
-      final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager,
-      final BadgesConfiguration badgesConfiguration,
-      final PostPolicyGenerator policyGenerator,
-      final GenericServerSecretParams genericServerSecretParams,
-      final ProfileBadgeConverter profileBadgeConverter,
-      final RateLimiters rateLimiters) {
-    this(clock, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager,
-        badgesConfiguration, new S3AvatarUploadPolicyGenerator(policyGenerator), genericServerSecretParams,
-        profileBadgeConverter, rateLimiters);
-  }
 
   public ProfileGrpcService(
       final Clock clock,

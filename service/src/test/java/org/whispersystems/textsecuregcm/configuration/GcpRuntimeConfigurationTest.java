@@ -70,7 +70,6 @@ class GcpRuntimeConfigurationTest {
     assertThat(configuration.isGcpPilot()).isTrue();
     assertThat(configuration.getDynamoDbClientConfiguration()).isNull();
     assertThat(configuration.getDynamoDbTables()).isNull();
-    assertThat(configuration.getCdnConfiguration()).isNull();
     assertThat(configuration.getKeyTransparencyServiceConfiguration()).isNull();
     assertThat(configuration.enabledPushTypes()).isEmpty();
     assertThat(configuration.isStorageEnabled()).isFalse();
@@ -79,7 +78,7 @@ class GcpRuntimeConfigurationTest {
     assertThat(configuration.getRecoveryRetention()).isEqualTo(java.time.Duration.ofDays(1));
     try (var validation = Validation.buildDefaultValidatorFactory()) {
       for (String property : new String[] {"stripe", "braintree", "googlePlayBilling", "appleAppStore", "dynamoDbClient",
-          "dynamoDbTables", "cdn", "cdn3StorageManager", "svrb", "turn", "tus", "foundationDbMessages",
+          "dynamoDbTables", "cdn3StorageManager", "svrb", "turn", "tus", "foundationDbMessages",
           "keyTransparencyService", "tlsKeyStore", "apn", "fcm", "svr2", "storageService", "hlrLookup", "runtimeConfigurationValid"}) {
         assertThat(validation.getValidator().validateProperty(configuration, property)).as(property).isEmpty();
       }
@@ -164,6 +163,20 @@ class GcpRuntimeConfigurationTest {
       final var configuration = read(invalid);
       assertThat(assertThrows(IllegalArgumentException.class, configuration::validateRuntimeConfiguration))
           .hasMessageContaining("All runtime modes require PostgreSQL with explicit messageRetention and recoveryRetention");
+    }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"LEGACY", "GCP_PILOT"})
+  void everyModeRequiresGcsAvatarsAndRejectsObsoleteCdnInput(final String mode) throws Exception {
+    final String yaml = PILOT.replace("runtimeMode: GCP_PILOT", "runtimeMode: " + mode);
+    final var noAvatars = read(yaml.replaceAll("(?s)gcpAvatars:.*?(?=gcpAttachments:)", ""));
+    assertThat(assertThrows(IllegalArgumentException.class, noAvatars::validateRuntimeConfiguration))
+        .hasMessageContaining("All runtime modes require gcpAvatars");
+    for (String value : new String[] {"{}", "null", "{bucket: obsolete-bucket}"}) {
+      assertThat(assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+          () -> read(yaml + "\ncdn: " + value + "\n")))
+          .hasMessageContaining("Legacy cdn configuration is no longer supported; configure gcpAvatars");
     }
   }
 

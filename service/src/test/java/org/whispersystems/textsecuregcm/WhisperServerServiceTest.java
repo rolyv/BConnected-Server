@@ -87,11 +87,42 @@ class WhisperServerServiceTest {
   private static WebSocketClient h2WebSocketClient;
 
   private static final DropwizardAppExtension<WhisperServerConfiguration> EXTENSION = new DropwizardAppExtension<>(
-      WhisperServerService.class, resourcePath("config/test.yml"),
+      LocalStorageTestApplication.class, resourcePath("config/test.yml"),
       // Tables will be created by the local DynamoDbExtension
       ConfigOverride.config("dynamoDbClient.initTables", "false"),
       ConfigOverride.config("postgres.jdbcUrl", PostgresServerTestFixture::jdbcUrl),
       ConfigOverride.config("grpc.port", String.valueOf(OMNIBUS_PORT)));
+
+  /** Explicit local ADC/object-storage boundary: startup must never consult operator credentials or GCP. */
+  public static final class LocalStorageTestApplication extends WhisperServerService {
+    @Override
+    public void run(WhisperServerConfiguration configuration, io.dropwizard.core.setup.Environment environment)
+        throws Exception {
+      final var credentials = com.google.auth.oauth2.GoogleCredentials.create(
+          new com.google.auth.oauth2.AccessToken("local-test-only", new java.util.Date(Long.MAX_VALUE)));
+      final var storage = org.mockito.Mockito.mock(com.google.cloud.storage.Storage.class);
+      final var options = org.mockito.Mockito.mock(com.google.cloud.storage.StorageOptions.class);
+      final var builder = org.mockito.Mockito.mock(com.google.cloud.storage.StorageOptions.Builder.class,
+          org.mockito.Mockito.RETURNS_SELF);
+      org.mockito.Mockito.when(builder.build()).thenReturn(options);
+      org.mockito.Mockito.when(options.getService()).thenReturn(storage);
+      final var transport = com.google.cloud.storage.StorageOptions.getDefaultHttpTransportOptions();
+      final var signer = org.mockito.Mockito.mock(com.google.auth.ServiceAccountSigner.class);
+      try (var adc = org.mockito.Mockito.mockStatic(com.google.auth.oauth2.GoogleCredentials.class,
+          invocation -> invocation.getMethod().getName().equals("getApplicationDefault")
+              ? credentials : invocation.callRealMethod());
+           var storageFactory = org.mockito.Mockito.mockStatic(com.google.cloud.storage.StorageOptions.class);
+           var signing = org.mockito.Mockito.mockStatic(org.whispersystems.textsecuregcm.gcp.IamBlobSigner.class)) {
+        storageFactory.when(com.google.cloud.storage.StorageOptions::newBuilder).thenReturn(builder);
+        storageFactory.when(com.google.cloud.storage.StorageOptions::getDefaultHttpTransportOptions).thenReturn(transport);
+        signing.when(() -> org.whispersystems.textsecuregcm.gcp.IamBlobSigner.create(
+            configuration.getGcpAvatars().signingServiceAccount())).thenReturn(signer);
+        super.run(configuration, environment);
+        adc.verify(com.google.auth.oauth2.GoogleCredentials::getApplicationDefault);
+        org.mockito.Mockito.verifyNoInteractions(storage, signer);
+      }
+    }
+  }
 
   @RegisterExtension
   public static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(DynamoDbExtensionSchema.Tables.values());
@@ -178,6 +209,14 @@ class WhisperServerServiceTest {
       assertTrue(whoamiTimestamp >= start);
     }
 
+  }
+
+  @Test
+  void obsoleteStickerRestUploadRouteIsAbsent() {
+    try (final Response response = EXTENSION.client().target(
+        "http://localhost:%d/v1/sticker/pack/form/1".formatted(EXTENSION.getLocalPort())).request().get()) {
+      assertEquals(404, response.getStatus());
+    }
   }
 
   @Test

@@ -95,7 +95,8 @@ import org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
 import org.whispersystems.textsecuregcm.identity.AciServiceIdentifier;
 import org.whispersystems.textsecuregcm.limits.RateLimiter;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
-import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
+import org.whispersystems.textsecuregcm.avatars.AvatarUploadPolicyGenerator;
+import org.whispersystems.textsecuregcm.avatars.TestAvatarUploadPolicyGenerator;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.DeviceCapability;
@@ -151,7 +152,7 @@ public class ProfileAnonymousGrpcServiceTest extends SimpleBaseGrpcTest<ProfileA
         accountsManager,
         profilesManager,
         profileBadgeConverter,
-        new PostPolicyGenerator("us-west-1", "profile-bucket", "accessKey", "accessSecret"),
+        TestAvatarUploadPolicyGenerator.INSTANCE,
         genericServerSecretParams,
         rateLimiters,
         clock,
@@ -707,6 +708,9 @@ public class ProfileAnonymousGrpcServiceTest extends SimpleBaseGrpcTest<ProfileA
     final GetAvatarUploadFormResponse response = authenticatedServiceStub().getAvatarUploadForm(request);
 
     assertTrue(response.hasAvatarUploadForm());
+    assertEquals("TEST-POLICY", response.getAvatarUploadForm().getAlgorithm());
+    assertEquals("fixture-signature", response.getAvatarUploadForm().getSignature());
+    assertEquals("", response.getAvatarUploadForm().getAcl());
 
     final String avatarPath = response.getAvatarUploadForm().getKey();
     assertFalse(avatarPath.isEmpty());
