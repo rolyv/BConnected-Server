@@ -34,6 +34,7 @@ import org.signal.libsignal.zkgroup.GenericServerSecretParams;
 import org.signal.libsignal.zkgroup.auth.AuthCredentialWithPniResponse;
 import org.signal.libsignal.zkgroup.auth.ServerZkAuthOperations;
 import org.signal.libsignal.zkgroup.calllinks.CallLinkAuthCredentialResponse;
+import org.whispersystems.textsecuregcm.admission.AdmissionCapabilityGuard;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
 import org.whispersystems.textsecuregcm.auth.CertificateGenerator;
 import org.whispersystems.textsecuregcm.auth.RedemptionRange;
@@ -46,6 +47,7 @@ import org.whispersystems.textsecuregcm.storage.AccountsManager;
 @Tag(name = "Certificate")
 public class CertificateController {
   private final boolean callsEnabled;
+  private final boolean requireCurrentMembership;
 
   private final AccountsManager accountsManager;
   private final CertificateGenerator certificateGenerator;
@@ -75,6 +77,15 @@ public class CertificateController {
       final ServerZkAuthOperations serverZkAuthOperations, final GenericServerSecretParams genericServerSecretParams,
       final GenericServerSecretParams genericServerSecretParamsPreV101, final Clock clock, final boolean callsEnabled) {
 
+    this(accountsManager, certificateGenerator, serverZkAuthOperations, genericServerSecretParams,
+        genericServerSecretParamsPreV101, clock, callsEnabled, false);
+  }
+
+  public CertificateController(final AccountsManager accountsManager, final CertificateGenerator certificateGenerator,
+      final ServerZkAuthOperations serverZkAuthOperations, final GenericServerSecretParams genericServerSecretParams,
+      final GenericServerSecretParams genericServerSecretParamsPreV101, final Clock clock, final boolean callsEnabled,
+      final boolean requireCurrentMembership) {
+
     this.accountsManager = accountsManager;
     this.certificateGenerator = Objects.requireNonNull(certificateGenerator);
     this.serverZkAuthOperations = Objects.requireNonNull(serverZkAuthOperations);
@@ -82,6 +93,7 @@ public class CertificateController {
     this.genericServerSecretParamsPreV101 = genericServerSecretParamsPreV101;
     this.clock = Objects.requireNonNull(clock);
     this.callsEnabled = callsEnabled;
+    this.requireCurrentMembership = requireCurrentMembership;
   }
 
   @GET
@@ -90,14 +102,22 @@ public class CertificateController {
   public DeliveryCertificate getDeliveryCertificate(@Auth AuthenticatedDevice auth,
       @QueryParam("includeE164") @DefaultValue("true") boolean includeE164) {
 
+    final AdmissionCapabilityGuard guard = AdmissionCapabilityGuard.http(auth, requireCurrentMembership);
+    guard.run();
+
     Metrics.counter(GENERATE_DELIVERY_CERTIFICATE_COUNTER_NAME, INCLUDE_E164_TAG_NAME, String.valueOf(includeE164))
         .increment();
 
-    final Account account = accountsManager.getByAccountIdentifier(auth.accountIdentifier())
-        .orElseThrow(() -> new WebApplicationException(Response.Status.UNAUTHORIZED));
+    final Account account = guard.accountForCredentialIssuance(() ->
+        accountsManager.getByAccountIdentifier(auth.accountIdentifier())
+            .orElseThrow(() -> new WebApplicationException(Response.Status.UNAUTHORIZED)));
 
     try {
-      return new DeliveryCertificate(certificateGenerator.createFor(account, auth.deviceId(), includeE164));
+      guard.run();
+      final DeliveryCertificate certificate =
+          new DeliveryCertificate(certificateGenerator.createFor(account, auth.deviceId(), includeE164));
+      guard.run();
+      return certificate;
     } catch (final IllegalArgumentException _) {
       throw new BadRequestException();
     }
@@ -113,6 +133,9 @@ public class CertificateController {
       @Parameter(description = "Whether to use libsignal v0.101.0+ secret params")
       @QueryParam("v101") boolean v101) {
 
+    final AdmissionCapabilityGuard guard = AdmissionCapabilityGuard.http(auth, requireCurrentMembership);
+    guard.run();
+
     final RedemptionRange redemptionRange;
     try {
       final Instant redemptionStart = Instant.ofEpochSecond(startSeconds);
@@ -122,8 +145,9 @@ public class CertificateController {
       throw new BadRequestException(e.getCause());
     }
 
-    final Account account = accountsManager.getByAccountIdentifier(auth.accountIdentifier())
-        .orElseThrow(() -> new WebApplicationException(Response.Status.UNAUTHORIZED));
+    final Account account = guard.accountForCredentialIssuance(() ->
+        accountsManager.getByAccountIdentifier(auth.accountIdentifier())
+            .orElseThrow(() -> new WebApplicationException(Response.Status.UNAUTHORIZED)));
 
     final List<GroupCredentials.GroupCredential> credentials = new ArrayList<>();
     final List<GroupCredentials.CallLinkAuthCredential> callLinkAuthCredentials = new ArrayList<>();
@@ -132,6 +156,7 @@ public class CertificateController {
     final Optional<ServiceId.Pni> maybePni = account.getPhoneNumberIdentifier().map(ServiceId.Pni::new);
 
     for (Instant redemption : redemptionRange) {
+      guard.run();
       final AuthCredentialWithPniResponse authCredentialWithPni =
           maybePni.map(pni -> serverZkAuthOperations.issueAuthCredentialWithPniZkc(aci, pni, redemption))
               .orElseGet(() -> serverZkAuthOperations.issueAuthCredentialZkcWithoutPni(aci,
@@ -142,11 +167,14 @@ public class CertificateController {
           authCredentialWithPni.serialize(),
           (int) redemption.getEpochSecond()));
 
+      guard.run();
+
       if (callsEnabled) callLinkAuthCredentials.add(new GroupCredentials.CallLinkAuthCredential(
           CallLinkAuthCredentialResponse.issueCredential(aci, redemption, v101 ? genericServerSecretParams : genericServerSecretParamsPreV101).serialize(),
           redemption.getEpochSecond()));
     }
 
+    guard.run();
     return new GroupCredentials(credentials, callLinkAuthCredentials, maybePni.map(ServiceId.Pni::getRawUUID).orElse(null));
   }
 }

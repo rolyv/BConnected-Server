@@ -134,6 +134,27 @@ public final class AdmissionEntitlementGate {
       return projection;
     }
 
+    /**
+     * Detached credential-issuance input from the original authenticated SQL snapshot. A cache read
+     * could supply a different identity key or PNI even when this proof is current. This copy is
+     * never persisted; issuers must recheck the same proof after signing and before returning it.
+     */
+    public Account accountForCredentialIssuance(UUID expectedAci, byte expectedDeviceId) {
+      requireCurrent(expectedAci, expectedDeviceId);
+      try {
+        var json = SystemMapper.jsonMapper();
+        var row = json.readTree(membership.snapshot.account());
+        var account = json.treeToValue(row.required("data"), Account.class);
+        account.setAccountIdentifier(projection.aci());
+        account.setNumber(projection.number(), projection.pni());
+        account.setVersion(row.required("version").intValue());
+        if (account.getAccountIdentityKey() == null) throw unavailable();
+        return account;
+      } catch (IOException | IllegalArgumentException | NullPointerException malformed) {
+        throw unavailable();
+      }
+    }
+
     /** Metadata from the credential-verified snapshot, not a separate cached account read. */
     public Instant primaryDeviceLastSeen() {
       return primaryDeviceLastSeen;

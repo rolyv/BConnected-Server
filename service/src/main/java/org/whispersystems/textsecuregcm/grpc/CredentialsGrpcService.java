@@ -30,6 +30,7 @@ import org.signal.libsignal.zkgroup.auth.AuthCredentialWithPniResponse;
 import org.signal.libsignal.zkgroup.auth.ServerZkAuthOperations;
 import org.signal.libsignal.zkgroup.calllinks.CallLinkAuthCredentialResponse;
 import org.signal.libsignal.zkgroup.calllinks.CreateCallLinkCredentialRequest;
+import org.whispersystems.textsecuregcm.admission.AdmissionCapabilityGuard;
 import org.whispersystems.textsecuregcm.auth.CertificateGenerator;
 import org.whispersystems.textsecuregcm.auth.ExternalServiceCredentials;
 import org.whispersystems.textsecuregcm.auth.ExternalServiceCredentialsGenerator;
@@ -53,6 +54,7 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
 
   private final Map<ExternalServiceType, ExternalServiceCredentialsGenerator> credentialsGeneratorByType;
   private final boolean callsEnabled;
+  private final boolean requireCurrentMembership;
 
   public CredentialsGrpcService(final AccountsManager accountsManager,
       final CertificateGenerator certificateGenerator,
@@ -72,6 +74,16 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
       final Map<ExternalServiceType, ExternalServiceCredentialsGenerator> credentialsGeneratorByType,
       final boolean callsEnabled) {
 
+    this(accountsManager, certificateGenerator, serverZkAuthOperations, serverSecretParams, rateLimiters, clock,
+        credentialsGeneratorByType, callsEnabled, false);
+  }
+
+  public CredentialsGrpcService(final AccountsManager accountsManager, final CertificateGenerator certificateGenerator,
+      final ServerZkAuthOperations serverZkAuthOperations, final GenericServerSecretParams serverSecretParams,
+      final RateLimiters rateLimiters, final Clock clock,
+      final Map<ExternalServiceType, ExternalServiceCredentialsGenerator> credentialsGeneratorByType,
+      final boolean callsEnabled, final boolean requireCurrentMembership) {
+
     this.accountsManager = accountsManager;
     this.certificateGenerator = certificateGenerator;
     this.serverZkAuthOperations = serverZkAuthOperations;
@@ -80,20 +92,25 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
     this.clock = clock;
     this.credentialsGeneratorByType = credentialsGeneratorByType;
     this.callsEnabled = callsEnabled;
+    this.requireCurrentMembership = requireCurrentMembership;
   }
 
   @Override
   public GetExternalServiceCredentialsResponse getExternalServiceCredentials(final GetExternalServiceCredentialsRequest request)
       throws RateLimitExceededException {
+    final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
+    final AdmissionCapabilityGuard guard = AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership);
+    guard.run();
     final ExternalServiceCredentialsGenerator credentialsGenerator = this.credentialsGeneratorByType
         .get(request.getExternalService());
     if (credentialsGenerator == null) {
       throw GrpcExceptions.fieldViolation("externalService", "Invalid external service type");
     }
-    final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
     rateLimiters.forDescriptor(RateLimiters.For.EXTERNAL_SERVICE_CREDENTIALS).validate(authenticatedDevice.accountIdentifier());
+    guard.run();
     final ExternalServiceCredentials externalServiceCredentials = credentialsGenerator
         .generateForUuid(authenticatedDevice.accountIdentifier());
+    guard.run();
     return GetExternalServiceCredentialsResponse.newBuilder()
         .setUsername(externalServiceCredentials.username())
         .setPassword(externalServiceCredentials.password())
@@ -103,24 +120,33 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
   @Override
   public GetDeliveryCertificateResponse getDeliveryCertificate(final GetDeliveryCertificateRequest request) {
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
+    final AdmissionCapabilityGuard guard = AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership);
+    guard.run();
 
-    final Account account = accountsManager.getByAccountIdentifier(authenticatedDevice.accountIdentifier())
-        .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials"));
+    final Account account = guard.accountForCredentialIssuance(() ->
+        accountsManager.getByAccountIdentifier(authenticatedDevice.accountIdentifier())
+            .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials")));
 
+    guard.run();
     final GetDeliveryCertificateResponse.Builder responseBuilder = GetDeliveryCertificateResponse.newBuilder()
         .setCertificateWithoutE164(ByteString.copyFrom(
             certificateGenerator.createFor(account, authenticatedDevice.deviceId(), false)));
 
+    guard.run();
     if (account.getNumber().isPresent()) {
       responseBuilder.setCertificateWithE164(ByteString.copyFrom(
           certificateGenerator.createFor(account, authenticatedDevice.deviceId(), true)));
     }
 
+    guard.run();
     return responseBuilder.build();
   }
 
   @Override
   public GetGroupCredentialsResponse getGroupCredentials(final GetGroupCredentialsRequest request) {
+    final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
+    final AdmissionCapabilityGuard guard = AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership);
+    guard.run();
     final RedemptionRange redemptionRange;
 
     try {
@@ -131,9 +157,9 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
       throw GrpcExceptions.invalidArguments(e.getMessage());
     }
 
-    final Account account =
-        accountsManager.getByAccountIdentifier(AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier())
-            .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials"));
+    final Account account = guard.accountForCredentialIssuance(() ->
+        accountsManager.getByAccountIdentifier(authenticatedDevice.accountIdentifier())
+            .orElseThrow(() -> GrpcExceptions.invalidCredentials("invalid credentials")));
 
     final ServiceId.Aci aci = new ServiceId.Aci(account.getAccountIdentifier());
     final Optional<ServiceId.Pni> maybePni = account.getPhoneNumberIdentifier().map(ServiceId.Pni::new);
@@ -143,6 +169,7 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
     maybePni.ifPresent(pni -> responseBuilder.setPni(UUIDUtil.toByteString(pni.getRawUUID())));
 
     for (final Instant redemption : redemptionRange) {
+      guard.run();
       final AuthCredentialWithPniResponse authCredentialWithPniResponse =
           maybePni.map(pni ->
                   serverZkAuthOperations.issueAuthCredentialWithPniZkc(aci, pni, redemption))
@@ -157,6 +184,7 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
               authCredentialWithPniResponse.serialize()))
           .build());
 
+      guard.run();
       if (callsEnabled) responseBuilder.addCallLinkAuthCredentials(ZkCredential.newBuilder()
           .setRedemptionTime(redemption.getEpochSecond())
           .setCredential(ByteString.copyFrom(
@@ -164,6 +192,7 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
           .build());
     }
 
+    guard.run();
     return responseBuilder.build();
   }
 
@@ -173,8 +202,12 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
 
     if (!callsEnabled) throw GrpcExceptions.unavailable("Calling is unavailable in this runtime");
 
-    final UUID accountIdentifier = AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier();
+    final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
+    final AdmissionCapabilityGuard guard = AdmissionCapabilityGuard.grpc(authenticatedDevice, requireCurrentMembership);
+    guard.run();
+    final UUID accountIdentifier = authenticatedDevice.accountIdentifier();
     rateLimiters.getCreateCallLinkLimiter().validate(accountIdentifier);
+    guard.run();
 
     final Instant truncatedDayTimestamp = clock.instant().truncatedTo(ChronoUnit.DAYS);
 
@@ -182,13 +215,15 @@ public class CredentialsGrpcService extends SimpleCredentialsGrpc.CredentialsImp
       final CreateCallLinkCredentialRequest createCallLinkCredentialRequest =
           new CreateCallLinkCredentialRequest(request.getCredentialRequest().toByteArray());
 
-      return GetCreateCallLinkCredentialResponse.newBuilder()
+      final GetCreateCallLinkCredentialResponse response = GetCreateCallLinkCredentialResponse.newBuilder()
           .setCredential(ByteString.copyFrom(createCallLinkCredentialRequest.issueCredential(
                   new ServiceId.Aci(accountIdentifier),
                   truncatedDayTimestamp,
                   serverSecretParams)
               .serialize()))
           .build();
+      guard.run();
+      return response;
     } catch (final InvalidInputException e) {
       throw GrpcExceptions.invalidArguments("Invalid 'create call link credential' request");
     }
