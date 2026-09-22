@@ -90,4 +90,18 @@ public class RedisDynamoDbMessageStream implements MessageStream {
                     .thenRun(Util.NOOP)))
         .whenComplete((_, _) -> messagePublisher.handleMessageAcknowledged());
   }
+
+  @Override
+  public CompletableFuture<Void> acknowledgeMessage(final UUID messageGuid, final long serverTimestamp,
+      final MessageDeliveryGuard guard) {
+    guard.requireCurrent(accountIdentifier, device); // Bounded blocking-work executor.
+    return messagesCache.remove(accountIdentifier, device.getId(), messageGuid)
+        .thenComposeAsync(removed -> {
+          guard.requireCurrent(accountIdentifier, device); // Never on a Redis IO callback.
+          return removed.isPresent() ? CompletableFuture.<Void>completedFuture(null)
+              : messagesDynamoDb.deleteMessage(accountIdentifier, device, messageGuid, serverTimestamp, guard)
+                  .thenRun(Util.NOOP);
+        }, guard.executor())
+        .thenRun(() -> messagePublisher.handleMessageAcknowledged());
+  }
 }

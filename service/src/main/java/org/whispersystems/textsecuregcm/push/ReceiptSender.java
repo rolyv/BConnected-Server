@@ -17,6 +17,7 @@ import org.whispersystems.textsecuregcm.identity.ServiceIdentifier;
 import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
+import org.whispersystems.textsecuregcm.storage.MessageDeliveryGuard;
 
 public class ReceiptSender {
 
@@ -34,12 +35,18 @@ public class ReceiptSender {
   }
 
   public void sendReceipt(ServiceIdentifier sourceIdentifier, byte sourceDeviceId, AciServiceIdentifier destinationIdentifier, long messageId) {
+    sendReceipt(sourceIdentifier, sourceDeviceId, destinationIdentifier, messageId, null);
+  }
+
+  public void sendReceipt(ServiceIdentifier sourceIdentifier, byte sourceDeviceId,
+      AciServiceIdentifier destinationIdentifier, long messageId, MessageDeliveryGuard guard) {
     if (sourceIdentifier.equals(destinationIdentifier)) {
       return;
     }
 
-    executor.submit(() -> {
+    (guard == null ? executor : guard.executor()).execute(() -> {
       try {
+        if (guard != null) guard.requireCurrent();
         accountManager.getByAccountIdentifier(destinationIdentifier.uuid()).ifPresentOrElse(
             destinationAccount -> {
               final Envelope message = Envelope.newBuilder()
@@ -64,6 +71,7 @@ public class ReceiptSender {
                       }));
 
               try {
+                if (guard != null) guard.requireCurrent(); // Account-cache lookup may have waited.
                 messageSender.sendMessages(destinationAccount,
                     destinationIdentifier,
                     messagesByDeviceId,

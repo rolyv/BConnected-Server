@@ -23,6 +23,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 import org.apache.commons.lang3.StringUtils;
 import org.eclipse.jetty.util.ConstantThrowable;
@@ -44,6 +45,7 @@ import org.whispersystems.textsecuregcm.storage.ClientReleaseManager;
 import org.whispersystems.textsecuregcm.storage.ConflictingMessageConsumerException;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.storage.MessageStream;
+import org.whispersystems.textsecuregcm.storage.MessageDeliveryGuard;
 import org.whispersystems.textsecuregcm.storage.MessageStreamEntry;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.util.HeaderUtils;
@@ -96,11 +98,13 @@ public class WebSocketConnection {
   private final Account authenticatedAccount;
   private final Device authenticatedDevice;
   private final MessageStream messageStream;
+  private final WebSocketDeliveryAuthorization deliveryAuthorization;
   private final WebSocketClient client;
   private final @Nullable UserAgent userAgent;
 
   private final LongAdder sentMessageCounter = new LongAdder();
   private final AtomicReference<Disposable> messageSubscription = new AtomicReference<>();
+  private final AtomicBoolean stopped = new AtomicBoolean();
 
   private final Scheduler messageDeliveryScheduler;
 
@@ -119,7 +123,20 @@ public class WebSocketConnection {
       final ClientReleaseManager clientReleaseManager,
       final MessageDeliveryLoopMonitor messageDeliveryLoopMonitor,
       final ExperimentEnrollmentManager experimentEnrollmentManager) {
+    this(receiptSender, messagesManager, messageMetrics, pushNotificationManager, pushNotificationScheduler,
+        authenticatedAccount, authenticatedDevice, client, messageDeliveryScheduler, clientReleaseManager,
+        messageDeliveryLoopMonitor, experimentEnrollmentManager, null);
+  }
 
+  public WebSocketConnection(
+      final ReceiptSender receiptSender, final MessagesManager messagesManager, final MessageMetrics messageMetrics,
+      final PushNotificationManager pushNotificationManager, final PushNotificationScheduler pushNotificationScheduler,
+      final Account authenticatedAccount, final Device authenticatedDevice, final WebSocketClient client,
+      final Scheduler messageDeliveryScheduler, final ClientReleaseManager clientReleaseManager,
+      final MessageDeliveryLoopMonitor messageDeliveryLoopMonitor,
+      final ExperimentEnrollmentManager experimentEnrollmentManager,
+      final WebSocketDeliveryAuthorization deliveryAuthorization) {
+    this.deliveryAuthorization = deliveryAuthorization;
     this.receiptSender = receiptSender;
     this.messagesManager = messagesManager;
     this.messageMetrics = messageMetrics;
@@ -140,12 +157,19 @@ public class WebSocketConnection {
   }
 
   public void start() {
-    pushNotificationManager.handleMessagesRetrieved(authenticatedAccount, authenticatedDevice, client.getUserAgent());
+    authorized(guard -> {
+      if (guard != null) guard.requireCurrent(authenticatedAccount.getAccountIdentifier(), authenticatedDevice);
+      pushNotificationManager.handleMessagesRetrieved(authenticatedAccount, authenticatedDevice, client.getUserAgent());
+      startStreaming();
+      return CompletableFuture.completedFuture(null);
+    }).exceptionally(failure -> { client.close(1013, "Current device authentication unavailable"); return null; });
+  }
 
+  private void startStreaming() {
     final Timer.Sample queueDrainStart = Timer.start();
     final AtomicBoolean hasSentFirstMessage = new AtomicBoolean();
 
-    messageSubscription.set(JdkFlowAdapter.flowPublisherToFlux(messageStream.getMessages())
+    final Disposable subscription = JdkFlowAdapter.flowPublisherToFlux(messageStream.getMessages())
         .name(SEND_MESSAGES_FLUX_NAME)
         .tap(Micrometer.metrics(Metrics.globalRegistry))
         .limitRate(MESSAGE_PUBLISHER_LIMIT_RATE)
@@ -171,16 +195,19 @@ public class WebSocketConnection {
         .flatMapSequential(entry -> switch (entry) {
           case MessageStreamEntry.Envelope envelope -> Mono.fromFuture(() -> sendMessage(envelope.message())).thenReturn(entry);
           case MessageStreamEntry.QueueEmpty _ -> Mono.just(entry);
-        }, MESSAGE_SENDER_MAX_CONCURRENCY)
-        .subscribeOn(messageDeliveryScheduler)
-        .subscribe(
-            entry -> {
-              if (entry instanceof MessageStreamEntry.QueueEmpty) {
+        }, deliveryAuthorization == null ? MESSAGE_SENDER_MAX_CONCURRENCY : 8)
+        // Preserve the upstream drain ordering: do not send queue-empty while preceding ACKs wait.
+        .concatMap(entry -> entry instanceof MessageStreamEntry.QueueEmpty
+            ? Mono.fromFuture(() -> authorized(guard -> {
                 messageMetrics.measureQueueDrain(MessageMetrics.WEBSOCKET_CHANNEL, userAgent, sentMessageCounter.sum(), queueDrainStart);
                 client.sendRequest("PUT", "/api/v1/queue/empty",
                     Collections.singletonList(HeaderUtils.getTimestampHeader()), Optional.empty());
-              }
-            },
+                return CompletableFuture.completedFuture(null);
+              })).thenReturn(entry)
+            : Mono.just(entry))
+        .subscribeOn(messageDeliveryScheduler)
+        .subscribe(
+            entry -> {},
             throwable -> {
               // `ConflictingMessageConsumerException` is handled before processing messages
               if (throwable instanceof ConflictingMessageConsumerException) {
@@ -194,18 +221,24 @@ public class WebSocketConnection {
                 return;
               }
 
-              client.close(1011, "Failed to retrieve messages");
+              client.close(deliveryAuthorization == null ? 1011 : 1013, "Failed to retrieve messages");
             }
-        ));
+        );
+    if (!messageSubscription.compareAndSet(null, subscription) || stopped.get()) subscription.dispose();
   }
 
   public void stop() {
+    stopped.set(true);
     final Disposable subscription = messageSubscription.get();
     if (subscription != null) {
       subscription.dispose();
     }
 
     client.close(1000, "OK");
+
+    // Closed pilot sessions have no live proof. A future guarded notification reconciler must
+    // decide whether to wake this device; do not enqueue from the stale cached identity here.
+    if (deliveryAuthorization != null) return;
 
     messagesManager.mayHaveMessages(authenticatedAccount.getAccountIdentifier(), authenticatedDevice)
         .thenAccept(mayHaveMessages -> {
@@ -217,9 +250,28 @@ public class WebSocketConnection {
         });
   }
 
+  private CompletableFuture<Void> authorized(Function<MessageDeliveryGuard, CompletableFuture<Void>> action) {
+    if (deliveryAuthorization == null) return action.apply(null);
+    return deliveryAuthorization.execute(guard -> {
+      if (stopped.get()) return CompletableFuture.failedFuture(
+          new org.whispersystems.textsecuregcm.auth.AuthenticationUnavailableException());
+      return action.apply(guard);
+    });
+  }
+
+  private CompletableFuture<Void> acknowledge(UUID guid, long timestamp, MessageDeliveryGuard guard) {
+    return guard == null ? messageStream.acknowledgeMessage(guid, timestamp)
+        : messageStream.acknowledgeMessage(guid, timestamp, guard);
+  }
+
   private CompletableFuture<Void> sendMessage(final Envelope message) {
+    return authorized(guard -> sendAuthorizedMessage(message, guard));
+  }
+
+  private CompletableFuture<Void> sendAuthorizedMessage(final Envelope message, MessageDeliveryGuard guard) {
+    if (guard != null) guard.requireCurrent(authenticatedAccount.getAccountIdentifier(), authenticatedDevice);
     if (message.getStory() && !client.shouldDeliverStories()) {
-      return messageStream.acknowledgeMessage(UUIDUtil.fromByteString(message.getServerGuid()), message.getServerTimestamp());
+      return acknowledge(UUIDUtil.fromByteString(message.getServerGuid()), message.getServerTimestamp(), guard);
     }
 
     final Optional<byte[]> body = Optional.of(serializeMessage(message));
@@ -247,6 +299,7 @@ public class WebSocketConnection {
 
     final Timer.Sample sample = Timer.start();
 
+    if (guard != null) guard.requireCurrent(); // Serialization/metrics must not extend the original lease.
     return client.sendRequest("PUT", "/api/v1/message",
             List.of(HeaderUtils.getTimestampHeader()), body)
         .whenComplete((ignored, throwable) -> {
@@ -265,18 +318,28 @@ public class WebSocketConnection {
           final CompletableFuture<Void> result;
           if (isSuccessResponse(response)) {
 
-            result = messageStream.acknowledgeMessage(messageGuid, serverTimestamp);
-
-            if (shouldSendDeliveryReceipt) {
-              try {
-                receiptSender.sendReceipt(destinationServiceIdentifier,
-                    authenticatedDevice.getId(),
-                    sourceServiceIdentifier,
-                    clientTimestamp);
-              } catch (final Exception e) {
-                logger.warn("Failed to send receipt", e);
+            // An ACK is a new use: a healthy connection may have renewed since the send. Capture
+            // its current lineage now, then retain that exact proof through all deletion waits.
+            result = authorized(ackGuard -> {
+              var acknowledged = acknowledge(messageGuid, serverTimestamp, ackGuard);
+              if (shouldSendDeliveryReceipt) {
+                if (ackGuard == null) {
+                  try {
+                    receiptSender.sendReceipt(destinationServiceIdentifier, authenticatedDevice.getId(),
+                        sourceServiceIdentifier, clientTimestamp);
+                  } catch (RuntimeException failure) {
+                    logger.warn("Failed to send receipt", failure);
+                  }
+                } else {
+                  return acknowledged.thenRunAsync(() -> {
+                    ackGuard.requireCurrent();
+                    receiptSender.sendReceipt(destinationServiceIdentifier, authenticatedDevice.getId(),
+                        sourceServiceIdentifier, clientTimestamp, ackGuard);
+                  }, ackGuard.executor());
+                }
               }
-            }
+              return acknowledged;
+            });
           } else {
             Tags tags = Tags.of(UserAgentTagUtil.getPlatformTag(userAgent), Tag.of(STATUS_CODE_TAG, String.valueOf(response.getStatus())));
 

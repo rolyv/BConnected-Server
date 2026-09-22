@@ -79,12 +79,14 @@ public final class AdmissionEntitlementGate {
     private final Authorization membership;
     private final byte deviceId;
     private final Instant primaryDeviceLastSeen;
+    private final long deviceCreated;
     private final AccountProjection projection;
 
     private DeviceAuthorization(Authorization membership, byte deviceId, Instant primaryDeviceLastSeen,
-        AccountProjection projection) {
+        AccountProjection projection, long deviceCreated) {
       this.membership = membership;
       this.deviceId = deviceId;
+      this.deviceCreated = deviceCreated;
       this.primaryDeviceLastSeen = primaryDeviceLastSeen;
       this.projection = projection;
     }
@@ -92,6 +94,21 @@ public final class AdmissionEntitlementGate {
     public void requireCurrent(UUID expectedAci, byte expectedDeviceId) {
       if (expectedDeviceId != deviceId) throw denied();
       membership.requireCurrent(expectedAci);
+    }
+
+    /**
+     * Native mutation boundary. The caller must commit/roll back this READ COMMITTED transaction;
+     * account/admission locks remain held through its mutation. No separate connection or HTTP
+     * request is opened, so a full deletion pool cannot starve waiting for another proof connection.
+     */
+    public void requireCurrent(Connection connection, UUID expectedAci, byte expectedDeviceId, long expectedCreated) {
+      if (expectedDeviceId != deviceId || expectedCreated != deviceCreated) throw denied();
+      membership.owner.requireCurrent(connection, membership, expectedAci);
+    }
+
+    public void requireCurrent(UUID expectedAci, byte expectedDeviceId, long expectedCreated) {
+      if (expectedCreated != deviceCreated) throw denied();
+      requireCurrent(expectedAci, expectedDeviceId);
     }
 
     /** Only for scheduling closure; this is not a local-state or credential check. */
@@ -107,7 +124,7 @@ public final class AdmissionEntitlementGate {
       requireCurrent(expectedAci, expectedDeviceId);
       Authorization next = membership.owner.authorizeSnapshot(membership.snapshot);
       requireReceipt(membership.snapshot, membership.receipt);
-      return new DeviceAuthorization(next, deviceId, primaryDeviceLastSeen, projection);
+      return new DeviceAuthorization(next, deviceId, primaryDeviceLastSeen, projection, deviceCreated);
     }
 
     /** Immutable authoritative identity from this same credential-verified snapshot, rechecked now. */
@@ -150,6 +167,7 @@ public final class AdmissionEntitlementGate {
     Snapshot original = transaction(connection -> readLocked(connection, aci));
     final Instant primaryDeviceLastSeen;
     final AccountProjection projection;
+    final long deviceCreated;
     try {
       var json = SystemMapper.jsonMapper();
       var row = json.readTree(original.account());
@@ -157,6 +175,8 @@ public final class AdmissionEntitlementGate {
       var device = account.getDevice(deviceId).orElseThrow(AdmissionEntitlementGate::denied);
       if (device.hasLockedCredentials() || !device.getAuthTokenHash().verify(password))
         throw denied();
+      deviceCreated = device.getCreated();
+      if (deviceCreated < 0) throw unavailable();
       long lastSeen = account.getDevice(org.whispersystems.textsecuregcm.storage.Device.PRIMARY_ID)
           .orElseThrow(AdmissionEntitlementGate::denied).getLastSeen();
       if (lastSeen < 0) throw unavailable();
@@ -170,7 +190,7 @@ public final class AdmissionEntitlementGate {
     } catch (IOException | IllegalArgumentException | NullPointerException invalid) {
       throw unavailable();
     }
-    return new DeviceAuthorization(authorizeSnapshot(original), deviceId, primaryDeviceLastSeen, projection);
+    return new DeviceAuthorization(authorizeSnapshot(original), deviceId, primaryDeviceLastSeen, projection, deviceCreated);
   }
 
   private Authorization authorizeSnapshot(Snapshot original) {
@@ -203,6 +223,23 @@ public final class AdmissionEntitlementGate {
         });
     // A slow commit or connection close also consumes the original budget.
     requireReceipt(authorization.snapshot, authorization.receipt);
+  }
+
+  private void requireCurrent(Connection connection, Authorization authorization, UUID expectedAci) {
+    requireAci(expectedAci);
+    if (authorization.owner != this || !authorization.snapshot.binding().aci().equals(expectedAci))
+      throw denied();
+    try {
+      if (connection.getAutoCommit()
+          || connection.getTransactionIsolation() != Connection.TRANSACTION_READ_COMMITTED)
+        throw unavailable();
+      requireReceipt(authorization.snapshot, authorization.receipt);
+      Snapshot current = readLocked(connection, expectedAci);
+      if (!current.equals(authorization.snapshot)) throw unavailable();
+      requireReceipt(current, authorization.receipt);
+    } catch (SQLException failure) {
+      throw unavailable();
+    }
   }
 
   private static void requireReceipt(Snapshot snapshot, FreshEntitlement receipt) {

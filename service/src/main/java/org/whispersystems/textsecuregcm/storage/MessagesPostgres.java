@@ -133,6 +133,44 @@ public final class MessagesPostgres implements PersistentMessageStore {
     }, executor);
   }
 
+  @Override
+  public CompletableFuture<Optional<Envelope>> deleteMessage(final UUID account, final Device device,
+      final UUID messageId, final long serverTimestamp, final MessageDeliveryGuard guard) {
+    java.util.Objects.requireNonNull(guard);
+    return CompletableFuture.supplyAsync(() -> {
+      try (var connection = dataSource.getConnection()) {
+        connection.setAutoCommit(false);
+        connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+        try {
+          try (var settings = connection.createStatement()) {
+            settings.execute("SET LOCAL statement_timeout='5s'");
+            settings.execute("SET LOCAL lock_timeout='3s'");
+          }
+          guard.requireCurrent(connection, account, device); // Executor/pool waits included.
+          final Optional<Envelope> deleted;
+          try (var statement = connection.prepareStatement("""
+              DELETE FROM signal.messages WHERE account_id = ? AND device_generation = ?
+              AND server_timestamp = ? AND message_id = ? RETURNING envelope
+              """)) {
+            bindQueue(statement, account, device);
+            statement.setLong(3, serverTimestamp);
+            statement.setObject(4, messageId);
+            try (var rows = statement.executeQuery()) {
+              deleted = rows.next() ? Optional.of(Envelope.parseFrom(rows.getBytes("envelope"))) : Optional.empty();
+            }
+          }
+          guard.requireCurrent(connection, account, device); // Includes message-row waits.
+          connection.commit();
+          return deleted;
+        } catch (Exception failure) {
+          connection.rollback();
+          throw failure;
+        }
+      } catch (RuntimeException failure) { throw failure; }
+      catch (Exception failure) { throw new IllegalStateException("Cannot acknowledge encrypted envelope", failure); }
+    }, executor);
+  }
+
   public int deleteExpired(final int batchSize) {
     if (batchSize < 1 || batchSize > 10000) throw new IllegalArgumentException("Invalid expiry batch size");
     try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement("""

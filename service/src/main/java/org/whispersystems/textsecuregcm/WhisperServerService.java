@@ -1282,15 +1282,17 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     webSocketEnvironment.setAuthenticator(new WebSocketAccountAuthenticator(accountAuthenticator, gcpPilot));
     webSocketEnvironment.setAuthenticatedWebSocketUpgradeFilter(new IdlePrimaryDeviceAuthenticatedWebSocketUpgradeFilter(
         config.idlePrimaryDeviceReminderConfiguration().minIdleDuration(), Clock.systemUTC()));
+    final var admissionSessions = gcpPilot ? new AdmissionWebSocketSessionManager(
+        ScheduledExecutorServiceBuilder.of(environment, "admissionWebSocketDeadlines").threads(1).build(),
+        ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionWebSocketRenewal", 64, environment),
+        ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionWebSocketDelivery", 64, environment)) : null;
     final var chatConnectListener =
         new AuthenticatedConnectListener(accountsManager, receiptSender, messagesManager, messageMetrics, pushNotificationManager,
             pushNotificationScheduler, disconnectionRequestManager,
-            messageDeliveryScheduler, asnInfoProviderSupplier, clientReleaseManager, messageDeliveryLoopMonitor, experimentEnrollmentManager
+            messageDeliveryScheduler, asnInfoProviderSupplier, clientReleaseManager, messageDeliveryLoopMonitor,
+            experimentEnrollmentManager, admissionSessions
         );
     if (gcpPilot) {
-      final var admissionSessions = new AdmissionWebSocketSessionManager(
-          ScheduledExecutorServiceBuilder.of(environment, "admissionWebSocketDeadlines").threads(1).build(),
-          ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionWebSocketRenewal", 64, environment));
       environment.lifecycle().manage(admissionSessions);
       webSocketEnvironment.setConnectListener(admissionSessions.wrap(chatConnectListener));
       webSocketEnvironment.jersey().register(new AdmissionWebSocketRequestFilter(admissionSessions));

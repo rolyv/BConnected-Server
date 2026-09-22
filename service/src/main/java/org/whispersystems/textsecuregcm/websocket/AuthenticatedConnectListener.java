@@ -36,6 +36,7 @@ public class AuthenticatedConnectListener implements WebSocketConnectListener {
   private static final Logger log = LoggerFactory.getLogger(AuthenticatedConnectListener.class);
 
   private final AccountsManager accountsManager;
+  private final AdmissionWebSocketSessionManager admissionSessions;
   private final DisconnectionRequestManager disconnectionRequestManager;
   private final WebSocketConnectionBuilder webSocketConnectionBuilder;
   private final MessageMetrics messageMetrics;
@@ -46,7 +47,8 @@ public class AuthenticatedConnectListener implements WebSocketConnectListener {
   @VisibleForTesting
   @FunctionalInterface
   interface WebSocketConnectionBuilder {
-    WebSocketConnection buildWebSocketConnection(Account account, Device device, WebSocketClient client);
+    WebSocketConnection buildWebSocketConnection(Account account, Device device, WebSocketClient client,
+        WebSocketDeliveryAuthorization authorization);
   }
 
   public AuthenticatedConnectListener(
@@ -62,13 +64,26 @@ public class AuthenticatedConnectListener implements WebSocketConnectListener {
       final ClientReleaseManager clientReleaseManager,
       final MessageDeliveryLoopMonitor messageDeliveryLoopMonitor,
       final ExperimentEnrollmentManager experimentEnrollmentManager) {
+    this(accountsManager, receiptSender, messagesManager, messageMetrics, pushNotificationManager,
+        pushNotificationScheduler, disconnectionRequestManager, messageDeliveryScheduler, asnInfoProviderSupplier,
+        clientReleaseManager, messageDeliveryLoopMonitor, experimentEnrollmentManager, null);
+  }
 
+  public AuthenticatedConnectListener(
+      final AccountsManager accountsManager, final ReceiptSender receiptSender, final MessagesManager messagesManager,
+      final MessageMetrics messageMetrics, final PushNotificationManager pushNotificationManager,
+      final PushNotificationScheduler pushNotificationScheduler,
+      final DisconnectionRequestManager disconnectionRequestManager, final Scheduler messageDeliveryScheduler,
+      final Supplier<AsnInfoProvider> asnInfoProviderSupplier, final ClientReleaseManager clientReleaseManager,
+      final MessageDeliveryLoopMonitor messageDeliveryLoopMonitor,
+      final ExperimentEnrollmentManager experimentEnrollmentManager,
+      final AdmissionWebSocketSessionManager admissionSessions) {
     this(accountsManager,
         disconnectionRequestManager,
         asnInfoProviderSupplier,
         clientReleaseManager,
         messageMetrics,
-        (account, device, client) -> new WebSocketConnection(receiptSender,
+        (account, device, client, authorization) -> new WebSocketConnection(receiptSender,
             messagesManager,
             messageMetrics,
             pushNotificationManager,
@@ -79,7 +94,7 @@ public class AuthenticatedConnectListener implements WebSocketConnectListener {
             messageDeliveryScheduler,
             clientReleaseManager,
             messageDeliveryLoopMonitor,
-            experimentEnrollmentManager)
+            experimentEnrollmentManager, authorization), admissionSessions
     );
   }
 
@@ -90,7 +105,16 @@ public class AuthenticatedConnectListener implements WebSocketConnectListener {
       final ClientReleaseManager clientReleaseManager,
       final MessageMetrics messageMetrics,
       final WebSocketConnectionBuilder webSocketConnectionBuilder) {
+    this(accountsManager, disconnectionRequestManager, asnInfoProviderSupplier, clientReleaseManager,
+        messageMetrics, webSocketConnectionBuilder, null);
+  }
 
+  private AuthenticatedConnectListener(final AccountsManager accountsManager,
+      final DisconnectionRequestManager disconnectionRequestManager,
+      final Supplier<AsnInfoProvider> asnInfoProviderSupplier, final ClientReleaseManager clientReleaseManager,
+      final MessageMetrics messageMetrics, final WebSocketConnectionBuilder webSocketConnectionBuilder,
+      final AdmissionWebSocketSessionManager admissionSessions) {
+    this.admissionSessions = admissionSessions;
     this.accountsManager = accountsManager;
     this.disconnectionRequestManager = disconnectionRequestManager;
     this.webSocketConnectionBuilder = webSocketConnectionBuilder;
@@ -136,7 +160,8 @@ public class AuthenticatedConnectListener implements WebSocketConnectListener {
 
     final Optional<WebSocketConnection> maybeWebSocketConnection = disableMessages
             ? Optional.empty()
-            : Optional.of(webSocketConnectionBuilder.buildWebSocketConnection(account, device, context.getClient()));
+            : Optional.of(webSocketConnectionBuilder.buildWebSocketConnection(account, device, context.getClient(),
+                admissionSessions == null ? null : admissionSessions.deliveryAuthorization(context)));
 
     final WebSocketDisconnectionRequestListener disconnectionListener =
         new WebSocketDisconnectionRequestListener(messageMetrics, context.getClient(), disableMessages);

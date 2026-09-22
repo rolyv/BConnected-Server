@@ -36,8 +36,8 @@ idle cleanup until a guarded activity transition is implemented and tested.
 
 ## Still required before opening enrollment
 
-This is not complete capability or revocation enforcement. Delayed message delivery and
-acknowledgments, gRPC streams, credential issuance, device-link routes, and anonymous
+This is not complete capability or revocation enforcement. Cross-store delivery/acknowledgment
+boundaries, gRPC streams, credential issuance, device-link routes, and anonymous
 Stories/group/media operations still require their own use-time gates and bounded revocation
 handling. Retaining a proof does not automatically enforce it at those sites.
 Registration controllers stay absent and the confirmation worker stays unscheduled. No public
@@ -73,13 +73,49 @@ Initially anonymous or proofless pilot chat upgrades are rejected. Pilot provisi
 also rejected and the REST provisioning controller is omitted for the one-iPhone policy. This is a
 **temporary closed-runtime boundary**: anonymous Stories and group sending remain required before
 release, including the 8,000-member announcements use case. Other deferred account-management
-routes need their own explicit policy. Server-initiated message delivery and response acknowledgments
-do not pass the request filter and are not yet covered by this change.
+routes need their own explicit policy. Server-initiated delivery and acknowledgments do not pass
+the request filter; their separate dispatch guards are described below.
 
 The high-frequency private entitlement reads have not been capacity-tested for 8,000 connected
 alumni. Half-life renewal can mean roughly 4,000 private reads per second at a four-second lease,
 plus initial authentication and local request checks. The 64-worker limit is a bounded pilot safety
 limit, not an 8,000-user throughput claim; entitlement distribution/capacity remains a release gate.
+
+## WebSocket delivery and native queue acknowledgments
+
+The pilot connect listener supplies a mandatory delivery authorization adapter. Startup, encrypted
+message dispatch, queue-empty notification, story-discard acknowledgments and successful client
+acknowledgments capture the current credential-verified connection proof before executor dispatch.
+Queued work rechecks that exact proof; it cannot adopt a later renewal to hide elapsed time. A later
+client ACK is a separate use and may capture the connection's legitimately renewed proof, so an
+ordinary message round trip is not limited to the first lease's four seconds. Queue-empty remains
+ordered after preceding acknowledgments. Stopped or closed connections cannot restart queued work.
+
+Delivery SQL checks use a separate executor with at most 64 virtual workers and no queue/caller-runs
+fallback. A pilot connection allows at most eight concurrent message sends. These are bounded pilot
+limits, not a capacity claim. The deadline scheduler never performs SQL or waits on this executor.
+GCP composition has no unguarded listener fallback; legacy constructors retain legacy behavior.
+
+Native PostgreSQL deletion carries the exact ACK proof through its executor and pool acquisition.
+It locks account, admission and confirmation state on the deletion's existing READ COMMITTED
+connection, checks the original receipt, deletes only the exact account/device-generation/message,
+then checks again before commit. Expiry during account or message-row waits rolls the transaction
+back. Using the existing connection avoids pool starvation from a second authorization checkout.
+The proof additionally binds the device creation timestamp, so a stale cached device generation
+cannot authorize a different queue. Backends without guarded deletion reject the operation.
+
+Redis-miss continuation rechecks on the delivery executor before dispatching native deletion, not
+on a Redis event-loop thread. Receipt submission and its own executor/account-cache waits also
+retain and recheck the ACK proof. Pilot disconnects no longer schedule delayed push from a stale
+cached identity; an independently authorized notification reconciler remains necessary.
+
+This is a dispatch and native-transaction boundary, **not atomic authorization across every store
+or network queue**. Redis deletion, including its asynchronous retries/remote execution, is not
+atomic with PostgreSQL account state or the receipt deadline. A cache deletion may already have
+occurred when a later check rejects the operation. Downstream receipt message enqueue, socket
+transport buffering, gRPC message streams and anonymous Stories/group capabilities need further
+use-time enforcement. No new public route, outbox scheduling, real provider request or deployment
+is enabled by this source checkpoint.
 
 ## Verification
 
@@ -96,3 +132,9 @@ anonymous capability enforcement, server-initiated delivery revocation or real i
 The final combined run passed 171 tests (146 service and 25 WebSocket-resource), including 29
 native WebSocket entitlement cases and two close-listener concurrency cases, with no failures,
 errors or skips. Evidence: `.local/admission-websocket-tests.log` in the enclosing workspace.
+The subsequent delivery checkpoint passed 143 tests on isolated PostgreSQL 18.6, including 22 new
+native delivery/acknowledgment cases and retained WebSocket, entitlement, enrollment and queue
+regressions. It tests queued-send rejection, healthy renewed ACKs, story-drop guards, stop/close
+races, receipt waits, exact generation binding, and rollback after real SQL message-row waits.
+All issuer, phone-provider and socket responses are synthetic. Evidence:
+`.local/admission-delivery-tests.log` in the enclosing workspace.

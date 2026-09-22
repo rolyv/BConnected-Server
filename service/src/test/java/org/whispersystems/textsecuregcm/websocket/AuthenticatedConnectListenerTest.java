@@ -62,7 +62,7 @@ class AuthenticatedConnectListenerTest {
         () -> mock(AsnInfoProvider.class),
         mock(ClientReleaseManager.class),
         mock(MessageMetrics.class),
-        (_, _, _) -> authenticatedWebSocketConnection);
+        (_, _, _, _) -> authenticatedWebSocketConnection);
 
     final Device device = mock(Device.class);
     when(device.getId()).thenReturn(DEVICE_ID);

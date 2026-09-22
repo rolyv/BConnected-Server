@@ -16,4 +16,9 @@ public interface PersistentMessageStore {
   Publisher<MessageProtos.Envelope> load(UUID accountIdentifier, Device device, Integer pageSize);
   CompletableFuture<Optional<MessageProtos.Envelope>> deleteMessage(UUID accountIdentifier, Device device,
       UUID messageIdentifier, long serverTimestamp);
+
+  default CompletableFuture<Optional<MessageProtos.Envelope>> deleteMessage(UUID accountIdentifier, Device device,
+      UUID messageIdentifier, long serverTimestamp, MessageDeliveryGuard guard) {
+    return CompletableFuture.failedFuture(new UnsupportedOperationException("Guarded acknowledgment unavailable"));
+  }
 }

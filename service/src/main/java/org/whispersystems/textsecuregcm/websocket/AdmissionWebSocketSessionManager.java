@@ -13,21 +13,28 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
+import java.sql.Connection;
+import java.util.UUID;
+import java.util.function.Function;
 import org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
 import org.whispersystems.textsecuregcm.auth.AuthenticationUnavailableException;
 import org.whispersystems.textsecuregcm.storage.Device;
+import org.whispersystems.textsecuregcm.storage.MessageDeliveryGuard;
 import org.whispersystems.websocket.setup.WebSocketConnectListener;
 import org.whispersystems.websocket.session.WebSocketSessionContext;
 
 /**
  * Pilot chat request admission and bounded connection leases. SQL/HTTP run only in request workers
  * or the separately bounded renewal executor, never on the independent deadline scheduler. This
- * does not authorize server-initiated delivery, acknowledgments, or anonymous capabilities.
+ * also captures immutable proofs for server-initiated delivery/acknowledgment dispatch. It does
+ * not authorize anonymous capabilities or make Redis and local account state atomic.
  */
 public final class AdmissionWebSocketSessionManager implements Managed {
   private final ScheduledExecutorService deadlines;
   private final Executor renewals;
+  private final Executor deliveries;
   private final Map<WebSocketSessionContext, Lease> leases = new ConcurrentHashMap<>();
   // Preserve a sanitized terminal classification for requests already received on a closing
   // transport. Weak keys avoid retaining a closed socket, identity, proof, or session indefinitely.
@@ -36,8 +43,13 @@ public final class AdmissionWebSocketSessionManager implements Managed {
   private boolean stopped;
 
   public AdmissionWebSocketSessionManager(ScheduledExecutorService deadlines, Executor renewals) {
+    this(deadlines, renewals, renewals);
+  }
+
+  public AdmissionWebSocketSessionManager(ScheduledExecutorService deadlines, Executor renewals, Executor deliveries) {
     this.deadlines = Objects.requireNonNull(deadlines);
     this.renewals = Objects.requireNonNull(renewals);
+    this.deliveries = Objects.requireNonNull(deliveries);
   }
 
   private static final class Lease {
@@ -111,7 +123,7 @@ public final class AdmissionWebSocketSessionManager implements Managed {
     final AuthenticatedDevice principal;
     synchronized (lease) {
       principal = lease.current;
-      if (lease.closed || context.getAuthenticated() != principal
+      if (lease.closed || !context.getClient().isOpen() || context.getAuthenticated() != principal
           || principal.admissionAuthorization().remainingNanos() == 0) {
         finish(lease, 1013);
         throw new AuthenticationUnavailableException();
@@ -122,7 +134,7 @@ public final class AdmissionWebSocketSessionManager implements Managed {
   }
 
   /** Opaque request-local proof. The actual handler boundary must recheck this same lease. */
-  public final class RequestAuthorization {
+  public final class RequestAuthorization implements MessageDeliveryGuard {
     private final Lease lease;
     private final AuthenticatedDevice principal;
 
@@ -133,6 +145,34 @@ public final class AdmissionWebSocketSessionManager implements Managed {
 
     public AuthenticatedDevice principal() { return principal; }
     public void requireCurrent() { recheck(lease, principal); }
+    @Override public Executor executor() { return deliveries; }
+    @Override public void requireCurrent(UUID expectedAccount, Device expectedDevice) {
+      requireIdentity(expectedAccount, expectedDevice.getId());
+      principal.admissionAuthorization().requireCurrent(expectedAccount, expectedDevice.getId(), expectedDevice.getCreated());
+      requireOpen();
+    }
+    private void requireIdentity(UUID expectedAccount, byte expectedDevice) {
+      if (!principal.accountIdentifier().equals(expectedAccount) || principal.deviceId() != expectedDevice)
+        throw new AuthenticationUnavailableException();
+    }
+    @Override public void requireCurrent(Connection connection, UUID expectedAccount, Device expectedDevice) {
+      requireIdentity(expectedAccount, expectedDevice.getId());
+      try {
+        requireOpen();
+        principal.admissionAuthorization().requireCurrent(connection, expectedAccount, expectedDevice.getId(), expectedDevice.getCreated());
+        requireOpen();
+      } catch (RuntimeException failure) {
+        failIfCurrent(lease, principal, code(failure));
+        throw new AuthenticationUnavailableException();
+      }
+    }
+    private void requireOpen() {
+      synchronized (lease) {
+        if (lease.closed || !lease.context.getClient().isOpen() || lease.context.getAuthenticated() != lease.current
+            || principal.admissionAuthorization().remainingNanos() == 0)
+          throw new AuthenticationUnavailableException();
+      }
+    }
   }
 
   public RequestAuthorization authorizeRequest(WebSocketSessionContext context) {
@@ -140,6 +180,39 @@ public final class AdmissionWebSocketSessionManager implements Managed {
     Lease lease = leases.get(context);
     if (lease == null) throw new AuthenticationUnavailableException();
     return new RequestAuthorization(lease, principal);
+  }
+
+  /** Capture before the dispatch wait; do not perform blocking SQL on the transport callback. */
+  public WebSocketDeliveryAuthorization deliveryAuthorization(WebSocketSessionContext context) {
+    return action -> executeDelivery(context, action);
+  }
+
+  private CompletableFuture<Void> executeDelivery(WebSocketSessionContext context,
+      Function<MessageDeliveryGuard, CompletableFuture<Void>> action) {
+    Lease lease = leases.get(context);
+    if (lease == null) return CompletableFuture.failedFuture(new AuthenticationUnavailableException());
+    final RequestAuthorization authorization;
+    synchronized (lease) {
+      authorization = new RequestAuthorization(lease, lease.current);
+    }
+    final CompletableFuture<Void> result = new CompletableFuture<>();
+    try {
+      authorization.requireOpen();
+      deliveries.execute(() -> {
+        try {
+          authorization.requireCurrent();
+          action.apply(authorization).whenComplete((value, failure) -> {
+            if (failure == null) result.complete(value); else result.completeExceptionally(failure);
+          });
+        } catch (RuntimeException failure) {
+          result.completeExceptionally(failure);
+        }
+      });
+    } catch (RuntimeException rejected) {
+      failIfCurrent(lease, authorization.principal, 1013);
+      result.completeExceptionally(new AuthenticationUnavailableException());
+    }
+    return result;
   }
 
   private void recheck(Lease lease, AuthenticatedDevice principal) {
@@ -150,7 +223,7 @@ public final class AdmissionWebSocketSessionManager implements Managed {
       principal.requireCurrentEntitlement();
       synchronized (lease) {
         // Do not substitute a newly renewed lease to rescue a check delayed past its own deadline.
-        if (lease.closed || lease.context.getAuthenticated() != lease.current
+        if (lease.closed || !lease.context.getClient().isOpen() || lease.context.getAuthenticated() != lease.current
             || principal.admissionAuthorization().remainingNanos() == 0)
           throw new AuthenticationUnavailableException();
       }

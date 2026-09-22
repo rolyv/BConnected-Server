@@ -27,4 +27,10 @@ public interface MessageStream {
   ///
   /// @return a future that completes when the message stream has processed the acknowledgement
   CompletableFuture<Void> acknowledgeMessage(UUID messageGuid, long serverTimestamp);
+
+  /** Unsupported backends must reject rather than silently drop the pilot authorization guard. */
+  default CompletableFuture<Void> acknowledgeMessage(UUID messageGuid, long serverTimestamp,
+      MessageDeliveryGuard guard) {
+    return CompletableFuture.failedFuture(new UnsupportedOperationException("Guarded acknowledgment unavailable"));
+  }
 }
