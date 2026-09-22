@@ -166,6 +166,29 @@ Its public route remains unregistered, and legacy account registration/recovery 
 The policy controls available operations; it does not replace use-time entitlement guards on the
 retained mutable methods or enable deferred flows via an internal manager API.
 
+## Attachment and media capability issuance
+
+The pilot attachment upload form handlers (REST and gRPC) capture the principal's exact immutable
+device proof. They check it at entry, after rate-limit/experiment waits, immediately before signing,
+and after signing before returning the capability. They do not fetch a replacement entitlement
+receipt to conceal elapsed time. The GCP-only media-download controller always requires evidence;
+its GCS service checks again after object-metadata lookup and after signing. A missing object does
+not return an existence result if that lookup consumed the proof's lifetime. Primary-only identity,
+local suspension, changed credential/account evidence and the original monotonic deadline apply.
+
+Definitive local membership rejection uses HTTP 401/gRPC UNAUTHENTICATED; unavailable or expired
+evidence uses HTTP 503/gRPC UNAVAILABLE. Provider failure details are suppressed. The GCP factory
+has no optional-guard fallback. Legacy attachment composition retains its previous non-pilot
+principal contract; the raw media service primitive is reserved for internal storage operations and
+synthetic probes, and no HTTP handler calls it without the mandatory guard.
+
+This is **issuance-time enforcement**. It does not revoke an already-returned signed download URL
+(up to five minutes), an attachment upload URL, or a resumable upload session. An in-flight provider
+request may complete after rejection; the application drops its result. Already-issued bearer
+capabilities, transport buffering, avatar credentials, key retrieval/publication, anonymous routes
+and ZK group credentials still need their separate use/revocation contracts. Public enrollment and
+confirmation scheduling remain closed.
+
 ## Verification
 
 The 2026-09-21 focused reactor run passed 115 tests (110 service and five WebSocket-resource
@@ -197,3 +220,8 @@ new actual REST/gRPC policy cases and 27 native primary enrollment cases. Synthe
 number-change requests prove rejection before dependency interactions; primary APNs/device reads
 remain available. Retained account/device regressions cover the standard constructor behavior.
 Evidence: `.local/pilot-account-operations-tests.log` (2026-09-22).
+The attachment/media issuance suite passed 51 tests, including 20 new native PostgreSQL cases and 31
+retained attachment/download cases, with no failures, errors or skips. Actual HTTP/gRPC dispatch
+and synthetic storage/signers cover initial proof rejection, rate-limit/experiment delays, metadata
+delay, suspension/credential mutation during signing, sanitized errors and successful issuance.
+No real provider calls; evidence: `.local/admission-capability-tests.log` (2026-09-22).

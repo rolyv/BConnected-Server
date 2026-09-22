@@ -5,6 +5,7 @@
 
 package org.whispersystems.textsecuregcm.grpc;
 
+import org.whispersystems.textsecuregcm.admission.AdmissionCapabilityGuard;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Instant;
@@ -41,6 +42,8 @@ import org.whispersystems.textsecuregcm.s3.PostPolicyGenerator;
 
 public class AttachmentsGrpcService extends SimpleAttachmentsGrpc.AttachmentsImplBase {
 
+  private final boolean requireCurrentMembership;
+
   private final ExperimentEnrollmentManager experimentEnrollmentManager;
   private final RateLimiter countRateLimiter;
   private final RateLimiter bytesRateLimiter;
@@ -67,6 +70,19 @@ public class AttachmentsGrpcService extends SimpleAttachmentsGrpc.AttachmentsImp
       final PostPolicyGenerator stickerPolicyGenerator,
       final long maxUploadLength,
       final Clock clock) {
+    this(experimentEnrollmentManager, rateLimiters, gcsAttachmentGenerator, tusAttachmentGenerator, stickerPolicyGenerator, maxUploadLength, clock, false);
+  }
+
+  public AttachmentsGrpcService(
+      final ExperimentEnrollmentManager experimentEnrollmentManager,
+      final RateLimiters rateLimiters,
+      final GcsAttachmentGenerator gcsAttachmentGenerator,
+      final TusAttachmentGenerator tusAttachmentGenerator,
+      final PostPolicyGenerator stickerPolicyGenerator,
+      final long maxUploadLength,
+      final Clock clock,
+      final boolean requireCurrentMembership) {
+    this.requireCurrentMembership = requireCurrentMembership;
     this.experimentEnrollmentManager = experimentEnrollmentManager;
     this.countRateLimiter = rateLimiters.getAttachmentLimiter();
     this.bytesRateLimiter = rateLimiters.getAttachmentBytesLimiter();
@@ -87,6 +103,8 @@ public class AttachmentsGrpcService extends SimpleAttachmentsGrpc.AttachmentsImp
           .build();
     }
     final AuthenticatedDevice auth = AuthenticationUtil.requireAuthenticatedDevice();
+    final Runnable authorization = AdmissionCapabilityGuard.grpc(auth, requireCurrentMembership);
+    authorization.run();
 
     countRateLimiter.validate(auth.accountIdentifier());
     try {
@@ -103,12 +121,16 @@ public class AttachmentsGrpcService extends SimpleAttachmentsGrpc.AttachmentsImp
         .register(Metrics.globalRegistry)
         .record(request.getUploadLength());
 
+    authorization.run();
     final String key = AttachmentUtil.generateAttachmentKey(secureRandom);
     final boolean useCdn3 = attachmentGenerators.containsKey(3) && this.experimentEnrollmentManager.isEnrolled(auth.accountIdentifier(),
         AttachmentUtil.CDN3_EXPERIMENT_NAME);
     final int cdn = useCdn3 ? 3 : 2;
-    final AttachmentGenerator.Descriptor descriptor =
-        this.attachmentGenerators.get(cdn).generateAttachment(key, request.getUploadLength());
+    authorization.run();
+    final AttachmentGenerator.Descriptor descriptor;
+    try { descriptor = this.attachmentGenerators.get(cdn).generateAttachment(key, request.getUploadLength()); }
+    catch (RuntimeException providerFailure) { throw GrpcExceptions.unavailable(); }
+    authorization.run();
     return GetUploadFormResponse.newBuilder().setUploadForm(UploadForm.newBuilder()
         .setCdn(cdn)
         .setKey(key)

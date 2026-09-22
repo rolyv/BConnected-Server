@@ -49,16 +49,25 @@ public final class GcsMediaDownloadService implements AutoCloseable {
   }
 
   public DownloadCapability issue(int cdn, String key) {
+    // Internal storage primitive used by synthetic probes. HTTP always supplies a mandatory guard.
+    return issue(cdn, key, () -> {});
+  }
+
+  public DownloadCapability issue(int cdn, String key, Runnable authorization) {
+    Objects.requireNonNull(authorization);
     validateKey(cdn, key);
+    authorization.run();
     String bucket = cdn == 0 ? configuration.avatarBucket() : configuration.attachmentBucket();
     String objectName = cdn == 0 ? key : configuration.attachmentObjectPrefix() + key;
     final com.google.cloud.storage.Blob object;
     try {
       object = storage.get(BlobId.of(bucket, objectName));
     } catch (StorageException e) {
+      authorization.run();
       if (e.getCode() == 404) throw new MissingMediaException();
       throw e;
     }
+    authorization.run();
     if (object == null) throw new MissingMediaException();
     if (object.getGeneration() == null || object.getGeneration() <= 0 || object.getSize() == null || object.getSize() < 0) {
       throw new IllegalStateException("Invalid media object metadata");
@@ -71,6 +80,7 @@ public final class GcsMediaDownloadService implements AutoCloseable {
         Storage.SignUrlOption.withQueryParams(Map.of("generation", Long.toString(generation)))).toString());
     // Defense in depth around SDK output; callers may never select a host, URL, bucket, or object prefix.
     long expiration = validateSignedUrl(signed, bucket, objectName, generation, configuration.validity(), clock.instant());
+    authorization.run();
     return new DownloadCapability(signed.toASCIIString(), expiration, object.getSize());
   }
 

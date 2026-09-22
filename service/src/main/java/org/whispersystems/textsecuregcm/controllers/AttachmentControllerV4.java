@@ -5,6 +5,7 @@
 
 package org.whispersystems.textsecuregcm.controllers;
 
+import org.whispersystems.textsecuregcm.admission.AdmissionCapabilityGuard;
 import com.google.common.net.HttpHeaders;
 import io.dropwizard.auth.Auth;
 import io.micrometer.core.instrument.DistributionSummary;
@@ -51,6 +52,8 @@ import org.whispersystems.textsecuregcm.metrics.UserAgentTagUtil;
 @io.swagger.v3.oas.annotations.tags.Tag(name = "Attachments")
 public class AttachmentControllerV4 {
 
+  private final boolean requireCurrentMembership;
+
   private final ExperimentEnrollmentManager experimentEnrollmentManager;
   private final RateLimiter countRateLimiter;
   private final RateLimiter bytesRateLimiter;
@@ -70,6 +73,17 @@ public class AttachmentControllerV4 {
       final TusAttachmentGenerator tusAttachmentGenerator,
       final ExperimentEnrollmentManager experimentEnrollmentManager,
       final long maxUploadLength) {
+    this(rateLimiters, gcsAttachmentGenerator, tusAttachmentGenerator, experimentEnrollmentManager, maxUploadLength, false);
+  }
+
+  public AttachmentControllerV4(
+      final RateLimiters rateLimiters,
+      final GcsAttachmentGenerator gcsAttachmentGenerator,
+      final TusAttachmentGenerator tusAttachmentGenerator,
+      final ExperimentEnrollmentManager experimentEnrollmentManager,
+      final long maxUploadLength,
+      final boolean requireCurrentMembership) {
+    this.requireCurrentMembership = requireCurrentMembership;
     this.countRateLimiter = rateLimiters.getAttachmentLimiter();
     this.bytesRateLimiter = rateLimiters.getAttachmentBytesLimiter();
     this.experimentEnrollmentManager = experimentEnrollmentManager;
@@ -104,6 +118,8 @@ public class AttachmentControllerV4 {
       @HeaderParam(HttpHeaders.USER_AGENT) @Nullable final String userAgent)
       throws RateLimitExceededException {
 
+    final Runnable authorization = AdmissionCapabilityGuard.http(auth, requireCurrentMembership);
+    authorization.run();
     final long uploadLength = maybeUploadLength.orElse(maxUploadLength);
     if (uploadLength > maxUploadLength) {
       throw new ClientErrorException("exceeded maximum uploadLength", Response.Status.REQUEST_ENTITY_TOO_LARGE);
@@ -127,11 +143,16 @@ public class AttachmentControllerV4 {
         .register(Metrics.globalRegistry)
         .record(uploadLength);
 
+    authorization.run();
     final String key = AttachmentUtil.generateAttachmentKey(secureRandom);
     final boolean useCdn3 = attachmentGenerators.containsKey(3)
         && this.experimentEnrollmentManager.isEnrolled(auth.accountIdentifier(), AttachmentUtil.CDN3_EXPERIMENT_NAME);
     int cdn = useCdn3 ? 3 : 2;
-    final AttachmentGenerator.Descriptor descriptor = this.attachmentGenerators.get(cdn).generateAttachment(key, uploadLength);
+    authorization.run();
+    final AttachmentGenerator.Descriptor descriptor;
+    try { descriptor = this.attachmentGenerators.get(cdn).generateAttachment(key, uploadLength); }
+    catch (RuntimeException providerFailure) { throw new jakarta.ws.rs.ServiceUnavailableException(); }
+    authorization.run();
     return new AttachmentDescriptorV3(cdn, key, descriptor.headers(), descriptor.signedUploadLocation());
   }
 

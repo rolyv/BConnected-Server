@@ -16,11 +16,12 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.Objects;
 import org.whispersystems.textsecuregcm.auth.AuthenticatedDevice;
+import org.whispersystems.textsecuregcm.admission.AdmissionCapabilityGuard;
 import org.whispersystems.textsecuregcm.limits.RateLimiter;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
 import org.whispersystems.textsecuregcm.media.GcsMediaDownloadService;
 
-/** Registered only for the private GCP deployment. Alumni approval remains an independent admission concern. */
+/** GCP-only authenticated, current-member capability issuance; existing URLs are independently expiring bearer capabilities. */
 @Path("/v1/media/download")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
@@ -40,19 +41,27 @@ public final class MediaDownloadController {
   @POST
   public Response getDownload(@Auth AuthenticatedDevice account, @NotNull @Valid DownloadRequest request)
       throws RateLimitExceededException {
+    final Runnable authorization = AdmissionCapabilityGuard.http(account, true);
+    authorization.run();
     limiter.validate(account.accountIdentifier());
+    authorization.run();
     try {
       GcsMediaDownloadService.validateKey(request.cdn(), request.key());
     } catch (IllegalArgumentException e) {
       throw new BadRequestException();
     }
     try {
-      return Response.ok(downloads.issue(request.cdn(), request.key()))
+      final var capability = downloads.issue(request.cdn(), request.key(), authorization);
+      authorization.run();
+      return Response.ok(capability)
           .header("Cache-Control", "private, no-store")
           .header("Pragma", "no-cache")
           .build();
     } catch (GcsMediaDownloadService.MissingMediaException e) {
+      authorization.run();
       throw new NotFoundException();
+    } catch (jakarta.ws.rs.WebApplicationException e) {
+      throw e;
     } catch (RuntimeException e) {
       // Do not log provider exceptions: a nested message could contain a sensitive object URL or credential.
       throw new ServiceUnavailableException();

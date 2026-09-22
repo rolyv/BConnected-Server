@@ -26,8 +26,16 @@ class MediaDownloadControllerTest {
   private static final String KEY = "profiles/AAAAAAAAAAAAAAAAAAAAAA==";
   private static final GcsMediaDownloadService DOWNLOADS = mock(GcsMediaDownloadService.class);
   private static final RateLimiter LIMITER = mock(RateLimiter.class);
+  private static final org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate.DeviceAuthorization PROOF =
+      mock(org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate.DeviceAuthorization.class);
   private static final ResourceExtension RESOURCES = ResourceExtension.builder()
-      .addProvider(AuthHelper.getAuthFilter())
+      .addProvider(new io.dropwizard.auth.AuthDynamicFeature(
+          new io.dropwizard.auth.basic.BasicCredentialAuthFilter.Builder<AuthenticatedDevice>()
+              .setRealm("fixture").setAuthenticator(credentials ->
+                  AuthHelper.VALID_UUID.toString().equals(credentials.getUsername())
+                      && AuthHelper.VALID_PASSWORD.equals(credentials.getPassword())
+                      ? java.util.Optional.of(new AuthenticatedDevice(AuthHelper.VALID_UUID, (byte) 1,
+                          java.time.Instant.now(), PROOF)) : java.util.Optional.empty()).buildAuthFilter()))
       .addProvider(new AuthValueFactoryProvider.Binder<>(AuthenticatedDevice.class))
       .addProvider(new RateLimitExceededExceptionMapper())
       .setMapper(SystemMapper.jsonMapper()).setTestContainerFactory(new GrizzlyWebTestContainerFactory())
@@ -53,7 +61,7 @@ class MediaDownloadControllerTest {
   }
 
   @Test void authorizedAccountReceivesNoStoreCapability() throws Exception {
-    when(DOWNLOADS.issue(0, KEY)).thenReturn(new GcsMediaDownloadService.DownloadCapability("https://storage.googleapis.com/fixture", 123, 1024));
+    when(DOWNLOADS.issue(eq(0), eq(KEY), any())).thenReturn(new GcsMediaDownloadService.DownloadCapability("https://storage.googleapis.com/fixture", 123, 1024));
     try (var response = request(KEY, true)) {
       assertThat(response.getStatus()).isEqualTo(200);
       assertThat(response.getHeaderString("Cache-Control")).contains("no-store");
@@ -61,7 +69,7 @@ class MediaDownloadControllerTest {
       assertThat(response.readEntity(String.class)).contains("\"expiresAt\":123", "\"contentLength\":1024");
     }
     verify(LIMITER).validate(AuthHelper.VALID_UUID);
-    verify(DOWNLOADS).issue(0, KEY);
+    verify(DOWNLOADS).issue(eq(0), eq(KEY), any());
   }
 
   @Test void invalidKeyCannotReachStorage() {
@@ -70,12 +78,12 @@ class MediaDownloadControllerTest {
   }
 
   @Test void providerFailureIsSanitizedAndMissingIs404() {
-    when(DOWNLOADS.issue(0, KEY)).thenThrow(new IllegalStateException("secret-policy-provider-url"));
+    when(DOWNLOADS.issue(eq(0), eq(KEY), any())).thenThrow(new IllegalStateException("secret-policy-provider-url"));
     try (var response = request(KEY, true)) {
       assertThat(response.getStatus()).isEqualTo(503);
       assertThat(response.readEntity(String.class)).doesNotContain("secret-policy-provider-url");
     }
-    doThrow(new GcsMediaDownloadService.MissingMediaException()).when(DOWNLOADS).issue(0, KEY);
+    doThrow(new GcsMediaDownloadService.MissingMediaException()).when(DOWNLOADS).issue(eq(0), eq(KEY), any());
     try (var response = request(KEY, true)) { assertThat(response.getStatus()).isEqualTo(404); }
   }
 
