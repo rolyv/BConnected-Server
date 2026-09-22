@@ -286,9 +286,7 @@ import org.whispersystems.textsecuregcm.storage.OneTimeDonationsManager;
 import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
 import org.whispersystems.textsecuregcm.storage.PersistentTimer;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordStore;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
@@ -583,8 +581,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         config.getDynamoDbTables().getAccounts().getUsedLinkDeviceTokensTableName());
     ClientReleaseStore clientReleases = postgres.clientReleases();
 
-    PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres != null ? postgres.phoneNumbers() : new PhoneNumberIdentifiers(dynamoDbAsyncClient,
-        config.getDynamoDbTables().getPhoneNumberIdentifiers().getTableName());
+    PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres.phoneNumbers();
 
     ProfileDataStore profileStore = postgres.profiles();
     ProfileAvatarStore profileAvatars = postgres.profileAvatars();
@@ -595,11 +592,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     RemoteConfigStore remoteConfigs = postgres.remoteConfigs();
     PushChallengeStore pushChallengeStore = postgres.pushChallenges();
     ReportMessageStore reportMessageStore = postgres.reportMessages();
-    PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres != null ? postgres.recoveryPasswords() : new PhoneNumberRecoveryPasswords(
-        config.getDynamoDbTables().getRegistrationRecovery().getTableName(),
-        config.getRecoveryRetention(),
-        dynamoDbClient,
-        clock);
+    PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres.recoveryPasswords();
 
     final VerificationSessionStore verificationSessions = postgres.verificationSessions();
 

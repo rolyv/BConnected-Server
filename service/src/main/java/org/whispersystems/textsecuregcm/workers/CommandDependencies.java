@@ -70,9 +70,7 @@ import org.whispersystems.textsecuregcm.storage.MessagesCache;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
 import org.whispersystems.textsecuregcm.storage.PersistentMessageStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordStore;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswords;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.PostgresPersistence;
 import org.whispersystems.textsecuregcm.storage.ProfileAvatarStore;
@@ -282,11 +280,7 @@ public record CommandDependencies(
 
     final PostgresPersistence postgres = PostgresPersistence.build(environment, configuration.getPostgresConfiguration(),
             configuration.getMessageRetention(), RemoveExpiredAccountsCommand.MAX_IDLE_DURATION, configuration.getRecoveryRetention(), configuration.getReportMessageConfiguration().getReportTtl(), clock, messageDeletionExecutor);
-    PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres != null ? postgres.recoveryPasswords() : new PhoneNumberRecoveryPasswords(
-        configuration.getDynamoDbTables().getRegistrationRecovery().getTableName(),
-        configuration.getRecoveryRetention(),
-        dynamoDbClient,
-        clock);
+    PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords = postgres.recoveryPasswords();
 
     RedeemedReceiptsManager redeemedReceiptsManager = gcpPilot ? null : new RedeemedReceiptsManager(clock,
         configuration.getDynamoDbTables().getRedeemedReceipts().getTableName(),
@@ -304,8 +298,7 @@ public record CommandDependencies(
         configuration.getDynamoDbTables().getDeletedAccounts().getTableName(),
         configuration.getDynamoDbTables().getAccounts().getUsedLinkDeviceTokensTableName());
 
-    PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres != null ? postgres.phoneNumbers() : new PhoneNumberIdentifiers(dynamoDbAsyncClient,
-        configuration.getDynamoDbTables().getPhoneNumberIdentifiers().getTableName());
+    PhoneNumberIdentifierStore phoneNumberIdentifiers = postgres.phoneNumbers();
 
     ProfileDataStore profileStore = postgres.profiles();
     ProfileAvatarStore profileAvatars = postgres.profileAvatars();

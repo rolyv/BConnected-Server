@@ -113,13 +113,8 @@ dynamoDbTables:
   onetimeDonations:
     tableName: Example_OnetimeDonations
     expiration: P90D
-  phoneNumberIdentifiers:
-    tableName: Example_PhoneNumberIdentifiers
   redeemedReceipts:
     tableName: Example_RedeemedReceipts
-  registrationRecovery:
-    tableName: Example_RegistrationRecovery
-    expiration: P300D # Duration of time until rows expire
   subscriptions:
     tableName: Example_Subscriptions
 

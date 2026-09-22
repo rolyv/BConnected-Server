@@ -86,7 +86,7 @@ import org.whispersystems.textsecuregcm.spam.RegistrationFraudChecker;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.storage.VerificationSessionManager;
 import org.whispersystems.textsecuregcm.telephony.CarrierDataProvider;
@@ -111,7 +111,7 @@ class VerificationControllerTest {
   private final RegistrationCaptchaManager registrationCaptchaManager = mock(RegistrationCaptchaManager.class);
   private final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager = mock(
       PhoneNumberRecoveryPasswordsManager.class);
-  private final PhoneNumberIdentifiers phoneNumberIdentifiers = mock(PhoneNumberIdentifiers.class);
+  private final PhoneNumberIdentifierStore phoneNumberIdentifiers = mock(PhoneNumberIdentifierStore.class);
   private final RateLimiters rateLimiters = mock(RateLimiters.class);
   private final AccountsManager accountsManager = mock(AccountsManager.class);
   private final CarrierDataProvider carrierDataProvider = mock(CarrierDataProvider.class);

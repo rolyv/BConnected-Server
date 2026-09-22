@@ -2,75 +2,70 @@
  * Copyright 2026 Signal Messenger, LLC
  * SPDX-License-Identifier: AGPL-3.0-only
  */
-
 package org.whispersystems.textsecuregcm.storage;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.sql.SQLException;
 import java.time.Clock;
-import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
-import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.whispersystems.textsecuregcm.auth.SaltedTokenHash;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
-import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 
 class PhoneNumberRecoveryPasswordsTest {
-
   @RegisterExtension
-  static final DynamoDbExtension DYNAMO_DB_EXTENSION = new DynamoDbExtension(
-      DynamoDbExtensionSchema.Tables.PHONE_NUMBER_RECOVERY_PASSWORDS
-  );
+  static final PostgresAccountKeyTestExtension POSTGRES = new PostgresAccountKeyTestExtension();
 
-  private PhoneNumberRecoveryPasswords phoneNumberRecoveryPasswords;
+  private PhoneNumberRecoveryPasswordStore passwords;
 
   @BeforeEach
   void setUp() {
-    phoneNumberRecoveryPasswords = new PhoneNumberRecoveryPasswords(
-        DynamoDbExtensionSchema.Tables.PHONE_NUMBER_RECOVERY_PASSWORDS.tableName(),
-        Duration.ofDays(1),
-        DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        Clock.systemUTC());
+    passwords = POSTGRES.recovery(Clock.systemUTC());
   }
 
   @Test
-  void buildConditionCheckForMigration() {
-    final UUID phoneNumberIdentifier = UUID.randomUUID();
+  void migrationConditionRejectsChangedAndRemovedPassword() {
+    UUID pni = UUID.randomUUID();
+    SaltedTokenHash original = SaltedTokenHash.generateFor("synthetic-original");
+    passwords.addOrReplace(pni, original);
+    AccountMutation condition = passwords.buildConditionMutationForMigration(pni, original);
+    assertDoesNotThrow(() -> transact(List.of(condition)));
 
-    final SaltedTokenHash originalPassword =
-        SaltedTokenHash.generateFor(RandomStringUtils.insecure().nextAlphanumeric(16));
+    passwords.addOrReplace(pni, SaltedTokenHash.generateFor("synthetic-changed"));
+    assertThrows(ContestedOptimisticLockException.class, () -> transact(List.of(condition)));
+    passwords.removeEntry(pni);
+    assertThrows(ContestedOptimisticLockException.class, () -> transact(List.of(condition)));
+  }
 
-    phoneNumberRecoveryPasswords.addOrReplace(phoneNumberIdentifier, originalPassword);
+  @Test
+  void failedMigrationConditionRollsBackOtherRecoveryChanges() {
+    UUID checked = UUID.randomUUID(), created = UUID.randomUUID();
+    SaltedTokenHash original = SaltedTokenHash.generateFor("synthetic-original");
+    SaltedTokenHash changed = SaltedTokenHash.generateFor("synthetic-changed");
+    passwords.addOrReplace(checked, changed);
+    assertThrows(ContestedOptimisticLockException.class, () -> transact(List.of(
+        passwords.buildMutationForAddOrReplace(created, original),
+        passwords.buildConditionMutationForMigration(checked, original))));
+    assertTrue(passwords.lookup(created).isEmpty());
+    assertEquals(changed, passwords.lookup(checked).orElseThrow());
+  }
 
-    final TransactWriteItem transactWriteItem =
-        phoneNumberRecoveryPasswords.buildConditionCheckForMigration(phoneNumberIdentifier, originalPassword);
-
-    assertDoesNotThrow(() -> DYNAMO_DB_EXTENSION.getDynamoDbClient().transactWriteItems(TransactWriteItemsRequest.builder()
-        .transactItems(transactWriteItem)
-        .build()));
-
-    final SaltedTokenHash changedPassword =
-        new SaltedTokenHash(originalPassword.salt() + "-different", originalPassword.hash() + "-different");
-
-    phoneNumberRecoveryPasswords.addOrReplace(phoneNumberIdentifier, changedPassword);
-
-    assertThrows(TransactionCanceledException.class, () ->
-        DYNAMO_DB_EXTENSION.getDynamoDbClient().transactWriteItems(TransactWriteItemsRequest.builder()
-            .transactItems(transactWriteItem)
-            .build()),
-        "Transaction should not proceed if password has changed");
-
-    phoneNumberRecoveryPasswords.removeEntry(phoneNumberIdentifier);
-
-    assertThrows(TransactionCanceledException.class, () ->
-        DYNAMO_DB_EXTENSION.getDynamoDbClient().transactWriteItems(TransactWriteItemsRequest.builder()
-            .transactItems(transactWriteItem)
-            .build()),
-        "Transaction should not proceed if password has been removed");
+  private void transact(List<AccountMutation> mutations) throws SQLException {
+    try (var connection = POSTGRES.dataSource().getConnection()) {
+      connection.setAutoCommit(false);
+      try {
+        AccountMutation.executeSql(connection, mutations);
+        connection.commit();
+      } catch (SQLException | RuntimeException failure) {
+        connection.rollback();
+        throw failure;
+      }
+    }
   }
 }

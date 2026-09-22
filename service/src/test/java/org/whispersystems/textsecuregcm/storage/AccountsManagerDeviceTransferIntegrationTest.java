@@ -55,7 +55,7 @@ public class AccountsManagerDeviceTransferIntegrationTest {
 
     accountsManager = new AccountsManager(
         mock(Accounts.class),
-        mock(PhoneNumberIdentifiers.class),
+        mock(PhoneNumberIdentifierStore.class),
         mock(FaultTolerantRedisClusterClient.class),
         PUBSUB_SERVER_EXTENSION.getRedisClient(),
         mock(AccountLockManager.class),

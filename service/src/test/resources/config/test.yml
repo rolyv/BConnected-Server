@@ -118,13 +118,8 @@ dynamoDbTables:
   onetimeDonations:
     tableName: onetime_donations_test
     expiration: P90D
-  phoneNumberIdentifiers:
-    tableName: pni_test
   redeemedReceipts:
     tableName: redeemed_receipts_test
-  registrationRecovery:
-    tableName: registration_recovery_passwords_test
-    expiration: P300D # Duration of time until rows expire
   subscriptions:
     tableName: subscriptions_test
 

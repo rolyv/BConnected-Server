@@ -54,9 +54,7 @@ public class DynamoDbTables {
   private final TableWithExpiration donationPermits;
   private final IssuedReceiptsTableConfiguration issuedReceipts;
   private final TableWithExpiration onetimeDonations;
-  private final Table phoneNumberIdentifiers;
   private final Table redeemedReceipts;
-  private final TableWithExpiration registrationRecovery;
   private final Table subscriptions;
 
   public DynamoDbTables(
@@ -67,9 +65,7 @@ public class DynamoDbTables {
       @JsonProperty("donationPermits") final TableWithExpiration donationPermits,
       @JsonProperty("issuedReceipts") final IssuedReceiptsTableConfiguration issuedReceipts,
       @JsonProperty("onetimeDonations") final TableWithExpiration onetimeDonations,
-      @JsonProperty("phoneNumberIdentifiers") final Table phoneNumberIdentifiers,
       @JsonProperty("redeemedReceipts") final Table redeemedReceipts,
-      @JsonProperty("registrationRecovery") final TableWithExpiration registrationRecovery,
       @JsonProperty("subscriptions") final Table subscriptions) {
 
     this.accounts = accounts;
@@ -79,9 +75,7 @@ public class DynamoDbTables {
     this.donationPermits = donationPermits;
     this.issuedReceipts = issuedReceipts;
     this.onetimeDonations = onetimeDonations;
-    this.phoneNumberIdentifiers = phoneNumberIdentifiers;
     this.redeemedReceipts = redeemedReceipts;
-    this.registrationRecovery = registrationRecovery;
     this.subscriptions = subscriptions;
   }
 
@@ -129,20 +123,8 @@ public class DynamoDbTables {
 
   @NotNull
   @Valid
-  public Table getPhoneNumberIdentifiers() {
-    return phoneNumberIdentifiers;
-  }
-
-  @NotNull
-  @Valid
   public Table getRedeemedReceipts() {
     return redeemedReceipts;
-  }
-
-  @NotNull
-  @Valid
-  public TableWithExpiration getRegistrationRecovery() {
-    return registrationRecovery;
   }
 
   @NotNull

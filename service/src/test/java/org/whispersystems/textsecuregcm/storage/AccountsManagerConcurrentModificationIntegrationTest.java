@@ -23,8 +23,8 @@ import io.lettuce.core.cluster.api.sync.RedisAdvancedClusterCommands;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -45,6 +45,8 @@ import org.signal.libsignal.protocol.ecc.ECKeyPair;
 import org.whispersystems.textsecuregcm.auth.DisconnectionRequestManager;
 import org.whispersystems.textsecuregcm.auth.SaltedTokenHash;
 import org.whispersystems.textsecuregcm.auth.UnidentifiedAccessUtil;
+import org.whispersystems.textsecuregcm.entities.AccountAttributes;
+import org.whispersystems.textsecuregcm.entities.DeviceAttributes;
 import org.whispersystems.textsecuregcm.redis.FaultTolerantRedisClient;
 import org.whispersystems.textsecuregcm.securestorage.SecureStorageClient;
 import org.whispersystems.textsecuregcm.securevaluerecovery.SecureValueRecoveryClient;
@@ -64,8 +66,7 @@ class AccountsManagerConcurrentModificationIntegrationTest {
       Tables.NUMBERS,
       Tables.PNI_ASSIGNMENTS,
       Tables.DELETED_ACCOUNTS,
-      Tables.REDEEMED_RECEIPTS,
-      Tables.PHONE_NUMBER_RECOVERY_PASSWORDS);
+      Tables.REDEEMED_RECEIPTS);
 
   private Accounts accounts;
 
@@ -102,16 +103,12 @@ class AccountsManagerConcurrentModificationIntegrationTest {
         return task.get();
       }).when(accountLockManager).withLock(anySet(), any());
 
-      final PhoneNumberIdentifiers phoneNumberIdentifiers = mock(PhoneNumberIdentifiers.class);
+      final PhoneNumberIdentifierStore phoneNumberIdentifiers = mock(PhoneNumberIdentifierStore.class);
       when(phoneNumberIdentifiers.getPhoneNumberIdentifier(anyString()))
           .thenAnswer((Answer<CompletableFuture<UUID>>) _ -> CompletableFuture.completedFuture(UUID.randomUUID()));
 
       final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager =
-          new PhoneNumberRecoveryPasswordsManager(new PhoneNumberRecoveryPasswords(
-              Tables.PHONE_NUMBER_RECOVERY_PASSWORDS.tableName(),
-              Duration.ofDays(1),
-              DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-              Clock.systemUTC()));
+          mock(PhoneNumberRecoveryPasswordsManager.class);
 
       accountsManager = new AccountsManager(
           accounts,
@@ -145,7 +142,10 @@ class AccountsManagerConcurrentModificationIntegrationTest {
 
       final AccountsHelper.AccountBuilder accountBuilder = new AccountsHelper.AccountBuilder(accountsManager);
       if (!numberless) {
-        accountBuilder.e164("+14155551212");
+        // This test measures concurrent account JSON updates, not phone-recovery enrollment.
+        // Native recovery/account transaction contracts are covered by separate real SQL suites.
+        accountBuilder.e164("+14155551212").accountAttributes(new AccountAttributes()
+            .setDeviceAttributes(new DeviceAttributes(false, 1, 1, new byte[0], Set.of())));
       }
 
       aci = accountBuilder.build().getAccountIdentifier();

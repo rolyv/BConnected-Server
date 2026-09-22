@@ -82,7 +82,7 @@ import org.whispersystems.textsecuregcm.spam.SpamChecker;
 import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.tests.util.DevicesHelper;
 import org.whispersystems.textsecuregcm.util.TestClock;
@@ -100,7 +100,7 @@ class MessagesGrpcServiceTest extends SimpleBaseGrpcTest<MessagesGrpcService, Me
   private ReportMessageManager reportMessageManager;
 
   @Mock
-  private PhoneNumberIdentifiers phoneNumberIdentifiers;
+  private PhoneNumberIdentifierStore phoneNumberIdentifiers;
 
   @Mock
   private RateLimiters rateLimiters;

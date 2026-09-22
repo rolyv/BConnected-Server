@@ -124,30 +124,6 @@ public final class DynamoDbExtensionSchema {
             .build()),
         List.of(), List.of()),
 
-    PNI("pni_test",
-        PhoneNumberIdentifiers.KEY_E164,
-        null,
-        List.of(
-            AttributeDefinition.builder()
-                .attributeName(PhoneNumberIdentifiers.KEY_E164)
-                .attributeType(ScalarAttributeType.S)
-                .build(),
-            AttributeDefinition.builder()
-                .attributeName(PhoneNumberIdentifiers.ATTR_PHONE_NUMBER_IDENTIFIER)
-                .attributeType(ScalarAttributeType.B)
-                .build()),
-        List.of(GlobalSecondaryIndex.builder()
-            .indexName(PhoneNumberIdentifiers.INDEX_NAME)
-            .projection(Projection.builder()
-                .projectionType(ProjectionType.KEYS_ONLY)
-                .build())
-            .keySchema(KeySchemaElement.builder().keyType(KeyType.HASH)
-                .attributeName(PhoneNumberIdentifiers.ATTR_PHONE_NUMBER_IDENTIFIER)
-                .build())
-            .provisionedThroughput(ProvisionedThroughput.builder().readCapacityUnits(10L).writeCapacityUnits(10L).build())
-            .build()),
-        List.of()),
-
     PNI_ASSIGNMENTS("pni_assignment_test",
         Accounts.ATTR_PNI_UUID,
         null,
@@ -181,15 +157,6 @@ public final class DynamoDbExtensionSchema {
         List.of(AttributeDefinition.builder()
             .attributeName(RedeemedReceiptsManager.KEY_SERIAL)
             .attributeType(ScalarAttributeType.B)
-            .build()),
-        List.of(), List.of()),
-
-    PHONE_NUMBER_RECOVERY_PASSWORDS("registration_recovery_passwords_test",
-        PhoneNumberRecoveryPasswords.KEY_PNI,
-        null,
-        List.of(AttributeDefinition.builder()
-            .attributeName(PhoneNumberRecoveryPasswords.KEY_PNI)
-            .attributeType(ScalarAttributeType.S)
             .build()),
         List.of(), List.of()),
 

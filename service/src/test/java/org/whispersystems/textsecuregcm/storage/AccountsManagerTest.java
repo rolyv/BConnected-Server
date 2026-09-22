@@ -147,7 +147,7 @@ class AccountsManagerTest {
   private static TestClock CLOCK;
 
   private Accounts accounts;
-  private PhoneNumberIdentifiers phoneNumberIdentifiers;
+  private PhoneNumberIdentifierStore phoneNumberIdentifiers;
   private KeysManager keysManager;
   private MessagesManager messagesManager;
   private ProfilesManager profilesManager;
@@ -210,7 +210,7 @@ class AccountsManagerTest {
     svr2Client = mock(SecureValueRecoveryClient.class);
     when(svr2Client.removeData(any(UUID.class))).thenReturn(CompletableFuture.completedFuture(null));
 
-    phoneNumberIdentifiers = mock(PhoneNumberIdentifiers.class);
+    phoneNumberIdentifiers = mock(PhoneNumberIdentifierStore.class);
     phoneNumberIdentifiersByE164 = new HashMap<>();
 
     when(phoneNumberIdentifiers.getPhoneNumberIdentifier(anyString())).thenAnswer((Answer<CompletableFuture<UUID>>) invocation -> {

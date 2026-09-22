@@ -30,7 +30,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.whispersystems.textsecuregcm.entities.RegistrationServiceSession;
 import org.whispersystems.textsecuregcm.registration.RegistrationServiceClient;
 import org.whispersystems.textsecuregcm.spam.RegistrationRecoveryChecker;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.PhoneNumberRecoveryPasswordsManager;
 import org.whispersystems.textsecuregcm.util.TestRandomUtil;
 
@@ -39,7 +39,7 @@ class PhoneVerificationTokenManagerTest {
   private RegistrationServiceClient registrationServiceClient;
   private PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager;
   private RegistrationRecoveryChecker registrationRecoveryChecker;
-  private PhoneNumberIdentifiers phoneNumberIdentifiers;
+  private PhoneNumberIdentifierStore phoneNumberIdentifiers;
 
   private PhoneVerificationTokenManager phoneVerificationTokenManager;
 
@@ -50,7 +50,7 @@ class PhoneVerificationTokenManagerTest {
 
   @BeforeEach
   void setUp() {
-    phoneNumberIdentifiers = mock(PhoneNumberIdentifiers.class);
+    phoneNumberIdentifiers = mock(PhoneNumberIdentifierStore.class);
     when(phoneNumberIdentifiers.getPhoneNumberIdentifier(PHONE_NUMBER))
         .thenReturn(CompletableFuture.completedFuture(PHONE_NUMBER_IDENTIFIER));
 

@@ -96,7 +96,7 @@ import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.storage.AccountsManager;
 import org.whispersystems.textsecuregcm.storage.Device;
 import org.whispersystems.textsecuregcm.storage.MessagesManager;
-import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifiers;
+import org.whispersystems.textsecuregcm.storage.PhoneNumberIdentifierStore;
 import org.whispersystems.textsecuregcm.storage.ReportMessageManager;
 import org.whispersystems.textsecuregcm.tests.util.AccountsHelper;
 import org.whispersystems.textsecuregcm.tests.util.AuthHelper;
@@ -154,7 +154,7 @@ class MessageControllerTest {
   private static final RateLimiters rateLimiters = mock(RateLimiters.class);
   private static final CardinalityEstimator cardinalityEstimator = mock(CardinalityEstimator.class);
   private static final RateLimiter rateLimiter = mock(RateLimiter.class);
-  private static final PhoneNumberIdentifiers phoneNumberIdentifiers = mock(PhoneNumberIdentifiers.class);
+  private static final PhoneNumberIdentifierStore phoneNumberIdentifiers = mock(PhoneNumberIdentifierStore.class);
   private static final PushNotificationManager pushNotificationManager = mock(PushNotificationManager.class);
   private static final PushNotificationScheduler pushNotificationScheduler = mock(PushNotificationScheduler.class);
   private static final ReportMessageManager reportMessageManager = mock(ReportMessageManager.class);

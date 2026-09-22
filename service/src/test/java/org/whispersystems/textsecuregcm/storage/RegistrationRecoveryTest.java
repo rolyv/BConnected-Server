@@ -12,7 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -20,13 +19,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.whispersystems.textsecuregcm.auth.SaltedTokenHash;
-import org.whispersystems.textsecuregcm.storage.DynamoDbExtensionSchema.Tables;
-import org.whispersystems.textsecuregcm.util.AttributeValues;
 import org.whispersystems.textsecuregcm.util.MockUtils;
 import org.whispersystems.textsecuregcm.util.MutableClock;
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
-import software.amazon.awssdk.services.dynamodb.model.GetItemResponse;
 
 public class RegistrationRecoveryTest {
 
@@ -38,22 +32,16 @@ public class RegistrationRecoveryTest {
   private static final SaltedTokenHash ANOTHER_HASH = SaltedTokenHash.generateFor("pass2");
 
   @RegisterExtension
-  private static final DynamoDbExtension DYNAMO_DB_EXTENSION =
-      new DynamoDbExtension(Tables.PHONE_NUMBER_RECOVERY_PASSWORDS);
+  static final PostgresAccountKeyTestExtension POSTGRES = new PostgresAccountKeyTestExtension();
 
-  private PhoneNumberRecoveryPasswords phoneNumberRecoveryPasswords;
+  private PhoneNumberRecoveryPasswordStore phoneNumberRecoveryPasswords;
 
   private PhoneNumberRecoveryPasswordsManager manager;
 
   @BeforeEach
   public void before() throws Exception {
     CLOCK.setTimeMillis(Clock.systemUTC().millis());
-    phoneNumberRecoveryPasswords = new PhoneNumberRecoveryPasswords(
-        Tables.PHONE_NUMBER_RECOVERY_PASSWORDS.tableName(),
-        EXPIRATION,
-        DYNAMO_DB_EXTENSION.getDynamoDbClient(),
-        CLOCK
-    );
+    phoneNumberRecoveryPasswords = new PhoneNumberRecoveryPasswordsPostgres(POSTGRES.dataSource(), EXPIRATION, CLOCK);
 
     manager = new PhoneNumberRecoveryPasswordsManager(phoneNumberRecoveryPasswords);
   }
@@ -137,17 +125,14 @@ public class RegistrationRecoveryTest {
     assertFalse(manager.verify(PNI, wrongPassword));
   }
 
-  private static long fetchTimestamp(final UUID phoneNumberIdentifier) {
-    final GetItemResponse getItemResponse = DYNAMO_DB_EXTENSION.getDynamoDbClient().getItem(GetItemRequest.builder()
-            .tableName(Tables.PHONE_NUMBER_RECOVERY_PASSWORDS.tableName())
-            .key(Map.of(PhoneNumberRecoveryPasswords.KEY_PNI, AttributeValues.fromString(phoneNumberIdentifier.toString())))
-            .build());
-
-    final Map<String, AttributeValue> item = getItemResponse.item();
-    if (item == null || !item.containsKey(PhoneNumberRecoveryPasswords.ATTR_EXP)) {
-      throw new RuntimeException("Data not found");
+  private static long fetchTimestamp(final UUID phoneNumberIdentifier) throws Exception {
+    try (var connection = POSTGRES.dataSource().getConnection();
+        var statement = connection.prepareStatement("SELECT expires_at FROM signal.phone_recovery_passwords WHERE pni=?")) {
+      statement.setObject(1, phoneNumberIdentifier);
+      try (var rows = statement.executeQuery()) {
+        assertTrue(rows.next());
+        return rows.getLong(1);
+      }
     }
-    final String exp = item.get(PhoneNumberRecoveryPasswords.ATTR_EXP).n();
-    return Long.parseLong(exp);
   }
 }
