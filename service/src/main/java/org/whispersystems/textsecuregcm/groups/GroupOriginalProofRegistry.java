@@ -9,14 +9,18 @@ import org.whispersystems.textsecuregcm.admission.AdmissionEntitlementGate.Devic
 import org.whispersystems.textsecuregcm.groups.GroupBridgeProtocol.*;
 
 /** Bounded single-instance bridge retaining the original credential-verified proof, never renewing it. */
-public final class GroupOriginalProofRegistry {
+public final class GroupOriginalProofRegistry implements AutoCloseable {
   private final int capacity;
   private final SecureRandom random = new SecureRandom();
   private final Map<String, Ticket> retained = new HashMap<>();
+  private final java.util.concurrent.ScheduledThreadPoolExecutor expiry = new java.util.concurrent.ScheduledThreadPoolExecutor(1,
+      Thread.ofPlatform().daemon().name("group-original-proof-expiry").factory());
+  private boolean closed;
 
   public GroupOriginalProofRegistry(int capacity) {
     if (capacity < 1 || capacity > 4096) throw new IllegalArgumentException("Invalid group registry capacity");
     this.capacity = capacity;
+    expiry.setRemoveOnCancelPolicy(true);
   }
 
   /** Handle is service metadata. Close after dispatch (including failure) and never serialize a Ticket. */
@@ -26,6 +30,7 @@ public final class GroupOriginalProofRegistry {
     private final DeviceAuthorization original;
     private final Membership membership;
     private final long deadline;
+    private java.util.concurrent.ScheduledFuture<?> expiration;
     private Ticket(String handle, Operation operation, DeviceAuthorization original, Membership membership, long deadline) {
       this.handle = handle; this.operation = operation; this.original = original;
       this.membership = membership; this.deadline = deadline;
@@ -37,7 +42,9 @@ public final class GroupOriginalProofRegistry {
       if (!membership.equals(binding(original))) throw denied(); checkTime();
     }
     private void checkTime() { if (deadline - System.nanoTime() <= 0) throw denied(); }
-    @Override public void close() { synchronized (retained) { retained.remove(handle, this); } }
+    @Override public void close() {
+      synchronized (retained) { retained.remove(handle, this); if (expiration != null) expiration.cancel(false); }
+    }
     @Override public String toString() { return "GroupOriginalProofTicket[redacted]"; }
   }
 
@@ -55,9 +62,11 @@ public final class GroupOriginalProofRegistry {
     var ticket = new Ticket(GroupBridgeProtocol.encode(entropy), operation, original, membership, start + remaining);
     ticket.requireCurrent();
     synchronized (retained) {
-      retained.values().removeIf(t -> t.deadline - System.nanoTime() <= 0);
+      if (closed) throw new IllegalStateException("Group authorization registry closed");
+      retained.values().stream().filter(t -> t.deadline - System.nanoTime() <= 0).toList().forEach(Ticket::close);
       if (retained.size() >= capacity) throw new IllegalStateException("Group authorization capacity unavailable");
       if (retained.putIfAbsent(ticket.handle, ticket) != null) throw new IllegalStateException("Group authorization unavailable");
+      ticket.expiration = expiry.schedule(ticket::close, Math.max(0, ticket.deadline - System.nanoTime()), java.util.concurrent.TimeUnit.NANOSECONDS);
     }
     return ticket;
   }
@@ -65,7 +74,10 @@ public final class GroupOriginalProofRegistry {
   /** Package-private: the authenticated resolve endpoint is the only production caller. Consumed once. */
   Resolution resolve(ResolveRequest request) {
     final Ticket ticket;
-    synchronized (retained) { ticket = retained.remove(request.handle()); }
+    synchronized (retained) {
+      ticket = retained.remove(request.handle());
+      if (ticket != null && ticket.expiration != null) ticket.expiration.cancel(false);
+    }
     if (ticket == null || !ticket.operation.equals(request.operation())) throw denied();
     ticket.requireCurrent();
     long remaining = Math.min(ticket.deadline - System.nanoTime(), ticket.original.remainingNanos());
@@ -78,5 +90,10 @@ public final class GroupOriginalProofRegistry {
     return new Membership(b.memberId(), b.approvalEpoch(), b.signalOperationId(), b.permitId(), b.aci());
   }
   private static SecurityException denied() { return new SecurityException("Group authorization unavailable"); }
+  int retainedCount() { synchronized (retained) { return retained.size(); } }
+  @Override public void close() {
+    synchronized (retained) { closed = true; retained.values().stream().toList().forEach(Ticket::close); }
+    expiry.shutdownNow();
+  }
   @Override public String toString() { return "GroupOriginalProofRegistry[redacted]"; }
 }

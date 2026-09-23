@@ -18,7 +18,7 @@ class GroupOriginalProofPostgresTest {
   final String binary = GroupBridgeProtocol.encode(new byte[32]);
   final Operation operation = new Operation("POST", Kind.STATE, binary, UUID.randomUUID(), binary);
   @BeforeEach void setup() throws Exception { fixture = new AdmissionEntitlementGatePostgresTest(); fixture.setup(); }
-  @AfterEach void cleanup() throws Exception { if (fixture != null) fixture.close(); }
+  @AfterEach void cleanup() throws Exception { registry.close(); if (fixture != null) fixture.close(); }
   GroupOriginalProofRegistry.Ticket retain() {
     return registry.retain(fixture.gate.authorizeDevice(fixture.aci, (byte) 1, fixture.flow.input.password()), operation);
   }

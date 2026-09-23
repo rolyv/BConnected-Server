@@ -16,13 +16,15 @@ rechecks the same native account/device/admission snapshot and returns only the 
 membership binding, primary device, operation, echoed 256-bit nonce and remaining original
 monotonic lifetime (at most four seconds). All diagnostics redact identity and handles.
 
-The registry is bounded to a configured maximum of 4,096 retained proofs. Native proof rechecks
+The registry is bounded to a configured maximum of 4,096 retained proofs. Scheduled expiry removes
+idle tickets without waiting for another request; resolve/close cancels the timer. Shutdown clears
+retained proofs and stops the scheduler. Native proof rechecks
 occur outside the registry monitor. No Groups SQL connection or lock may span this callback.
 The Groups receiver must start its timer before queue/RPC work, use start plus returned remaining
 duration, and never refresh a proof under authority/signing work. This is a bounded-staleness
 cross-service lease, not an instantaneous distributed transaction.
 
-Acceptance in this checkpoint: ten RSA-verifying endpoint/registry cases cover pinned identity,
+Acceptance in this checkpoint: eleven RSA-verifying endpoint/registry cases cover pinned identity,
 issuer/audience/signature/time errors, missing token, replay, wrong binding, saturation, close and
 secondary denial; four native PostgreSQL cases cover actual original device proof resolution and
 account/membership/receipt changes before callback completion. Keys/accounts are synthetic. These

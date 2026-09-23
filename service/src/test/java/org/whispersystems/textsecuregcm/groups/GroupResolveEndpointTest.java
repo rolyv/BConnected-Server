@@ -24,6 +24,15 @@ class GroupResolveEndpointTest {
     when(proof.groupOperationBinding()).thenReturn(new AdmissionServiceClient.Binding(UUID.randomUUID(), 1, UUID.randomUUID(), binary, aci));
   }
   ResolveRequest request(GroupOriginalProofRegistry.Ticket ticket) { return new ResolveRequest(ticket.handle(), binary, operation); }
+  @org.junit.jupiter.api.AfterEach void cleanup() { registry.close(); }
+  @Test void idleExpiredProofIsEvictedWithoutAnotherRequestAndShutdownClosesCapacity() throws Exception {
+    when(proof.remainingNanos()).thenReturn(100_000_000L);
+    registry.retain(proof, operation);
+    long until = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
+    while (registry.retainedCount() != 0 && System.nanoTime() < until) Thread.sleep(10);
+    assertThat(registry.retainedCount()).isZero();
+    registry.close(); assertThatThrownBy(() -> registry.retain(proof, operation)).isInstanceOf(IllegalStateException.class);
+  }
   @Test void signedPinnedPrincipalResolvesOriginalExactlyOnceAndDoesNotRenew() throws Exception {
     try (var ticket = registry.retain(proof, operation)) {
       var r = resolve(registry, request(ticket));
