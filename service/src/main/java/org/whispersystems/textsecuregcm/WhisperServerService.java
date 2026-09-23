@@ -1134,7 +1134,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     final List<ServerServiceDefinition> authenticatedServices = Stream.of(
             new AccountsGrpcService(accountsManager, rateLimiters, usernameHashZkProofVerifier,
                 phoneNumberRecoveryPasswordsManager, Clock.systemUTC(), changeNumberManager,
-                gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
+                gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD, admittedAccountUpdates),
             gcpPilot ? null : new CallingGrpcService(cloudflareTurnCredentialsManager, rateLimiters),
             new CredentialsGrpcService(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, rateLimiters, Clock.systemUTC(), ExternalServiceDefinitions.createExternalServiceList(config, Clock.systemUTC()), !gcpPilot, gcpPilot),
             new KeysGrpcService(accountsManager, keysManager, rateLimiters, admissionGate, admittedKeys),
@@ -1170,7 +1170,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             requireAuthenticationInterceptor))
         .toList();
     final List<ServerServiceDefinition> unauthenticatedServices = Stream.of(
-            new AccountsAnonymousGrpcService(accountsManager, rateLimiters, groupSendTokenUtil),
+            new AccountsAnonymousGrpcService(accountsManager, rateLimiters, groupSendTokenUtil,
+                gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
             gcpPilot ? null : new CallQualitySurveyGrpcService(callQualitySurveyManager, rateLimiters),
             new KeysAnonymousGrpcService(accountsManager, keysManager, groupZkSecretParams, Clock.systemUTC(), !gcpPilot),
             gcpPilot ? null : new KeyTransparencyGrpcService(rateLimiters, keyTransparencyServiceClient),
@@ -1308,7 +1309,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             usernameHashZkProofVerifier, config.enabledPushTypes(),
             gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD, admittedAccountUpdates),
         new AccountControllerV2(accountsManager, changeNumberManager,
-            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD),
+            gcpPilot ? AccountOperationsPolicy.PILOT_PRIMARY_ONLY : AccountOperationsPolicy.STANDARD, admittedAccountUpdates),
         new AttachmentControllerV4(rateLimiters, gcsAttachmentGenerator, tusAttachmentGenerator,
             experimentEnrollmentManager, config.getAttachments().maxAttachmentUploadSizeInBytes(), gcpPilot),
         gcpPilot ? null : new ArchiveController(accountsManager, backupAuthManager, backupManager, backupMetrics, config.getAttachments().maxAttachmentUploadSizeInBytes(), config.getAttachments().maxMessageBackupUploadSizeInBytes()),

@@ -59,6 +59,7 @@ import org.whispersystems.textsecuregcm.storage.Device;
 public class AccountControllerV2 {
 
   private final AccountOperationsPolicy operationsPolicy;
+  private final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates;
 
   private final AccountsManager accountsManager;
   private final ChangeNumberManager changeNumberManager;
@@ -71,6 +72,13 @@ public class AccountControllerV2 {
   public AccountControllerV2(final AccountsManager accountsManager,
       final ChangeNumberManager changeNumberManager,
       final AccountOperationsPolicy operationsPolicy) {
+    this(accountsManager, changeNumberManager, operationsPolicy, null);
+  }
+
+  public AccountControllerV2(final AccountsManager accountsManager, final ChangeNumberManager changeNumberManager,
+      final AccountOperationsPolicy operationsPolicy,
+      final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates) {
+    this.admittedUpdates = admittedUpdates;
     this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
 
     this.accountsManager = accountsManager;
@@ -166,6 +174,13 @@ public class AccountControllerV2 {
       @Auth AuthenticatedDevice auth,
       @NotNull @Valid PhoneNumberDiscoverabilityRequest phoneNumberDiscoverability) {
 
+    if (operationsPolicy == AccountOperationsPolicy.PILOT_PRIMARY_ONLY) {
+      if (admittedUpdates == null) throw new ServiceUnavailableException();
+      if (org.whispersystems.textsecuregcm.admission.AdmissionAccountReadGuard.http(auth).account().getNumber().isEmpty())
+        throw new BadRequestException();
+      admittedUpdates.http(auth, account -> account.setDiscoverableByPhoneNumber(phoneNumberDiscoverability.discoverableByPhoneNumber()));
+      return;
+    }
     accountsManager.update(auth.accountIdentifier(), account -> {
       if (account.getNumber().isEmpty()) {
         throw new BadRequestException();
@@ -184,10 +199,12 @@ public class AccountControllerV2 {
       useReturnTypeSchema = true)
   public AccountDataReportResponse getAccountDataReport(@Auth final AuthenticatedDevice auth) {
 
-    final Account account = accountsManager.getByAccountIdentifier(auth.accountIdentifier())
+    final var read = operationsPolicy == AccountOperationsPolicy.PILOT_PRIMARY_ONLY
+        ? org.whispersystems.textsecuregcm.admission.AdmissionAccountReadGuard.http(auth) : null;
+    final Account account = read != null ? read.account() : accountsManager.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Response.Status.UNAUTHORIZED));
 
-    return new AccountDataReportResponse(UUID.randomUUID(), Instant.now(),
+    final var response = new AccountDataReportResponse(UUID.randomUUID(), Instant.now(),
         new AccountDataReportResponse.AccountAndDevicesDataReport(
             new AccountDataReportResponse.AccountDataReport(
                 account.getNumber(),
@@ -200,5 +217,6 @@ public class AccountControllerV2 {
                     Instant.ofEpochMilli(device.getLastSeen()),
                     Instant.ofEpochMilli(device.getCreated()),
                     device.getUserAgent())).toList()));
+    return read != null ? read.httpResult(response) : response;
   }
 }

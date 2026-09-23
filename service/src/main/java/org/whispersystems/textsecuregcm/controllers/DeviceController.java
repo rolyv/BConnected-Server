@@ -169,6 +169,10 @@ public class DeviceController {
   @GET
   @Produces(MediaType.APPLICATION_JSON)
   public DeviceInfoList getDevices(@Auth AuthenticatedDevice auth) {
+    if (operationsPolicy == AccountOperationsPolicy.PILOT_PRIMARY_ONLY) {
+      final var read = org.whispersystems.textsecuregcm.admission.AdmissionAccountReadGuard.http(auth);
+      return read.httpResult(new DeviceInfoList(read.account().getDevices().stream().map(DeviceInfo::forDevice).toList()));
+    }
     // Devices may change their own names (and primary devices may change the names of linked devices) and so the device
     // state associated with the authenticated account may be stale. Fetch a fresh copy to compensate.
     return accounts.getByAccountIdentifier(auth.accountIdentifier())

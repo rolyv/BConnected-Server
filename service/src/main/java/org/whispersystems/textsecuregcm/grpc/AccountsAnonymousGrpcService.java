@@ -32,6 +32,7 @@ import org.whispersystems.textsecuregcm.util.UUIDUtil;
 
 public class AccountsAnonymousGrpcService extends SimpleAccountsAnonymousGrpc.AccountsAnonymousImplBase {
 
+  private final org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy operationsPolicy;
   private final AccountsManager accountsManager;
   private final RateLimiters rateLimiters;
   private final GroupSendTokenUtil groupSendTokenUtil;
@@ -40,6 +41,12 @@ public class AccountsAnonymousGrpcService extends SimpleAccountsAnonymousGrpc.Ac
       final AccountsManager accountsManager,
       final RateLimiters rateLimiters,
       final GroupSendTokenUtil groupSendTokenUtil) {
+    this(accountsManager, rateLimiters, groupSendTokenUtil, org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy.STANDARD);
+  }
+
+  public AccountsAnonymousGrpcService(final AccountsManager accountsManager, final RateLimiters rateLimiters,
+      final GroupSendTokenUtil groupSendTokenUtil, final org.whispersystems.textsecuregcm.auth.AccountOperationsPolicy operationsPolicy) {
+    this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
     this.accountsManager = accountsManager;
     this.rateLimiters = rateLimiters;
     this.groupSendTokenUtil = groupSendTokenUtil;
@@ -48,6 +55,7 @@ public class AccountsAnonymousGrpcService extends SimpleAccountsAnonymousGrpc.Ac
   @Override
   public CheckAccountExistenceResponse checkAccountExistence(final CheckAccountExistenceRequest request)
       throws RateLimitExceededException {
+    operationsPolicy.requireAnonymousDiscovery();
 
     final ServiceIdentifier serviceIdentifier =
         GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getServiceIdentifier());
@@ -62,6 +70,7 @@ public class AccountsAnonymousGrpcService extends SimpleAccountsAnonymousGrpc.Ac
   @Override
   public LookupUsernameHashResponse lookupUsernameHash(final LookupUsernameHashRequest request)
       throws RateLimitExceededException {
+    operationsPolicy.requireAnonymousDiscovery();
 
     RateLimitUtil.rateLimitByRemoteAddress(rateLimiters.getUsernameLookupLimiter());
 
@@ -75,6 +84,7 @@ public class AccountsAnonymousGrpcService extends SimpleAccountsAnonymousGrpc.Ac
   @Override
   public LookupUsernameLinkResponse lookupUsernameLink(final LookupUsernameLinkRequest request)
       throws RateLimitExceededException {
+    operationsPolicy.requireAnonymousDiscovery();
     final UUID linkHandle;
 
     try {
@@ -96,6 +106,7 @@ public class AccountsAnonymousGrpcService extends SimpleAccountsAnonymousGrpc.Ac
 
   @Override
   public GetCapabilitiesAnonymousResponse getCapabilities(GetCapabilitiesAnonymousRequest request) {
+    operationsPolicy.requireAnonymousDiscovery();
     final ServiceIdentifier targetIdentifier =
         GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getAccountIdentifier());
     final Optional<Account> targetAccount = accountsManager.getByServiceIdentifier(targetIdentifier);

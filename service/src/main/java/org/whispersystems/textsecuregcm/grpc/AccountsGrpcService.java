@@ -142,6 +142,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
   private final AccountOperationsPolicy operationsPolicy;
+  private final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates;
 
   private final AccountsManager accountsManager;
   private final RateLimiters rateLimiters;
@@ -169,6 +170,16 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
       final Clock clock,
       final ChangeNumberManager changeNumberManager,
       final AccountOperationsPolicy operationsPolicy) {
+    this(accountsManager, rateLimiters, usernameHashZkProofVerifier, phoneNumberRecoveryPasswordsManager, clock,
+        changeNumberManager, operationsPolicy, null);
+  }
+
+  public AccountsGrpcService(final AccountsManager accountsManager, final RateLimiters rateLimiters,
+      final UsernameHashZkProofVerifier usernameHashZkProofVerifier,
+      final PhoneNumberRecoveryPasswordsManager phoneNumberRecoveryPasswordsManager, final Clock clock,
+      final ChangeNumberManager changeNumberManager, final AccountOperationsPolicy operationsPolicy,
+      final org.whispersystems.textsecuregcm.storage.AdmittedAccountUpdates admittedUpdates) {
+    this.admittedUpdates = admittedUpdates;
     this.operationsPolicy = java.util.Objects.requireNonNull(operationsPolicy);
 
     this.accountsManager = accountsManager;
@@ -181,14 +192,17 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public GetAccountIdentityResponse getAccountIdentity(final GetAccountIdentityRequest request) {
-    return GetAccountIdentityResponse.newBuilder()
-        .setAccountIdentifiers(buildAccountIdentifiers(getAuthenticatedAccount()))
+    final var read = selfRead();
+    final var response = GetAccountIdentityResponse.newBuilder()
+        .setAccountIdentifiers(buildAccountIdentifiers(read != null ? read.account() : getAuthenticatedAccount()))
         .build();
+    return read != null ? read.grpcResult(response) : response;
   }
 
   @Override
   public GetEntitlementsResponse getEntitlements(final GetEntitlementsRequest request) {
-    final Account account = getAuthenticatedAccount();
+    final var read = selfRead();
+    final Account account = read != null ? read.account() : getAuthenticatedAccount();
     final GetEntitlementsResponse.Builder builder = GetEntitlementsResponse.newBuilder();
 
     final Instant now = clock.instant();
@@ -209,7 +223,8 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
             .build())
         .toList());
 
-    return builder.build();
+    final var response = builder.build();
+    return read != null ? read.grpcResult(response) : response;
   }
 
   @Override
@@ -226,7 +241,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
         SaltedTokenHash.generateFor(formatRegistrationLock(request.getRegistrationLock().toByteArray()));
 
     try {
-      accountsManager.update(AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier(),
+      updateAccount(AuthenticationUtil.requireAuthenticatedDevice(),
           account -> account.setRegistrationLock(credentials.hash(), credentials.salt()));
 
       return SetRegistrationLockResponse.getDefaultInstance();
@@ -237,7 +252,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public ClearRegistrationLockResponse clearRegistrationLock(final ClearRegistrationLockRequest request) {
-    accountsManager.update(AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier(),
+    updateAccount(AuthenticationUtil.requireAuthenticatedDevice(),
         account -> account.setRegistrationLock(null, null));
 
     return ClearRegistrationLockResponse.getDefaultInstance();
@@ -355,7 +370,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
       throw GrpcExceptions.fieldViolation("configuration", "a configuration case must be set");
     }
 
-    accountsManager.update(AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier(), account -> {
+    updateAccount(AuthenticationUtil.requireAuthenticatedDevice(), account -> {
       account.setUnidentifiedAccessKey(request.hasUnidentifiedAccessKey()
           ? request.getUnidentifiedAccessKey().toByteArray()
           : null);
@@ -367,7 +382,10 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public SetDiscoverableByPhoneNumberResponse setDiscoverableByPhoneNumber(final SetDiscoverableByPhoneNumberRequest request) {
-    accountsManager.update(AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier(),
+    if (operationsPolicy == AccountOperationsPolicy.PILOT_PRIMARY_ONLY
+        && org.whispersystems.textsecuregcm.admission.AdmissionAccountReadGuard.grpc(AuthenticationUtil.requireAuthenticatedDevice()).account().getNumber().isEmpty())
+      throw GrpcExceptions.invalidArguments("account does not have a phone number");
+    updateAccount(AuthenticationUtil.requireAuthenticatedDevice(),
         account -> {
           if (account.getNumber().isEmpty()) {
             throw GrpcExceptions.invalidArguments("account does not have a phone number");
@@ -554,7 +572,8 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
   @Override
   public GetAccountDataReportResponse getAccountDataReport(final GetAccountDataReportRequest request)
       throws IOException {
-    final Account account = getAuthenticatedAccount();
+    final var read = selfRead();
+    final Account account = read != null ? read.account() : getAuthenticatedAccount();
 
     final AccountDataReportResponse report = new AccountDataReportResponse(UUID.randomUUID(), clock.instant(),
         new AccountDataReportResponse.AccountAndDevicesDataReport(
@@ -570,22 +589,25 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
                     Instant.ofEpochMilli(device.getCreated()),
                     device.getUserAgent())).toList()));
 
-    return GetAccountDataReportResponse.newBuilder()
+    final var response = GetAccountDataReportResponse.newBuilder()
         .setJson(SystemMapper.jsonMapper().writeValueAsString(report))
         .setText(report.text())
         .build();
+    return read != null ? read.grpcResult(response) : response;
   }
 
   @Override
   public GetCapabilitiesResponse getCapabilities(GetCapabilitiesRequest request) {
-    final Account account = getAuthenticatedAccount();
+    final var read = selfRead();
+    final Account account = read != null ? read.account() : getAuthenticatedAccount();
     final Capabilities.Builder builder = Capabilities.newBuilder();
     for (DeviceCapability capability : DeviceCapability.SELF_VISIBLE_CAPABILITIES) {
       if (account.hasCapability(capability)) {
         builder.addCapabilities(DeviceCapabilityUtil.toGrpcDeviceCapability(capability));
       }
     }
-    return GetCapabilitiesResponse.newBuilder().setCapabilities(builder.build()).build();
+    final var response = GetCapabilitiesResponse.newBuilder().setCapabilities(builder.build()).build();
+    return read != null ? read.grpcResult(response) : response;
   }
 
   @Override
@@ -841,6 +863,17 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
       case UNIDENTIFIED_SENDER -> throw GrpcExceptions.invalidArguments("illegal envelope type for change-number sync messages");
       case UNSPECIFIED, UNRECOGNIZED -> throw GrpcExceptions.invalidArguments("unrecognized envelope type");
     };
+  }
+
+  private org.whispersystems.textsecuregcm.admission.AdmissionAccountReadGuard selfRead() {
+    return operationsPolicy == AccountOperationsPolicy.PILOT_PRIMARY_ONLY
+        ? org.whispersystems.textsecuregcm.admission.AdmissionAccountReadGuard.grpc(AuthenticationUtil.requireAuthenticatedDevice()) : null;
+  }
+
+  private void updateAccount(AuthenticatedDevice auth, java.util.function.Consumer<Account> mutation) {
+    if (admittedUpdates != null) admittedUpdates.grpc(auth, mutation);
+    else if (operationsPolicy == AccountOperationsPolicy.PILOT_PRIMARY_ONLY) throw io.grpc.Status.UNAVAILABLE.asRuntimeException();
+    else accountsManager.update(auth.accountIdentifier(), mutation);
   }
 
   private Account getAuthenticatedAccount() {

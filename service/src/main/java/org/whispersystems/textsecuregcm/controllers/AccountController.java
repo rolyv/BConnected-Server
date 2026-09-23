@@ -338,10 +338,12 @@ public class AccountController {
   @Path("/whoami")
   @Produces(MediaType.APPLICATION_JSON)
   public AccountIdentityResponse whoAmI(@Auth final AuthenticatedDevice auth) {
-    final Account account = accounts.getByAccountIdentifier(auth.accountIdentifier())
+    final var read = operationsPolicy == AccountOperationsPolicy.PILOT_PRIMARY_ONLY
+        ? org.whispersystems.textsecuregcm.admission.AdmissionAccountReadGuard.http(auth) : null;
+    final Account account = read != null ? read.account() : accounts.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Status.UNAUTHORIZED));
-
-    return AccountIdentityResponseBuilder.fromAccount(account);
+    final var response = AccountIdentityResponseBuilder.fromAccount(account);
+    return read != null ? read.httpResult(response) : response;
   }
 
   @DELETE
@@ -459,6 +461,7 @@ public class AccountController {
       @Auth final Optional<AuthenticatedDevice> maybeAuthenticatedAccount,
       @PathParam("usernameHash") final String usernameHash) {
 
+    operationsPolicy.requireAnonymousDiscovery();
     requireNotAuthenticated(maybeAuthenticatedAccount);
     final byte[] hash;
     try {
@@ -558,6 +561,7 @@ public class AccountController {
       @Auth final Optional<AuthenticatedDevice> maybeAuthenticatedAccount,
       @PathParam("uuid") final UUID usernameLinkHandle) {
 
+    operationsPolicy.requireAnonymousDiscovery();
     requireNotAuthenticated(maybeAuthenticatedAccount);
 
     return accounts.getByUsernameLinkHandle(usernameLinkHandle)
@@ -586,6 +590,7 @@ public class AccountController {
       @Parameter(description = "An ACI or PNI account identifier to check")
       @PathParam("identifier") final ServiceIdentifier accountIdentifier) {
 
+    operationsPolicy.requireAnonymousDiscovery();
     // Disallow clients from making authenticated requests to this endpoint
     requireNotAuthenticated(authenticatedAccount);
 

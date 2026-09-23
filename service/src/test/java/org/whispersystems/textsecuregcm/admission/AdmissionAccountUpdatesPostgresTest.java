@@ -29,6 +29,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.signal.chat.device.*;
+import org.signal.chat.account.*;
+import org.whispersystems.textsecuregcm.controllers.AccountControllerV2;
 import org.whispersystems.textsecuregcm.auth.*;
 import org.whispersystems.textsecuregcm.auth.grpc.RequireAuthenticationInterceptor;
 import org.whispersystems.textsecuregcm.controllers.AccountController;
@@ -37,6 +39,7 @@ import org.whispersystems.textsecuregcm.grpc.*;
 import org.whispersystems.textsecuregcm.limits.RateLimiters;
 import org.whispersystems.textsecuregcm.push.PushNotification;
 import org.whispersystems.textsecuregcm.storage.*;
+import org.whispersystems.textsecuregcm.storage.Account;
 import org.whispersystems.textsecuregcm.util.HeaderUtils;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
 
@@ -44,7 +47,9 @@ import org.whispersystems.textsecuregcm.util.SystemMapper;
 @EnabledIfEnvironmentVariable(named = "BCONNECTED_TEST_JDBC_URL", matches = ".+")
 class AdmissionAccountUpdatesPostgresTest {
   enum Route { ATTRIBUTES, APN, DELETE_APN, GCM, DELETE_GCM, LOCK, DELETE_LOCK, NAME, CAPABILITIES,
-    GRPC_NAME, GRPC_APN, GRPC_CLEAR, GRPC_CAPABILITIES }
+    GRPC_NAME, GRPC_APN, GRPC_CLEAR, GRPC_CAPABILITIES,
+    DISCOVERABLE, GRPC_LOCK, GRPC_CLEAR_LOCK, GRPC_UNIDENTIFIED, GRPC_DISCOVERABLE }
+  enum ReadRoute { WHOAMI, REPORT, DEVICES, GRPC_IDENTITY, GRPC_ENTITLEMENTS, GRPC_REPORT, GRPC_CAPABILITIES, GRPC_DEVICES }
   enum Changed { SUSPENDED, UNCONFIRMED, ACCOUNT_VERSION, PASSWORD, IDENTITY, SECOND_DEVICE }
   enum Protected { ACI, PNI, IDENTITY, PASSWORD, DEVICE_ID, DEVICE_CREATED, REGISTRATION, PNI_REGISTRATION,
     PROFILE_VERSION, RECOVERY, ACCOUNT_VERSION, SECOND_DEVICE }
@@ -62,9 +67,17 @@ class AdmissionAccountUpdatesPostgresTest {
   io.grpc.ManagedChannel channel;
   DevicesGrpc.DevicesBlockingStub grpc;
   boolean retainOriginal;
+  org.signal.chat.account.AccountsGrpc.AccountsBlockingStub accountGrpc;
+  Runnable beforeReadConnection = () -> {};
+  AtomicInteger readConnections = new AtomicInteger();
 
   @BeforeEach void setup() throws Exception {
     fixture = new AdmissionEntitlementGatePostgresTest(); fixture.setup();
+    DataSource readDataSource = mock(DataSource.class);
+    when(readDataSource.getConnection()).thenAnswer(_ -> {
+      readConnections.incrementAndGet(); beforeReadConnection.run(); return fixture.flow.ds.getConnection();
+    });
+    fixture.gate = new AdmissionEntitlementGate(readDataSource, fixture.client);
     var proof = fixture.gate.authorizeDevice(fixture.aci, (byte) 1, fixture.flow.input.password());
     principal = new AuthenticatedDevice(fixture.aci, (byte) 1, proof.primaryDeviceLastSeen(), proof);
     writeDataSource = mock(DataSource.class);
@@ -104,16 +117,24 @@ class AdmissionAccountUpdatesPostgresTest {
         .register(org.whispersystems.textsecuregcm.mappers.FeatureUnavailableExceptionMapper.class)
         .register(new JacksonMessageBodyProvider(SystemMapper.jsonMapper()))
         .register(new AuthDynamicFeature(new BasicCredentialAuthFilter.Builder<AuthenticatedDevice>().setRealm("fixture").setAuthenticator(auth).buildAuthFilter()))
-        .register(new AuthValueFactoryProvider.Binder<>(AuthenticatedDevice.class)).register(controller).register(devices));
+        .register(new AuthValueFactoryProvider.Binder<>(AuthenticatedDevice.class)).register(controller).register(devices)
+        .register(new AccountControllerV2(cache, null, AccountOperationsPolicy.PILOT_PRIMARY_ONLY, updates)));
     String name = io.grpc.inprocess.InProcessServerBuilder.generateName();
     server = io.grpc.inprocess.InProcessServerBuilder.forName(name).directExecutor()
         .addService(io.grpc.ServerInterceptors.intercept(new DevicesGrpcService(cache,
             EnumSet.allOf(PushNotification.TokenType.class), AccountOperationsPolicy.PILOT_PRIMARY_ONLY, updates),
+            new MockRequestAttributesInterceptor(), new RequireAuthenticationInterceptor(auth)))
+        .addService(io.grpc.ServerInterceptors.intercept(new AccountsGrpcService(cache, mock(RateLimiters.class), null,
+            mock(PhoneNumberRecoveryPasswordsManager.class), fixture.flow.http.clock, null,
+            AccountOperationsPolicy.PILOT_PRIMARY_ONLY, updates),
             new MockRequestAttributesInterceptor(), new RequireAuthenticationInterceptor(auth))).build().start();
     channel = io.grpc.inprocess.InProcessChannelBuilder.forName(name).directExecutor().build();
     var metadata = new io.grpc.Metadata(); metadata.put(RequireAuthenticationInterceptor.AUTHORIZATION_METADATA_KEY,
         HeaderUtils.basicAuthHeader(fixture.aci.toString(), fixture.flow.input.password()));
     grpc = DevicesGrpc.newBlockingStub(channel).withInterceptors(io.grpc.stub.MetadataUtils.newAttachHeadersInterceptor(metadata));
+    accountGrpc = org.signal.chat.account.AccountsGrpc.newBlockingStub(channel)
+        .withInterceptors(io.grpc.stub.MetadataUtils.newAttachHeadersInterceptor(metadata));
+    readConnections.set(0);
   }
   @AfterEach void close() throws Exception {
     if (channel != null) channel.shutdownNow(); if (server != null) server.shutdownNow();
@@ -142,6 +163,11 @@ class AdmissionAccountUpdatesPostgresTest {
       case DELETE_LOCK -> http("DELETE", "/v1/accounts/registration_lock", null);
       case NAME -> http("PUT", "/v1/accounts/name/", Map.of("deviceName", "AQID"));
       case CAPABILITIES -> http("PUT", "/v1/devices/capabilities", Map.of("spqr", true));
+      case DISCOVERABLE -> http("PUT", "/v2/accounts/phone_number_discoverability", Map.of("discoverableByPhoneNumber", false));
+      case GRPC_LOCK -> accountGrpc.setRegistrationLock(SetRegistrationLockRequest.newBuilder().setRegistrationLock(ByteString.copyFrom(new byte[32])).build());
+      case GRPC_CLEAR_LOCK -> accountGrpc.clearRegistrationLock(ClearRegistrationLockRequest.getDefaultInstance());
+      case GRPC_UNIDENTIFIED -> accountGrpc.configureUnidentifiedAccess(ConfigureUnidentifiedAccessRequest.newBuilder().setUnidentifiedAccessKey(ByteString.copyFrom(new byte[16])).build());
+      case GRPC_DISCOVERABLE -> accountGrpc.setDiscoverableByPhoneNumber(SetDiscoverableByPhoneNumberRequest.newBuilder().setDiscoverableByPhoneNumber(false).build());
       case GRPC_NAME -> grpc.setDeviceName(SetDeviceNameRequest.newBuilder().setId(1).setName(ByteString.copyFrom(new byte[]{1,2,3})).build());
       case GRPC_APN -> grpc.setPushToken(SetPushTokenRequest.newBuilder().setApnsTokenRequest(SetPushTokenRequest.ApnsTokenRequest.newBuilder().setApnsToken("synthetic-token")).build());
       case GRPC_CLEAR -> grpc.clearPushToken(ClearPushTokenRequest.getDefaultInstance());
@@ -165,7 +191,9 @@ class AdmissionAccountUpdatesPostgresTest {
       case ATTRIBUTES, NAME, GRPC_NAME -> assertThat(account().getPrimaryDevice().getName()).containsExactly(1, 2, 3);
       case APN, GRPC_APN -> assertThat(account().getPrimaryDevice().getApnId()).isEqualTo("synthetic-token");
       case GCM -> assertThat(account().getPrimaryDevice().getGcmId()).isEqualTo("synthetic-token");
-      case LOCK -> assertThat(account().getRegistrationLock().isPresent()).isTrue();
+      case LOCK, GRPC_LOCK -> assertThat(account().getRegistrationLock().isPresent()).isTrue();
+      case DISCOVERABLE, GRPC_DISCOVERABLE -> assertThat(account().isDiscoverableByPhoneNumber()).isFalse();
+      case GRPC_UNIDENTIFIED -> assertThat(account().getUnidentifiedAccessKey().orElseThrow()).containsExactly(new byte[16]);
       default -> {}
     }
     verify(cache, never()).getByAccountIdentifier(any());
@@ -296,5 +324,110 @@ class AdmissionAccountUpdatesPostgresTest {
       assertThrows(ExecutionException.class, () -> future.get(5, TimeUnit.SECONDS));
       assertThat(row()).isEqualTo(original); assertThat(writes.get()).isZero();
     }
+  }
+
+  Object read(ReadRoute route) throws Exception {
+    return switch (route) {
+      case WHOAMI -> http("GET", "/v1/accounts/whoami", null);
+      case REPORT -> http("GET", "/v2/accounts/data_report", null);
+      case DEVICES -> http("GET", "/v1/devices", null);
+      case GRPC_IDENTITY -> accountGrpc.getAccountIdentity(GetAccountIdentityRequest.getDefaultInstance());
+      case GRPC_ENTITLEMENTS -> accountGrpc.getEntitlements(GetEntitlementsRequest.getDefaultInstance());
+      case GRPC_REPORT -> accountGrpc.getAccountDataReport(GetAccountDataReportRequest.getDefaultInstance());
+      case GRPC_CAPABILITIES -> accountGrpc.getCapabilities(GetCapabilitiesRequest.getDefaultInstance());
+      case GRPC_DEVICES -> grpc.getDevices(GetDevicesRequest.getDefaultInstance());
+    };
+  }
+  void readFailure(ReadRoute route, int status) throws Exception {
+    if (route.name().startsWith("GRPC")) {
+      assertThat(assertThrows(StatusRuntimeException.class, () -> read(route)).getStatus().getCode())
+          .isEqualTo(status == 401 ? Status.Code.UNAUTHENTICATED : Status.Code.UNAVAILABLE);
+    } else assertThat(((ContainerResponse) read(route)).getStatus()).isEqualTo(status);
+  }
+  @ParameterizedTest @EnumSource(ReadRoute.class)
+  void selfReadsUseOriginalAuthoritativeSnapshotAndFinalCheck(ReadRoute route) throws Exception {
+    retainOriginal = true;
+    Object response = read(route);
+    if (response instanceof ContainerResponse http) assertThat(http.getStatus()).isEqualTo(200);
+    assertThat(readConnections.get()).isEqualTo(2);
+    assertThat(fixture.requests.get()).isEqualTo(1);
+    verifyNoInteractions(cache, writeDataSource);
+  }
+  @ParameterizedTest @EnumSource(ReadRoute.class)
+  void selfReadsDenyMissingOriginalProof(ReadRoute route) throws Exception {
+    retainOriginal = true; principal = new AuthenticatedDevice(fixture.aci, (byte) 1, principal.primaryDeviceLastSeen());
+    readFailure(route, 401); verifyNoInteractions(cache, writeDataSource);
+  }
+  @ParameterizedTest @EnumSource(ReadRoute.class)
+  void selfReadsDenySecondaryDevice(ReadRoute route) throws Exception {
+    retainOriginal = true; principal = new AuthenticatedDevice(fixture.aci, (byte) 2, principal.primaryDeviceLastSeen(), principal.admissionAuthorization());
+    readFailure(route, 401); verifyNoInteractions(cache, writeDataSource);
+  }
+  @ParameterizedTest @EnumSource(ReadRoute.class)
+  void selfReadsSuppressResponseWhenOriginalExpiresAtFinalRelease(ReadRoute route) throws Exception {
+    retainOriginal = true; beforeReadConnection = () -> { if (readConnections.get() == 2) expire(); };
+    readFailure(route, 503); assertThat(readConnections.get()).isEqualTo(2);
+    assertThat(fixture.requests.get()).isEqualTo(1); verifyNoInteractions(cache, writeDataSource);
+  }
+  @ParameterizedTest @EnumSource(ReadRoute.class)
+  void selfReadsSuppressResponseWhenSuspendedAtFinalRelease(ReadRoute route) throws Exception {
+    retainOriginal = true;
+    beforeReadConnection = () -> { if (readConnections.get() == 2) fixture.sql("UPDATE signal.admissions SET suspended_at=clock_timestamp()"); };
+    readFailure(route, 401); assertThat(readConnections.get()).isEqualTo(2);
+    assertThat(fixture.requests.get()).isEqualTo(1); verifyNoInteractions(cache, writeDataSource);
+  }
+  @ParameterizedTest @EnumSource(ReadRoute.class)
+  void selfReadsNeverAdoptChangedAccountAtFinalRelease(ReadRoute route) throws Exception {
+    retainOriginal = true;
+    beforeReadConnection = () -> { if (readConnections.get() == 2) fixture.sql("UPDATE signal.accounts SET version=version+1"); };
+    readFailure(route, 503); assertThat(readConnections.get()).isEqualTo(2); verifyNoInteractions(cache, writeDataSource);
+  }
+  @ParameterizedTest @EnumSource(value=Route.class, names={"DISCOVERABLE", "GRPC_LOCK", "GRPC_CLEAR_LOCK", "GRPC_UNIDENTIFIED", "GRPC_DISCOVERABLE"})
+  void newRoutesRollbackExpiryAfterNativeUpdate(Route route) throws Exception {
+    String original = row(); afterWrite = this::expire;
+    failure(route, 503); assertThat(writes.get()).isEqualTo(1); assertThat(row()).isEqualTo(original);
+  }
+  @ParameterizedTest @EnumSource(value=Route.class, names={"DISCOVERABLE", "GRPC_LOCK", "GRPC_CLEAR_LOCK", "GRPC_UNIDENTIFIED", "GRPC_DISCOVERABLE"})
+  void newRoutesSuppressCommittedResponseOnSuspension(Route route) throws Exception {
+    int version = account().getVersion(); duringEviction = () -> fixture.sql("UPDATE signal.admissions SET suspended_at=clock_timestamp()");
+    failure(route, 401); assertThat(account().getVersion()).isEqualTo(version+1); assertThat(writes.get()).isEqualTo(1);
+  }
+  @ParameterizedTest @EnumSource(value=Route.class, names={"DISCOVERABLE", "GRPC_LOCK", "GRPC_CLEAR_LOCK", "GRPC_UNIDENTIFIED", "GRPC_DISCOVERABLE"})
+  void newRoutesCannotWriteAfterRealAccountLockWait(Route route) throws Exception {
+    retainOriginal = true; String original = row();
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor(); var blocker = fixture.flow.ds.getConnection()) {
+      blocker.setAutoCommit(false);
+      try (var statement = blocker.createStatement()) { statement.execute("SELECT aci FROM signal.accounts FOR UPDATE"); }
+      var future = executor.submit(() -> { failure(route, 503); return null; });
+      try {
+        awaitNativeLock(); expire();
+      } finally { blocker.rollback(); }
+      future.get(5, TimeUnit.SECONDS); assertThat(row()).isEqualTo(original); assertThat(writes.get()).isZero();
+    }
+  }
+  @ParameterizedTest @EnumSource(ReadRoute.class)
+  void selfReadFinalReleaseCannotOutliveRealAccountRowWait(ReadRoute route) throws Exception {
+    retainOriginal = true;
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor(); var blocker = fixture.flow.ds.getConnection()) {
+      blocker.setAutoCommit(false);
+      beforeReadConnection = () -> {
+        if (readConnections.get() == 2) {
+          try (var statement = blocker.createStatement()) { statement.execute("SELECT aci FROM signal.accounts FOR UPDATE"); }
+          catch (java.sql.SQLException failure) { throw new RuntimeException(failure); }
+        }
+      };
+      var future = executor.submit(() -> { readFailure(route, 503); return null; });
+      try { awaitNativeLock(); expire(); } finally { blocker.rollback(); }
+      future.get(5, TimeUnit.SECONDS); assertThat(readConnections.get()).isEqualTo(2);
+      verifyNoInteractions(cache, writeDataSource);
+    }
+  }
+  void awaitNativeLock() throws Exception {
+    long deadline = System.nanoTime()+TimeUnit.SECONDS.toNanos(5); boolean waiting = false;
+    while (System.nanoTime() < deadline && !waiting) {
+      waiting = fixture.flow.count("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%signal.accounts%'") > 0;
+      if (!waiting) Thread.sleep(10);
+    }
+    assertThat(waiting).isTrue();
   }
 }

@@ -78,7 +78,9 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
 
   @Override
   public GetDevicesResponse getDevices(final GetDevicesRequest request) {
-    final Account account = getAuthenticatedAccount();
+    final var read = operationsPolicy == AccountOperationsPolicy.PILOT_PRIMARY_ONLY
+        ? org.whispersystems.textsecuregcm.admission.AdmissionAccountReadGuard.grpc(AuthenticationUtil.requireAuthenticatedDevice()) : null;
+    final Account account = read != null ? read.account() : getAuthenticatedAccount();
 
     final GetDevicesResponse.Builder responseBuilder = GetDevicesResponse.newBuilder();
 
@@ -99,7 +101,8 @@ public class DevicesGrpcService extends SimpleDevicesGrpc.DevicesImplBase {
         })
         .forEach(responseBuilder::addDevices);
 
-    return responseBuilder.build();
+    final var response = responseBuilder.build();
+    return read != null ? read.grpcResult(response) : response;
   }
 
   @Override

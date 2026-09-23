@@ -111,17 +111,27 @@ class PilotAccountOperationsTest {
         .header("Authorization", auth()).put(Entity.json(new DeviceName(new byte[16]))));
   }
 
-  @Test void primaryReadAndApnsSetupRemainAvailable() {
+  @Test void pilotSelfReadRequiresAdmittedProofWhileApnsSetupKeepsExistingFacadeContract() {
     var account = mock(Account.class); var device = new Device(); device.setId(Device.PRIMARY_ID);
     when(account.getDevices()).thenReturn(List.of(device));
     when(accounts.getByAccountIdentifier(AuthHelper.VALID_UUID)).thenReturn(Optional.of(account));
     try (var response = resources.target("/v1/devices").request().header("Authorization", auth()).get()) {
-      assertThat(response.getStatus()).isEqualTo(200);
+      assertThat(response.getStatus()).isEqualTo(401);
     }
     try (var response = resources.target("/v1/accounts/apn").request().header("Authorization", auth())
         .put(Entity.json(new ApnRegistrationId("synthetic-token")))) {
       assertThat(response.getStatus()).isEqualTo(204);
     }
+    verify(accounts, never()).getByAccountIdentifier(any());
     verify(accounts).updateDevice(eq(AuthHelper.VALID_UUID), eq(Device.PRIMARY_ID), any());
+  }
+
+  @ParameterizedTest @ValueSource(strings={"/v1/accounts/username_hash/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "/v1/accounts/username_link/00000000-0000-0000-0000-000000000001"})
+  void anonymousDiscoveryReadsAreClosedBeforeLookup(String path) {
+    rejected(resources.target(path).request().get());
+  }
+  @Test void anonymousAccountExistenceIsClosedBeforeLookup() {
+    rejected(resources.target("/v1/accounts/account/00000000-0000-0000-0000-000000000001").request().head());
   }
 }
