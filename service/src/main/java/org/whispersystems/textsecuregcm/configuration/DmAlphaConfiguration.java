@@ -12,7 +12,7 @@ import java.util.UUID;
 import org.whispersystems.textsecuregcm.configuration.secrets.SecretBytes;
 
 /** Explicit two-member enrollment composition. Absence leaves the existing pilot closed. */
-public record DmAlphaConfiguration(Set<UUID> memberIds, SecretBytes requestCommitmentKey,
+public record DmAlphaConfiguration(Set<UUID> memberIds, Map<UUID, String> memberPhoneBindings, SecretBytes requestCommitmentKey,
     SecretBytes phoneBindingKey, Map<String, String> admissionPublicKeys) {
   public DmAlphaConfiguration {
     if (memberIds == null || memberIds.size() != 2 || memberIds.contains(new UUID(0, 0))
@@ -21,11 +21,32 @@ public record DmAlphaConfiguration(Set<UUID> memberIds, SecretBytes requestCommi
         || java.security.MessageDigest.isEqual(requestCommitmentKey.value(), phoneBindingKey.value()))
       throw new IllegalArgumentException("Explicit two-member alpha and independent owned keys required");
     memberIds = Set.copyOf(memberIds);
+    if (memberPhoneBindings == null || !memberPhoneBindings.keySet().equals(memberIds)
+        || memberPhoneBindings.values().stream().anyMatch(value -> value == null || !value.matches("[a-f0-9]{64}"))
+        || Set.copyOf(memberPhoneBindings.values()).size() != 2)
+      throw new IllegalArgumentException("Each alpha member requires a distinct owned phone binding");
+    memberPhoneBindings = Map.copyOf(memberPhoneBindings);
     admissionPublicKeys = Map.copyOf(admissionPublicKeys);
     parseKeys(admissionPublicKeys);
   }
 
   public Map<String, PublicKey> permitKeys() { return parseKeys(admissionPublicKeys); }
+
+  /** Eligibility only. Native SMS verification must still prove possession of this exact number. */
+  public boolean allowsPhone(UUID memberId, String number) {
+    if (memberId == null) return false;
+    String expected = memberPhoneBindings.get(memberId);
+    if (expected == null || number == null || !number.matches("\\+[1-9][0-9]{1,14}")) return false;
+    try {
+      var mac = javax.crypto.Mac.getInstance("HmacSHA256");
+      mac.init(new javax.crypto.spec.SecretKeySpec(phoneBindingKey.value(), "HmacSHA256"));
+      mac.update("bconnected.phone.v1\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return java.security.MessageDigest.isEqual(java.util.HexFormat.of().parseHex(expected),
+          mac.doFinal(number.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    } catch (java.security.GeneralSecurityException impossible) {
+      throw new IllegalStateException("Phone eligibility unavailable");
+    }
+  }
 
   private static Map<String, PublicKey> parseKeys(Map<String, String> pins) {
     try {

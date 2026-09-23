@@ -199,6 +199,9 @@ class GcpRuntimeConfigurationTest {
               useForwardedHeaders: true
         dmAlpha:
           memberIds: [00000000-0000-4000-8000-000000000001, 00000000-0000-4000-8000-000000000002]
+          memberPhoneBindings:
+            00000000-0000-4000-8000-000000000001: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            00000000-0000-4000-8000-000000000002: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           requestCommitmentKey: secret://collation
           phoneBindingKey: secret://alphaPhone
           admissionPublicKeys:

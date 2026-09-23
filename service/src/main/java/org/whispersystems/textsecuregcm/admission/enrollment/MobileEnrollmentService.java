@@ -21,6 +21,7 @@ public final class MobileEnrollmentService {
   private final AdmissionEntitlementGate gate;
   private final Duration timeout;
   private final java.util.Set<UUID> allowedMembers;
+  private final java.util.function.BiPredicate<UUID, String> allowedPhone;
 
   public MobileEnrollmentService(RegistrationOperations operations, AdmissionRegistrationCoordinator coordinator,
       AdmissionAccountCreator creator, AdmissionEntitlementGate gate, Duration timeout) {
@@ -31,6 +32,12 @@ public final class MobileEnrollmentService {
   public MobileEnrollmentService(RegistrationOperations operations, AdmissionRegistrationCoordinator coordinator,
       AdmissionAccountCreator creator, AdmissionEntitlementGate gate, Duration timeout,
       java.util.Set<UUID> allowedMembers) {
+    this(operations, coordinator, creator, gate, timeout, allowedMembers, (member, number) -> true);
+  }
+
+  public MobileEnrollmentService(RegistrationOperations operations, AdmissionRegistrationCoordinator coordinator,
+      AdmissionAccountCreator creator, AdmissionEntitlementGate gate, Duration timeout,
+      java.util.Set<UUID> allowedMembers, java.util.function.BiPredicate<UUID, String> allowedPhone) {
     this.operations = Objects.requireNonNull(operations);
     this.coordinator = Objects.requireNonNull(coordinator);
     this.creator = Objects.requireNonNull(creator);
@@ -39,6 +46,7 @@ public final class MobileEnrollmentService {
       throw new IllegalArgumentException("Bounded registration timeout required");
     this.timeout = timeout;
     this.allowedMembers = allowedMembers == null ? null : java.util.Set.copyOf(allowedMembers);
+    this.allowedPhone = Objects.requireNonNull(allowedPhone);
   }
 
   public Result execute(MobileEnrollmentParser.Operation action, UUID operationId,
@@ -47,6 +55,8 @@ public final class MobileEnrollmentService {
     try {
       if (action == null || input == null) return error(Code.INVALID_REQUEST);
       if (allowedMembers != null && !allowedMembers.contains(input.memberId()))
+        return error(Code.ENROLLMENT_UNAVAILABLE);
+      if (!allowedPhone.test(input.memberId(), input.requestedNumber()))
         return error(Code.ENROLLMENT_UNAVAILABLE);
       if (action == MobileEnrollmentParser.Operation.BEGIN) {
         if (operationId != null) return error(Code.INVALID_REQUEST);

@@ -32,7 +32,7 @@ public final class DmAlphaEnrollment implements Managed {
         new AdmissionPermitVerifier(configuration.permitKeys(), clock), configuration.phoneBindingKey().value());
     var creator = new AdmissionAccountCreator(dataSource, clock, operations, recoveryRetention);
     var service = new MobileEnrollmentService(operations, coordinator, creator, gate,
-        Duration.ofSeconds(15), configuration.memberIds());
+        Duration.ofSeconds(15), configuration.memberIds(), configuration::allowsPhone);
     bodies = new MobileEnrollmentBodyReader(Duration.ofSeconds(5), 8);
     controller = new MobileEnrollmentController(service, bodies, request ->
         trustedSource(request.getProperty(RemoteAddressFilter.REMOTE_ADDRESS_ATTRIBUTE_NAME)));

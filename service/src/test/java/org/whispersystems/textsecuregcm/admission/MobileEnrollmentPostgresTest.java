@@ -178,8 +178,11 @@ class MobileEnrollmentPostgresTest {
 
   @Test void composedAlphaConfirmsPendingAccountThroughManagedWorkerAndReturnsFreshActiveIdentity() throws Exception {
     byte[] phoneKey = new byte[32]; Arrays.fill(phoneKey, (byte) 1);
+    UUID firstMember = UUID.fromString(envelope.path("memberId").asText()), secondMember = UUID.randomUUID();
     var config = new org.whispersystems.textsecuregcm.configuration.DmAlphaConfiguration(
-        Set.of(UUID.fromString(envelope.path("memberId").asText()), UUID.randomUUID()),
+        Set.of(firstMember, secondMember),
+        Map.of(firstMember, "a54053b72e21ada14ea65e73b415a148ab08b275197cbebaf61c3c77404f1cc2",
+            secondMember, "ec4d6a964bfd148509e98935f65975f8c6ca0e6730ddbbc225275363a8541fce"),
         new org.whispersystems.textsecuregcm.configuration.secrets.SecretBytes(new byte[32]),
         new org.whispersystems.textsecuregcm.configuration.secrets.SecretBytes(phoneKey),
         Map.of("test-key", Base64.getEncoder().encodeToString(flow.http.key.getPublic().getEncoded())));
