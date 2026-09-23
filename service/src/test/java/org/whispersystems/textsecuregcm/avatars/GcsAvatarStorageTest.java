@@ -46,6 +46,7 @@ class GcsAvatarStorageTest {
   private int getStatus = 200;
   private int copyStatus = 200;
   private int deleteStatus = 204;
+  private Runnable onDelete = () -> {};
 
   @BeforeEach void setUp() throws Exception {
     KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
@@ -59,6 +60,7 @@ class GcsAvatarStorageTest {
       requests.add(new Request(exchange.getRequestMethod(), exchange.getRequestURI(), body));
       boolean rewrite = exchange.getRequestURI().getPath().contains("/rewriteTo/");
       int status = rewrite ? copyStatus : exchange.getRequestMethod().equals("DELETE") ? deleteStatus : getStatus;
+      if (exchange.getRequestMethod().equals("DELETE")) onDelete.run();
       String response = status >= 400 ? "{\"error\":{\"code\":" + status + ",\"message\":\"unit-test\"}}"
           : rewrite ? "{\"kind\":\"storage#rewriteResponse\",\"done\":true,\"totalBytesRewritten\":\"8\",\"objectSize\":\"8\",\"resource\":" + object("8") + "}"
           : object("7");
@@ -188,6 +190,25 @@ class GcsAvatarStorageTest {
     getStatus = 403;
     assertThatThrownBy(() -> avatars.refresh(KEY).join()).hasCauseInstanceOf(StorageException.class);
     assertThat(requests).hasSize(1);
+  }
+
+  @Test void defaultSdkDoesNotRetryGuardedDeleteAfterTransientFailureAndReceiptExpiry() throws Exception {
+    avatars.close();
+    // Use exactly the production retry defaults, not the fixture's usual single-attempt setting.
+    var storage = StorageOptions.newBuilder().setHost("http://127.0.0.1:" + server.getAddress().getPort())
+        .setProjectId("test-project")
+        .setCredentials(GoogleCredentials.create(new AccessToken("local-fixture", Date.from(Instant.now().plusSeconds(3600)))))
+        .build().getService();
+    avatars = new GcsAvatarStorage(storage, BUCKET, org.mockito.Mockito.mock(ServiceAccountSigner.class), Runnable::run, CLOCK);
+    var expired = new java.util.concurrent.atomic.AtomicBoolean();
+    deleteStatus = 503;
+    onDelete = () -> { expired.set(true); deleteStatus = 204; };
+    assertThatThrownBy(() -> avatars.delete(KEY, () -> {
+      if (expired.get()) throw new IllegalStateException("Original fixture receipt expired");
+    }).join()).isInstanceOf(CompletionException.class);
+    assertThat(expired).isTrue();
+    assertThat(requests).hasSize(1);
+    assertThat(requests.getFirst().method).isEqualTo("DELETE");
   }
 
   private record Request(String method, URI uri, String body) {}

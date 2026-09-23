@@ -9,6 +9,10 @@ import org.whispersystems.textsecuregcm.entities.ProfileAvatarUploadAttributes;
 public interface AvatarUploadPolicyGenerator {
   UploadPolicy createFor(String objectName, int maxSizeInBytes, Instant currentTime);
 
+  default UploadPolicy createFor(String objectName, int maxSizeInBytes, Instant currentTime, Runnable requireCurrent) {
+    throw new UnsupportedOperationException("Guarded avatar policy signing unavailable");
+  }
+
   record UploadPolicy(String credential, String acl, String algorithm, String formattedTimestamp,
                       String encodedPolicy, String signature) {
     public ProfileAvatarUploadAttributes attributes(String objectName) {

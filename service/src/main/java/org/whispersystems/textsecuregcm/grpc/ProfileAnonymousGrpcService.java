@@ -43,6 +43,7 @@ import org.whispersystems.textsecuregcm.storage.ProfilesManager;
 import org.whispersystems.textsecuregcm.util.ProfileHelper;
 
 public class ProfileAnonymousGrpcService extends SimpleProfileAnonymousGrpc.ProfileAnonymousImplBase {
+  private boolean anonymousEnabled = true;
   private final AccountsManager accountsManager;
   private final ProfilesManager profilesManager;
   private final ProfileBadgeConverter profileBadgeConverter;
@@ -68,6 +69,14 @@ public class ProfileAnonymousGrpcService extends SimpleProfileAnonymousGrpc.Prof
         rateLimiters, clock, new ServerZkProfileOperations(serverSecretParams), new GroupSendTokenUtil(serverSecretParams, clock));
   }
 
+  public ProfileAnonymousGrpcService(final AccountsManager accountsManager, final ProfilesManager profilesManager,
+      final ProfileBadgeConverter profileBadgeConverter, final AvatarUploadPolicyGenerator policyGenerator,
+      final GenericServerSecretParams genericServerSecretParams, final ServerSecretParams serverSecretParams,
+      final RateLimiters rateLimiters, final Clock clock, final boolean anonymousEnabled) {
+    this(accountsManager, profilesManager, profileBadgeConverter, policyGenerator, genericServerSecretParams, serverSecretParams, rateLimiters, clock);
+    this.anonymousEnabled = anonymousEnabled;
+  }
+
   @VisibleForTesting
   ProfileAnonymousGrpcService(final AccountsManager accountsManager,
       final ProfilesManager profilesManager,
@@ -91,6 +100,7 @@ public class ProfileAnonymousGrpcService extends SimpleProfileAnonymousGrpc.Prof
 
   @Override
   public GetProfileAnonymousResponse getProfile(final GetProfileAnonymousRequest request) {
+    if (!anonymousEnabled) throw GrpcExceptions.unavailable("Anonymous profile and avatar operations unavailable");
     final ServiceIdentifier targetIdentifier = GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getRequest().getAccountIdentifier());
 
     final Optional<Account> targetAccount = accountsManager.getByServiceIdentifier(targetIdentifier);
@@ -128,6 +138,7 @@ public class ProfileAnonymousGrpcService extends SimpleProfileAnonymousGrpc.Prof
   @Override
   public GetExpiringProfileKeyCredentialAnonymousResponse getExpiringProfileKeyCredential(
       final GetExpiringProfileKeyCredentialAnonymousRequest request) {
+    if (!anonymousEnabled) throw GrpcExceptions.unavailable("Anonymous profile and avatar operations unavailable");
     final ServiceIdentifier targetIdentifier = GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getRequest().getAccountIdentifier());
 
     if (request.getRequest().getCredentialType() != CredentialType.CREDENTIAL_TYPE_EXPIRING_PROFILE_KEY) {
@@ -160,6 +171,7 @@ public class ProfileAnonymousGrpcService extends SimpleProfileAnonymousGrpc.Prof
 
   @Override
   public GetAvatarUploadFormResponse getAvatarUploadForm(final GetAvatarUploadFormRequest request) throws RateLimitExceededException {
+    if (!anonymousEnabled) throw GrpcExceptions.unavailable("Anonymous profile and avatar operations unavailable");
     final AvatarUploadCredentialPresentation presentation;
 
     try {
@@ -192,6 +204,7 @@ public class ProfileAnonymousGrpcService extends SimpleProfileAnonymousGrpc.Prof
 
   @Override
   public ExtendAvatarTTLResponse extendAvatarTTL(final ExtendAvatarTTLRequest request) {
+    if (!anonymousEnabled) throw GrpcExceptions.unavailable("Anonymous profile and avatar operations unavailable");
     final AvatarUploadCredentialPresentation presentation;
     try {
       presentation = new AvatarUploadCredentialPresentation(
@@ -222,6 +235,7 @@ public class ProfileAnonymousGrpcService extends SimpleProfileAnonymousGrpc.Prof
 
   @Override
   public DeleteAvatarResponse deleteAvatar(final DeleteAvatarRequest request) {
+    if (!anonymousEnabled) throw GrpcExceptions.unavailable("Anonymous profile and avatar operations unavailable");
     final AvatarUploadCredentialPresentation presentation;
     try {
       presentation = new AvatarUploadCredentialPresentation(

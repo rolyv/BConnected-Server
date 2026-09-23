@@ -64,6 +64,7 @@ import org.whispersystems.textsecuregcm.util.ProfileHelper;
 
 public class ProfileGrpcService extends SimpleProfileGrpc.ProfileImplBase {
 
+  private final org.whispersystems.textsecuregcm.storage.AdmittedProfiles admittedProfiles;
   private final Clock clock;
   private final AccountsManager accountsManager;
   private final ProfilesManager  profilesManager;
@@ -90,6 +91,17 @@ public class ProfileGrpcService extends SimpleProfileGrpc.ProfileImplBase {
       final GenericServerSecretParams genericServerSecretParams,
       final ProfileBadgeConverter profileBadgeConverter,
       final RateLimiters rateLimiters) {
+    this(clock, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager, badgesConfiguration,
+        policyGenerator, genericServerSecretParams, profileBadgeConverter, rateLimiters, null);
+  }
+
+  public ProfileGrpcService(final Clock clock, final AccountsManager accountsManager, final ProfilesManager profilesManager,
+      final Supplier<AsnInfoProvider> asnInfoProviderSupplier,
+      final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager,
+      final BadgesConfiguration badgesConfiguration, final AvatarUploadPolicyGenerator policyGenerator,
+      final GenericServerSecretParams genericServerSecretParams, final ProfileBadgeConverter profileBadgeConverter,
+      final RateLimiters rateLimiters, final org.whispersystems.textsecuregcm.storage.AdmittedProfiles admittedProfiles) {
+    this.admittedProfiles = admittedProfiles;
     this.clock = clock;
     this.accountsManager = accountsManager;
     this.profilesManager = profilesManager;
@@ -105,6 +117,7 @@ public class ProfileGrpcService extends SimpleProfileGrpc.ProfileImplBase {
 
   @Override
   public SetProfileResponse setProfile(final SetProfileRequest request) {
+    if (admittedProfiles != null) return setAdmittedProfile(request);
 
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
 
@@ -222,6 +235,8 @@ public class ProfileGrpcService extends SimpleProfileGrpc.ProfileImplBase {
 
   @Override
   public GetAvatarCredentialsResponse getAvatarCredentials(final GetAvatarCredentialsRequest request) {
+    // A blind credential has no current account-bound redemption path in this pilot.
+    if (admittedProfiles != null) throw GrpcExceptions.unavailable("Anonymous avatar credentials unavailable");
 
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
 
@@ -259,6 +274,24 @@ public class ProfileGrpcService extends SimpleProfileGrpc.ProfileImplBase {
     final ServiceIdentifier targetIdentifier =
         GrpcServiceIdentifierUtil.fromGrpcServiceIdentifier(request.getAccountIdentifier());
     final byte[] version = request.getVersion().toByteArray();
+    if (admittedProfiles != null) {
+      rateLimiters.getProfileLimiter().validate(authenticatedDevice.accountIdentifier());
+      try {
+        return admittedProfiles.grpcRead(authenticatedDevice, targetIdentifier, version, snapshot ->
+            ProfileGrpcHelper.getProfile(snapshot.account(), snapshot.account().hasCapability(DeviceCapability.PROFILES_V2)
+                    ? snapshot.v2() : Optional.empty(), profileBadgeConverter, version)
+                .map(profile -> request.getEtag().equals(profile.getEtag())
+                    ? GetProfileResponse.newBuilder().setEtagMatched(true).build()
+                    : GetProfileResponse.newBuilder().setProfile(profile).build())
+                .or(() -> ProfileGrpcHelper.getProfileV1(snapshot.account(), snapshot.v1(), profileBadgeConverter, version)
+                    .map(v1 -> GetProfileResponse.newBuilder().setLegacyProfile(v1).build()))
+                .orElseGet(() -> GetProfileResponse.newBuilder().setNotFound(NotFound.getDefaultInstance()).build()));
+      } catch (io.grpc.StatusRuntimeException failure) {
+        if (failure.getStatus().getCode() == io.grpc.Status.Code.NOT_FOUND)
+          return GetProfileResponse.newBuilder().setNotFound(NotFound.getDefaultInstance()).build();
+        throw failure;
+      }
+    }
     final Optional<Account> maybeAccount =
         validateRateLimitAndGetAccount(authenticatedDevice.accountIdentifier(), targetIdentifier);
 
@@ -279,6 +312,24 @@ public class ProfileGrpcService extends SimpleProfileGrpc.ProfileImplBase {
 
   @Override
   public SetV1AvatarResponse setV1Avatar(final SetV1AvatarRequest request) {
+    if (admittedProfiles != null) {
+      try {
+        return admittedProfiles.grpc(AuthenticationUtil.requireAuthenticatedDevice(), publication -> {
+          var current = publication.v1(request.getVersion());
+          if (current.isEmpty() && request.getCommitment().isEmpty())
+            throw new org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected(
+                org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Reason.COMMITMENT_REQUIRED);
+          publication.deleteOldAvatar(ProfileHelper.getCurrentAvatar(current));
+          String avatar = ProfileHelper.generateAvatarObjectName();
+          publication.setV1Avatar(request.getVersion(), avatar,
+              current.map(VersionedProfileV1::commitment).orElseGet(request.getCommitment()::toByteArray));
+          return () -> SetV1AvatarResponse.newBuilder().setForm(ProfileGrpcHelper.uploadForm(avatar,
+              publication.uploadPolicy(policyGenerator, avatar, ProfileHelper.MAX_PROFILE_AVATAR_SIZE_BYTES, clock.instant()))).build();
+        });
+      } catch (org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected rejected) {
+        throw GrpcExceptions.fieldViolation("commitment", "Commitment is required for new profile versions");
+      }
+    }
 
     final AuthenticatedDevice authenticatedDevice = AuthenticationUtil.requireAuthenticatedDevice();
 
@@ -304,6 +355,62 @@ public class ProfileGrpcService extends SimpleProfileGrpc.ProfileImplBase {
             ProfileHelper.MAX_PROFILE_AVATAR_SIZE_BYTES,
             policyGenerator, clock))
         .build();
+  }
+
+  private SetProfileResponse setAdmittedProfile(SetProfileRequest request) {
+    validateRequest(request);
+    final String remoteAddress = request.getPaymentAddress().isEmpty() ? null
+        : RequestAttributesUtil.getRemoteAddress().getHostAddress();
+    try {
+      return admittedProfiles.grpc(AuthenticationUtil.requireAuthenticatedDevice(), publication -> {
+        final Account account = publication.account();
+        if (!account.hasCapability(DeviceCapability.PROFILES_V2)) throw new org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected(
+            org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Reason.CAPABILITY);
+        final byte[] expectedVersion = request.getExpectedCurrentVersion().toByteArray();
+        if (!Arrays.equals(account.getCurrentProfileVersion().orElse(new byte[0]), expectedVersion))
+          throw new org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected(
+              org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Reason.VERSION_CONFLICT);
+        final byte[] version = request.getVersion().toByteArray();
+        final var oldV2 = publication.v2(version);
+        final var oldV1 = publication.v1(HexFormat.of().formatHex(version));
+        if (!request.getPaymentAddress().isEmpty() && ProfileHelper.isPaymentAddressUpdateForbidden(account, oldV2, oldV1,
+            remoteAddress, asnInfoProviderSupplier.get(), dynamicConfigurationManager))
+          throw new org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected(
+              org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Reason.PAYMENTS);
+        final var oldAvatar = ProfileHelper.getCurrentAvatar(oldV1);
+        final var change = AvatarChangeUtil.fromGrpcAvatarChange(request.getV1Request().getAvatarChange());
+        final String avatar = switch (change) {
+          case AVATAR_CHANGE_UNCHANGED -> oldAvatar.orElse(null);
+          case AVATAR_CHANGE_CLEAR -> null;
+          case AVATAR_CHANGE_UPDATE -> ProfileHelper.generateAvatarObjectName();
+          default -> throw GrpcExceptions.invalidArguments("Invalid avatar change");
+        };
+        final byte[] commitment = request.getCommitment().toByteArray();
+        final byte[] payment = request.getPaymentAddress().isEmpty() ? null : request.getPaymentAddress().toByteArray();
+        publication.setBoth(new VersionedProfileV1(HexFormat.of().formatHex(version), request.getV1Request().getName().toByteArray(),
+            avatar, request.getV1Request().getAboutEmoji().toByteArray(), request.getV1Request().getAbout().toByteArray(), payment,
+            request.getV1Request().getPhoneNumberSharing().toByteArray(), commitment),
+            new VersionedProfile(version, request.getData().toByteArray(), payment, commitment),
+            request.getExpectedCurrentDataHash().isEmpty() ? null : request.getExpectedCurrentDataHash().toByteArray());
+        account.setBadges(clock, ProfileHelper.mergeBadgeIdsWithExistingAccountBadges(clock, badgeConfigurationMap,
+            request.getBadgeIdsList(), account.getBadges()));
+        account.setCurrentProfileVersion(version);
+        if (change != org.whispersystems.textsecuregcm.entities.AvatarChange.AVATAR_CHANGE_UNCHANGED) publication.deleteOldAvatar(oldAvatar);
+        return () -> change == org.whispersystems.textsecuregcm.entities.AvatarChange.AVATAR_CHANGE_UPDATE
+            ? SetProfileResponse.newBuilder().setResult(SetProfileResult.newBuilder().setV1AvatarUploadForm(
+                ProfileGrpcHelper.uploadForm(avatar, publication.uploadPolicy(policyGenerator, avatar,
+                    ProfileHelper.MAX_PROFILE_AVATAR_SIZE_BYTES, clock.instant())))).build()
+            : SetProfileResponse.newBuilder().setResult(SetProfileResult.getDefaultInstance()).build();
+      });
+    } catch (org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected rejected) {
+      return switch (rejected.reason()) {
+        case CAPABILITY -> SetProfileResponse.newBuilder().setProfilesV2CapabilityRequired(ProfilesV2CapabilityRequired.getDefaultInstance()).build();
+        case PAYMENTS -> SetProfileResponse.newBuilder().setPaymentsForbiddenInRegion(PaymentsForbiddenInRegion.getDefaultInstance()).build();
+        case VERSION_CONFLICT -> SetProfileResponse.newBuilder().setExpectedVersionWriteConflict(FailedPrecondition.getDefaultInstance()).build();
+        case DATA_CONFLICT -> SetProfileResponse.newBuilder().setExpectedDataWriteConflict(FailedPrecondition.getDefaultInstance()).build();
+        default -> throw GrpcExceptions.invalidArguments("Invalid profile request");
+      };
+    }
   }
 
   private Optional<Account> validateRateLimitAndGetAccount(final UUID requesterUuid,

@@ -29,12 +29,14 @@ public final class AdmissionAccountMutationGuard {
   private final UUID aci;
   private final byte device;
   private final Account original;
+  private final boolean profileMutation;
   private final AtomicBoolean used = new AtomicBoolean();
   private AdmissionEntitlementGate.Authorization result;
 
   private AdmissionAccountMutationGuard(AdmissionEntitlementGate gate,
-      AdmissionEntitlementGate.DeviceAuthorization caller, UUID aci, byte device) {
+      AdmissionEntitlementGate.DeviceAuthorization caller, UUID aci, byte device, boolean profileMutation) {
     if (gate == null || caller == null || device != Device.PRIMARY_ID) throw new Failure(401);
+    this.profileMutation = profileMutation;
     this.gate = gate; this.caller = caller; this.aci = aci; this.device = device;
     original = checked(() -> caller.accountForCredentialIssuance(aci, device));
     if (original.getDevices().size() != 1 || original.getDevice(Device.PRIMARY_ID).isEmpty()) throw new Failure(401);
@@ -43,17 +45,31 @@ public final class AdmissionAccountMutationGuard {
   public static AdmissionAccountMutationGuard http(AdmissionEntitlementGate gate,
       org.whispersystems.textsecuregcm.auth.AuthenticatedDevice principal) {
     if (principal == null) throw new Failure(401);
-    return new AdmissionAccountMutationGuard(gate, principal.admissionAuthorization(), principal.accountIdentifier(), principal.deviceId());
+    return new AdmissionAccountMutationGuard(gate, principal.admissionAuthorization(), principal.accountIdentifier(), principal.deviceId(), false);
   }
   public static AdmissionAccountMutationGuard grpc(AdmissionEntitlementGate gate,
       org.whispersystems.textsecuregcm.auth.grpc.AuthenticatedDevice principal) {
     if (principal == null) throw new Failure(401);
-    return new AdmissionAccountMutationGuard(gate, principal.admissionAuthorization(), principal.accountIdentifier(), principal.deviceId());
+    return new AdmissionAccountMutationGuard(gate, principal.admissionAuthorization(), principal.accountIdentifier(), principal.deviceId(), false);
   }
+  public static AdmissionAccountMutationGuard profileHttp(AdmissionEntitlementGate gate,
+      org.whispersystems.textsecuregcm.auth.AuthenticatedDevice principal) {
+    if (principal == null) throw new Failure(401);
+    return new AdmissionAccountMutationGuard(gate, principal.admissionAuthorization(), principal.accountIdentifier(), principal.deviceId(), true);
+  }
+  public static AdmissionAccountMutationGuard profileGrpc(AdmissionEntitlementGate gate,
+      org.whispersystems.textsecuregcm.auth.grpc.AuthenticatedDevice principal) {
+    if (principal == null) throw new Failure(401);
+    return new AdmissionAccountMutationGuard(gate, principal.admissionAuthorization(), principal.accountIdentifier(), principal.deviceId(), true);
+  }
+  public void requireProfilePublication() { if (!profileMutation) throw unavailable(); }
   public Account begin() {
     if (!used.compareAndSet(false, true)) throw unavailable();
     requireFresh();
-    return SystemMapper.jsonMapper().convertValue(original, Account.class);
+    // Round-trip JSON bytes: cpv uses a string deserializer that cannot read convertValue binary tokens.
+    try {
+      return SystemMapper.jsonMapper().readValue(SystemMapper.jsonMapper().writeValueAsBytes(original), Account.class);
+    } catch (java.io.IOException failure) { throw unavailable(); }
   }
   public void requireCurrent(Connection connection) {
     checked(() -> { gate.requireCurrentKeys(connection, caller, aci, device, null, aci); return null; });
@@ -64,8 +80,12 @@ public final class AdmissionAccountMutationGuard {
   public void validate(Account updated) {
     if (!protectedFields(original).equals(protectedFields(updated))) throw unavailable();
   }
-  private static ObjectNode protectedFields(Account account) {
+  private ObjectNode protectedFields(Account account) {
     final ObjectNode tree = SystemMapper.jsonMapper().valueToTree(account);
+    if (profileMutation) {
+      tree.remove(List.of("cpv", "badges"));
+      return tree;
+    }
     tree.remove(List.of("registrationLock", "registrationLockSalt", "uak", "uua", "inCds"));
     if (account.getDevices().size() != 1 || account.getDevice(Device.PRIMARY_ID).isEmpty()) throw unavailable();
     final ObjectNode primary = (ObjectNode) tree.path("devices").get(0);

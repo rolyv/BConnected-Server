@@ -864,6 +864,11 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             accountsManager::invalidateCacheAfterAdmittedUpdate, admissionGate,
             ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionAccountUpdates", 64, environment)) : null;
 
+    final org.whispersystems.textsecuregcm.storage.AdmittedProfiles admittedProfiles = gcpPilot
+        ? new org.whispersystems.textsecuregcm.storage.AdmittedProfiles(postgres.dataSource(), postgres.accounts(), accountsManager,
+            profilesManager::invalidateCacheAfterAdmittedUpdate, gcsAvatars, admissionGate,
+            ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionProfiles", 64, environment)) : null;
+
     final MessageSender messageSender = new MessageSender(messagesManager, pushNotificationManager, dynamicConfigurationManager,
         admissionGate, gcpPilot ? ManagedExecutors.newVirtualThreadPerTaskExecutor("admissionMessageSends", 64, environment) : null);
     final ReceiptSender receiptSender = new ReceiptSender(accountsManager, messageSender, receiptSenderExecutor);
@@ -1133,7 +1138,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             gcpPilot ? null : new CallingGrpcService(cloudflareTurnCredentialsManager, rateLimiters),
             new CredentialsGrpcService(accountsManager, certificateGenerator, zkAuthOperations, callingGenericZkSecretParams, rateLimiters, Clock.systemUTC(), ExternalServiceDefinitions.createExternalServiceList(config, Clock.systemUTC()), !gcpPilot, gcpPilot),
             new KeysGrpcService(accountsManager, keysManager, rateLimiters, admissionGate, admittedKeys),
-            new ProfileGrpcService(clock, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager, config.getBadges(), profileCdnPolicyGenerator, chatGenericZkSecretParams, profileBadgeConverter, rateLimiters),
+            new ProfileGrpcService(clock, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager, config.getBadges(), profileCdnPolicyGenerator, chatGenericZkSecretParams, profileBadgeConverter, rateLimiters, admittedProfiles),
             new MessagesGrpcService(accountsManager, reportMessageManager, phoneNumberIdentifiers, rateLimiters, messageSender, messageByteLimitCardinalityEstimator, spamChecker, messageDispatcher, Clock.systemUTC(), admissionGrpcSessions, gcpPilot),
             gcpPilot ? null : new BackupsGrpcService(accountsManager, backupAuthManager, backupMetrics),
             new DevicesGrpcService(accountsManager, config.enabledPushTypes(),
@@ -1170,7 +1175,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             new KeysAnonymousGrpcService(accountsManager, keysManager, groupZkSecretParams, Clock.systemUTC(), !gcpPilot),
             gcpPilot ? null : new KeyTransparencyGrpcService(rateLimiters, keyTransparencyServiceClient),
             gcpPilot ? null : new LoginPurchaseGrpcService(loginPurchaseManager, dynamicConfigurationManager),
-            new ProfileAnonymousGrpcService(accountsManager, profilesManager, profileBadgeConverter, profileCdnPolicyGenerator, chatGenericZkSecretParams, groupZkSecretParams, rateLimiters, clock),
+            new ProfileAnonymousGrpcService(accountsManager, profilesManager, profileBadgeConverter, profileCdnPolicyGenerator, chatGenericZkSecretParams, groupZkSecretParams, rateLimiters, clock, !gcpPilot),
             new MessagesAnonymousGrpcService(accountsManager, rateLimiters, messageSender, groupSendTokenUtil, messageByteLimitCardinalityEstimator, spamChecker, Clock.systemUTC(), !gcpPilot),
             gcpPilot ? null : new BackupsAnonymousGrpcService(backupManager, backupMetrics, config.getAttachments().maxAttachmentUploadSizeInBytes(), config.getAttachments().maxMessageBackupUploadSizeInBytes()),
             config.isSvr2Enabled() ? new CredentialsAnonymousGrpcService(accountsManager, ExternalServiceDefinitions.SVR.generatorFactory().apply(config, Clock.systemUTC())) : null,
@@ -1326,7 +1331,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         gcpPilot ? null : new PaymentsController(currencyManager, paymentsCredentialsGenerator),
         new ProfileController(clock, rateLimiters, accountsManager, profilesManager, asnInfoProviderSupplier,
             dynamicConfigurationManager, profileBadgeConverter, config.getBadges(), profileCdnPolicyGenerator,
-            groupZkSecretParams, zkProfileOperations, batchIdentityCheckExecutor, !gcpPilot),
+            groupZkSecretParams, zkProfileOperations, batchIdentityCheckExecutor, !gcpPilot, admittedProfiles),
         gcpPilot ? null : new ProvisioningController(rateLimiters, provisioningManager),
         gcpPilot ? null : new RegistrationController(accountsManager, phoneVerificationTokenManager, registrationLockVerificationManager,
             rateLimiters, registrationFraudChecker, ReceiptCredentialPresentation::new, zkReceiptOperations, clock, dynamicConfigurationManager),

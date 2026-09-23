@@ -238,6 +238,8 @@ public class ProfilesManager {
     }
   }
 
+  public void invalidateCacheAfterAdmittedUpdate(UUID uuid) { redisDelete(uuid); }
+
   private void redisDelete(UUID uuid) {
     ResilienceUtil.getGeneralRedisRetry(RETRY_NAME)
         .executeRunnable(() -> cacheCluster.withBinaryCluster(

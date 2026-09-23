@@ -47,6 +47,12 @@ public final class GcsAvatarStorage implements AvatarObjectStorage, AvatarUpload
 
   @Override
   public UploadPolicy createFor(String objectName, int maxSizeInBytes, Instant currentTime) {
+    return createFor(objectName, maxSizeInBytes, currentTime, () -> {});
+  }
+
+  @Override
+  public UploadPolicy createFor(String objectName, int maxSizeInBytes, Instant currentTime, Runnable requireCurrent) {
+    requireCurrent.run();
     requireAvatarKey(objectName);
     if (maxSizeInBytes < 1 || maxSizeInBytes > ProfileHelper.MAX_PROFILE_AVATAR_SIZE_BYTES) {
       throw new IllegalArgumentException("Avatar upload length is outside the supported range");
@@ -67,7 +73,9 @@ public final class GcsAvatarStorage implements AvatarObjectStorage, AvatarUpload
       throw new IllegalStateException("Could not serialize avatar upload policy", e);
     }
     // V4 POST signatures sign the base64 policy bytes, not the decoded JSON or a signed-URL string-to-sign.
+    requireCurrent.run();
     String signature = HexFormat.of().formatHex(signer.sign(encoded.getBytes(StandardCharsets.UTF_8)));
+    requireCurrent.run();
     return new UploadPolicy(credential, "", ALGORITHM, timestamp, encoded, signature);
   }
 
@@ -75,6 +83,17 @@ public final class GcsAvatarStorage implements AvatarObjectStorage, AvatarUpload
   public CompletableFuture<Void> delete(String key) {
     requireAvatarKey(key);
     return CompletableFuture.runAsync(() -> storage.delete(BlobId.of(bucket, key)), executor);
+  }
+
+  @Override
+  public CompletableFuture<Void> delete(String key, Runnable requireCurrent) {
+    requireAvatarKey(key);
+    requireCurrent.run();
+    return CompletableFuture.runAsync(() -> {
+      requireCurrent.run();
+      storage.delete(BlobId.of(bucket, key));
+      requireCurrent.run();
+    }, executor);
   }
 
   @Override

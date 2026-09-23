@@ -107,6 +107,7 @@ import org.whispersystems.textsecuregcm.util.Util;
 @Path("/v1/profile")
 @Tag(name = "Profile")
 public class ProfileController {
+  private final org.whispersystems.textsecuregcm.storage.AdmittedProfiles admittedProfiles;
   private final Clock clock;
   private final RateLimiters rateLimiters;
   private final ProfilesManager profilesManager;
@@ -159,6 +160,20 @@ public class ProfileController {
       final ServerSecretParams serverSecretParams,
       final ServerZkProfileOperations zkProfileOperations,
       final Executor batchIdentityCheckExecutor, final boolean anonymousIdentityChecksEnabled) {
+    this(clock, rateLimiters, accountsManager, profilesManager, asnInfoProviderSupplier, dynamicConfigurationManager,
+        profileBadgeConverter, badgesConfiguration, policyGenerator, serverSecretParams, zkProfileOperations,
+        batchIdentityCheckExecutor, anonymousIdentityChecksEnabled, null);
+  }
+
+  public ProfileController(final Clock clock, final RateLimiters rateLimiters, final AccountsManager accountsManager,
+      final ProfilesManager profilesManager, final Supplier<AsnInfoProvider> asnInfoProviderSupplier,
+      final DynamicConfigurationManager<DynamicConfiguration> dynamicConfigurationManager,
+      final ProfileBadgeConverter profileBadgeConverter, final BadgesConfiguration badgesConfiguration,
+      final AvatarUploadPolicyGenerator policyGenerator, final ServerSecretParams serverSecretParams,
+      final ServerZkProfileOperations zkProfileOperations, final Executor batchIdentityCheckExecutor,
+      final boolean anonymousIdentityChecksEnabled,
+      final org.whispersystems.textsecuregcm.storage.AdmittedProfiles admittedProfiles) {
+    this.admittedProfiles = admittedProfiles;
     this.anonymousIdentityChecksEnabled = anonymousIdentityChecksEnabled;
     this.clock = clock;
     this.rateLimiters = rateLimiters;
@@ -193,6 +208,7 @@ public class ProfileController {
   public Response setProfile(@Auth AuthenticatedDevice auth,
       @NotNull @Valid CreateProfileRequest request,
       @Context final ContainerRequestContext requestContext) {
+    if (admittedProfiles != null) return setAdmittedProfile(auth, request, requestContext);
 
     final Account account = accountsManager.getByAccountIdentifier(auth.accountIdentifier())
         .orElseThrow(() -> new WebApplicationException(Response.Status.UNAUTHORIZED));
@@ -269,6 +285,15 @@ public class ProfileController {
       @HeaderParam(HttpHeaders.USER_AGENT) String userAgent)
       throws RateLimitExceededException {
 
+    if (admittedProfiles != null) {
+      final AuthenticatedDevice caller = requireIdentifiedProfileRead(maybeAuthenticatedDevice, accessKey, Optional.empty());
+      rateLimiters.getProfileLimiter().validate(caller.accountIdentifier());
+      return admittedProfiles.httpRead(caller, accountIdentifier, version, snapshot ->
+          buildVersionedProfileResponse(snapshot.account(), version,
+              caller.accountIdentifier().equals(snapshot.account().getAccountIdentifier()), false,
+              containerRequestContext, snapshot.v1()));
+    }
+
     final Optional<Account> maybeRequester =
         maybeAuthenticatedDevice.map(
             authenticatedDevice -> accountsManager.getByAccountIdentifier(authenticatedDevice.accountIdentifier())
@@ -313,6 +338,14 @@ public class ProfileController {
       throw new BadRequestException();
     }
 
+    if (admittedProfiles != null) {
+      final AuthenticatedDevice caller = requireIdentifiedProfileRead(maybeAuthenticatedDevice, accessKey, Optional.empty());
+      rateLimiters.getProfileLimiter().validate(caller.accountIdentifier());
+      return admittedProfiles.httpRead(caller, accountIdentifier, version, snapshot ->
+          buildExpiringProfileKeyCredentialProfileResponse(snapshot.account(), version, credentialRequest,
+              caller.accountIdentifier().equals(snapshot.account().getAccountIdentifier()), containerRequestContext, snapshot.v1()));
+    }
+
     final Optional<Account> maybeRequester =
         maybeAuthenticatedDevice.map(
             authenticatedDevice -> accountsManager.getByAccountIdentifier(authenticatedDevice.accountIdentifier())
@@ -350,6 +383,16 @@ public class ProfileController {
       @HeaderParam(HttpHeaders.USER_AGENT) String userAgent,
       @PathParam("identifier") ServiceIdentifier identifier)
       throws RateLimitExceededException {
+
+    if (admittedProfiles != null) {
+      final AuthenticatedDevice caller = requireIdentifiedProfileRead(maybeAuthenticatedDevice, accessKey, groupSendToken);
+      rateLimiters.getProfileLimiter().validate(caller.accountIdentifier());
+      return admittedProfiles.httpRead(caller, identifier, null, snapshot -> switch (identifier.identityType()) {
+        case ACI -> buildBaseProfileResponseForAccountIdentity(snapshot.account(),
+            caller.accountIdentifier().equals(snapshot.account().getAccountIdentifier()), containerRequestContext);
+        case PNI -> buildBaseProfileResponseForPhoneNumberIdentity(snapshot.account());
+      });
+    }
 
     final Optional<Account> maybeRequester =
         maybeAuthenticatedDevice.map(
@@ -463,10 +506,21 @@ public class ProfileController {
       final boolean isSelf,
       final ContainerRequestContext containerRequestContext) {
 
+    return buildExpiringProfileKeyCredentialProfileResponse(account, version, encodedCredentialRequest, isSelf,
+        containerRequestContext, profilesManager.getV1(account.getAccountIdentifier(), version));
+  }
+
+  private ExpiringProfileKeyCredentialProfileResponse buildExpiringProfileKeyCredentialProfileResponse(
+      final Account account,
+      final String version,
+      final String encodedCredentialRequest,
+      final boolean isSelf,
+      final ContainerRequestContext containerRequestContext, final Optional<VersionedProfileV1> currentProfile) {
+
     final ExpiringProfileKeyCredentialResponse expiringProfileKeyCredentialResponse;
 
     if (account.getCurrentProfileVersion().map(v -> HexFormat.of().formatHex(v).equals(version)).orElse(false)) {
-      expiringProfileKeyCredentialResponse = profilesManager.getV1(account.getAccountIdentifier(), version)
+      expiringProfileKeyCredentialResponse = currentProfile
           .map(profile -> {
             final ExpiringProfileKeyCredentialResponse profileKeyCredentialResponse;
             try {
@@ -485,7 +539,7 @@ public class ProfileController {
     }
 
     return new ExpiringProfileKeyCredentialProfileResponse(
-        buildVersionedProfileResponse(account, version, isSelf, true, containerRequestContext),
+        buildVersionedProfileResponse(account, version, isSelf, true, containerRequestContext, currentProfile),
         expiringProfileKeyCredentialResponse);
   }
 
@@ -495,7 +549,15 @@ public class ProfileController {
       final boolean hasCredentialRequest,
       final ContainerRequestContext containerRequestContext) {
 
-    final Optional<VersionedProfileV1> maybeProfile = profilesManager.getV1(account.getAccountIdentifier(), version);
+    return buildVersionedProfileResponse(account, version, isSelf, hasCredentialRequest, containerRequestContext,
+        profilesManager.getV1(account.getAccountIdentifier(), version));
+  }
+
+  private VersionedProfileResponse buildVersionedProfileResponse(final Account account,
+      final String version,
+      final boolean isSelf,
+      final boolean hasCredentialRequest,
+      final ContainerRequestContext containerRequestContext, final Optional<VersionedProfileV1> maybeProfile) {
 
     if (maybeProfile.isEmpty()) {
       // this can happen if an account re-registers, which includes some device-transfer scenarios
@@ -588,6 +650,44 @@ public class ProfileController {
     assert maybeTargetAccount.isPresent();
 
     return maybeTargetAccount.get();
+  }
+
+  private AuthenticatedDevice requireIdentifiedProfileRead(Optional<AuthenticatedDevice> principal,
+      Optional<Anonymous> access, Optional<GroupSendTokenHeader> group) {
+    if (principal.isEmpty() || access.isPresent() || group.isPresent()) throw new WebApplicationException(503);
+    return principal.orElseThrow();
+  }
+
+  private Response setAdmittedProfile(AuthenticatedDevice auth, CreateProfileRequest request, ContainerRequestContext context) {
+    try {
+      return admittedProfiles.http(auth, publication -> {
+        final Account account = publication.account();
+        if (account.hasCapability(DeviceCapability.PROFILES_V2))
+          throw new org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected(
+              org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Reason.CAPABILITY);
+        final var currentProfile = publication.v1(request.version());
+        final String remoteAddress = (String) context.getProperty(RemoteAddressFilter.REMOTE_ADDRESS_ATTRIBUTE_NAME);
+        if (request.paymentAddress() != null && request.paymentAddress().length != 0 &&
+            ProfileHelper.isPaymentAddressUpdateForbidden(account, Optional.empty(), currentProfile, remoteAddress,
+                asnInfoProviderSupplier.get(), dynamicConfigurationManager))
+          throw new org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected(
+              org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Reason.PAYMENTS);
+        final var currentAvatar = ProfileHelper.getCurrentAvatar(currentProfile);
+        final String avatar = ProfileHelper.getAvatar(request.getAvatarChange(), currentAvatar);
+        publication.setV1(new VersionedProfileV1(request.version(), request.name(), avatar, request.aboutEmoji(),
+            request.about(), request.paymentAddress(), request.phoneNumberSharing(), request.commitment().serialize()));
+        if (request.getAvatarChange() != CreateProfileRequest.AvatarChange.UNCHANGED) publication.deleteOldAvatar(currentAvatar);
+        account.setBadges(clock, request.badges().map(badges ->
+            ProfileHelper.mergeBadgeIdsWithExistingAccountBadges(clock, badgeConfigurationMap, badges, account.getBadges()))
+            .orElseGet(account::getBadges));
+        account.setCurrentProfileVersion(HexFormat.of().parseHex(request.version()));
+        return () -> request.getAvatarChange() == CreateProfileRequest.AvatarChange.UPDATE
+            ? Response.ok(publication.uploadPolicy(policyGenerator, avatar, ProfileHelper.MAX_PROFILE_AVATAR_SIZE_BYTES,
+                clock.instant()).attributes(avatar)).build() : Response.ok().build();
+      });
+    } catch (org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Rejected rejected) {
+      return Response.status(rejected.reason() == org.whispersystems.textsecuregcm.storage.AdmittedProfiles.Reason.CAPABILITY ? 412 : 403).build();
+    }
   }
 
   private ProfileAvatarUploadAttributes generateAvatarUploadForm(final String objectName) {

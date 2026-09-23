@@ -47,8 +47,12 @@ public class ProfileGrpcHelper {
       final ProfilesManager profilesManager,
       final ProfileBadgeConverter profileBadgeConverter,
       final byte[] requestVersion) {
-    final Optional<VersionedProfileV1> maybeV1Profile =
-        profilesManager.getV1(account.getAccountIdentifier(), HexFormat.of().formatHex(requestVersion));
+    return getProfileV1(account, profilesManager.getV1(account.getAccountIdentifier(), HexFormat.of().formatHex(requestVersion)),
+        profileBadgeConverter, requestVersion);
+  }
+
+  static Optional<LegacyProfileResult> getProfileV1(final Account account, final Optional<VersionedProfileV1> maybeV1Profile,
+      final ProfileBadgeConverter profileBadgeConverter, final byte[] requestVersion) {
     if (maybeV1Profile.isEmpty()) {
       return Optional.empty();
     }
@@ -87,9 +91,12 @@ public class ProfileGrpcHelper {
       final ProfileBadgeConverter profileBadgeConverter,
       final byte[] requestVersion) {
 
-    final Optional<VersionedProfile> maybeProfile = account.hasCapability(DeviceCapability.PROFILES_V2)
-        ? profilesManager.get(account.getAccountIdentifier(), requestVersion)
-        : Optional.empty();
+    return getProfile(account, account.hasCapability(DeviceCapability.PROFILES_V2)
+        ? profilesManager.get(account.getAccountIdentifier(), requestVersion) : Optional.empty(), profileBadgeConverter, requestVersion);
+  }
+
+  static Optional<ProfileResult> getProfile(final Account account, final Optional<VersionedProfile> maybeProfile,
+      final ProfileBadgeConverter profileBadgeConverter, final byte[] requestVersion) {
     if (maybeProfile.isEmpty()) {
       return Optional.empty();
     }
@@ -163,6 +170,10 @@ public class ProfileGrpcHelper {
     final AvatarUploadPolicyGenerator.UploadPolicy policy =
         policyGenerator.createFor(objectName, uploadLength, clock.instant());
 
+    return uploadForm(objectName, policy);
+  }
+
+  public static S3UploadForm uploadForm(String objectName, AvatarUploadPolicyGenerator.UploadPolicy policy) {
     return S3UploadForm.newBuilder()
         .setAcl(policy.acl())
         .setAlgorithm(policy.algorithm())
