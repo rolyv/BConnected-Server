@@ -44,13 +44,13 @@ class GroupResolveEndpointTest {
   }
   @ParameterizedTest @ValueSource(strings = {"subject", "audience", "issuer", "expired", "future", "signature", "missing"})
   void rejectsWrongServiceIdentityWithoutConsumingHandle(String failure) throws Exception {
-    try (var ticket = registry.retain(proof, operation)) {
+    try (var ticket = registry.retain(proof, operation); var endpoint = endpoint(registry)) {
       long now = CLOCK.instant().getEpochSecond();
       String bearer = failure.equals("missing") ? null : token(failure.equals("issuer") ? "https://evil.test" : ISSUER,
           failure.equals("audience") ? "https://wrong.test" : ORIGIN.toString(), failure.equals("subject") ? "operator" : SUBJECT,
           failure.equals("future") ? now + 20 : now - 10, failure.equals("expired") ? now - 1 : now + 3500,
           failure.equals("signature") ? keys() : KEYS);
-      assertThatThrownBy(() -> endpoint(registry).resolve("POST", GroupBridgeProtocol.RESOLVE_PATH,
+      assertThatThrownBy(() -> endpoint.resolve("POST", GroupBridgeProtocol.RESOLVE_PATH,
           "application/json", null, bearer, GroupBridgeProtocol.encode(request(ticket)))).isInstanceOf(SecurityException.class);
       assertThat(resolve(registry, request(ticket)).membership().aci()).isEqualTo(aci);
     }
@@ -62,8 +62,10 @@ class GroupResolveEndpointTest {
     assertThatThrownBy(() -> resolve(registry, wrong)).isInstanceOf(SecurityException.class);
     assertThatThrownBy(() -> resolve(registry, request(ticket))).isInstanceOf(SecurityException.class);
     var active = registry.retain(proof, operation);
-    assertThatThrownBy(() -> endpoint(registry).resolve("POST", GroupBridgeProtocol.RESOLVE_PATH,
-        "application/json", "gzip", token(), GroupBridgeProtocol.encode(request(active)))).isInstanceOf(SecurityException.class);
+    try (var endpoint = endpoint(registry)) {
+      assertThatThrownBy(() -> endpoint.resolve("POST", GroupBridgeProtocol.RESOLVE_PATH,
+          "application/json", "gzip", token(), GroupBridgeProtocol.encode(request(active)))).isInstanceOf(SecurityException.class);
+    }
     active.close(); assertThatThrownBy(() -> resolve(registry, request(active))).isInstanceOf(SecurityException.class);
     assertThatThrownBy(() -> resolve(registry, new ResolveRequest(binary, binary, operation))).isInstanceOf(SecurityException.class);
   }

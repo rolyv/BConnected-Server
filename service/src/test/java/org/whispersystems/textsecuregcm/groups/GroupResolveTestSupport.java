@@ -24,8 +24,11 @@ public final class GroupResolveTestSupport {
     catch (Exception e) { throw new AssertionError(e); }
   }
   static GroupResolveEndpoint endpoint(GroupOriginalProofRegistry registry) {
-    return new GroupResolveEndpoint(registry, ORIGIN, SUBJECT, TokenVerifier.newBuilder().setIssuer(ISSUER)
-        .setAudience(ORIGIN.toString()).setPublicKey(KEYS.getPublic()).setClock(CLOCK::millis).build(), CLOCK);
+    return new GroupResolveEndpoint(registry, ORIGIN, SUBJECT, verifier(), CLOCK);
+  }
+  static TokenVerifier verifier() {
+    return TokenVerifier.newBuilder().setIssuer(ISSUER).setAudience(ORIGIN.toString())
+        .setPublicKey(KEYS.getPublic()).setClock(CLOCK::millis).build();
   }
   static String token(String issuer, String audience, String subject, long issued, long expiry, KeyPair keys) throws Exception {
     var h = new JsonWebSignature.Header().setAlgorithm("RS256").setKeyId("synthetic");
@@ -35,7 +38,9 @@ public final class GroupResolveTestSupport {
   }
   static String token() throws Exception { long now = CLOCK.instant().getEpochSecond(); return token(ISSUER, ORIGIN.toString(), SUBJECT, now, now + 3600, KEYS); }
   public static GroupBridgeProtocol.Resolution resolve(GroupOriginalProofRegistry registry, GroupBridgeProtocol.ResolveRequest request) throws Exception {
-    return GroupBridgeProtocol.resolution(endpoint(registry).resolve("POST", GroupBridgeProtocol.RESOLVE_PATH,
-        "application/json", null, token(), GroupBridgeProtocol.encode(request)));
+    try (var endpoint = endpoint(registry)) {
+      return GroupBridgeProtocol.resolution(endpoint.resolve("POST", GroupBridgeProtocol.RESOLVE_PATH,
+          "application/json", null, token(), GroupBridgeProtocol.encode(request)));
+    }
   }
 }
