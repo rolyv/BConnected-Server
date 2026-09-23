@@ -8,9 +8,7 @@ public enum RuntimeMode {
   LEGACY,
   GCP_PILOT;
 
-  private static final Set<String> PILOT_WORKERS = Set.of("message-persister-service", "scheduled-apn-sender",
-      "rmuser", "unlink-device", "set-discoverability", "remove-expired-accounts", "remove-expired-username-holds",
-      "remove-expired-devices", "unlink-devices-with-idle-primary");
+  private static final Set<String> PILOT_WORKERS = Set.of("message-persister-service");
 
   public void requireWorker(final String name) {
     if (this == GCP_PILOT && !PILOT_WORKERS.contains(name)) {

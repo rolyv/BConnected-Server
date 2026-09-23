@@ -12,7 +12,9 @@ import org.whispersystems.textsecuregcm.util.SystemMapper;
 
 class GcpPilotWorkerDependenciesTest {
   @ParameterizedTest
-  @ValueSource(strings = {"backup-metrics", "backup-usage-recalculation", "remove-expired-backups",
+  @ValueSource(strings = {"scheduled-apn-sender", "rmuser", "unlink-device", "set-discoverability",
+      "remove-expired-accounts", "remove-expired-username-holds", "remove-expired-devices",
+      "unlink-devices-with-idle-primary", "backup-metrics", "backup-usage-recalculation", "remove-expired-backups",
       "clear-issued-receipt-redemptions", "notify-idle-devices", "process-idle-device-notification-jobs",
       "clear-expired-foundationdb-messages", "trim-oversized-fdb-message-queues", "clear-orphaned-foundationdb-queues",
       "regenerate-secondary-dynamodb-table-data", "start-push-notification-experiment", "unknown-plugin-worker"})
@@ -26,11 +28,17 @@ class GcpPilotWorkerDependenciesTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"message-persister-service", "scheduled-apn-sender", "rmuser", "unlink-device",
-      "set-discoverability", "remove-expired-accounts", "remove-expired-username-holds", "remove-expired-devices",
-      "unlink-devices-with-idle-primary"})
-  void supportedNativeWorkerRemainsSelectable(final String name) {
+  @ValueSource(strings = {"message-persister-service"})
+  void messagePersisterRemainsSelectableInPilot(final String name) {
     RuntimeMode.GCP_PILOT.requireWorker(name);
+    RuntimeMode.LEGACY.requireWorker(name);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"scheduled-apn-sender", "rmuser", "unlink-device", "set-discoverability",
+      "remove-expired-accounts", "remove-expired-username-holds", "remove-expired-devices",
+      "unlink-devices-with-idle-primary"})
+  void previouslySelectableWorkersRemainAvailableInLegacy(final String name) {
     RuntimeMode.LEGACY.requireWorker(name);
   }
 }

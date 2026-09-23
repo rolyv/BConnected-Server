@@ -53,4 +53,28 @@ class PilotAccountOperationsGrpcTest extends SimpleBaseGrpcTest<AccountsGrpcServ
     assertThat(failure.getStatus().getCode()).isEqualTo(Status.Code.UNAVAILABLE);
     verifyNoInteractions(accounts, rates, numbers, recovery);
   }
+
+  @Test void allMfaOperationsRejectedOnWireBeforeCollaboratorEffects() {
+    assertMfaUnavailable(() -> authenticatedServiceStub().generateTotpKey(GenerateTotpKeyRequest.getDefaultInstance()));
+    assertMfaUnavailable(() -> authenticatedServiceStub().confirmTotpKey(ConfirmTotpKeyRequest.newBuilder()
+        .setOneTimePassword(123456).setMetadataCiphertext(ByteString.copyFrom(new byte[160])).build()));
+    assertMfaUnavailable(() -> authenticatedServiceStub().startWebAuthnRegistration(StartWebAuthnRegistrationRequest.getDefaultInstance()));
+    assertMfaUnavailable(() -> authenticatedServiceStub().finishWebAuthnRegistration(FinishWebAuthnRegistrationRequest.newBuilder()
+        .setAttestationObject(ByteString.copyFrom(new byte[128])).setCollectedClientDataJson("{\"type\":\"webauthn.create\"}")
+        .setMetadataCiphertext(ByteString.copyFrom(new byte[160])).build()));
+    assertMfaUnavailable(() -> authenticatedServiceStub().listMfaKeys(ListMfaKeysRequest.getDefaultInstance()));
+    assertMfaUnavailable(() -> authenticatedServiceStub().setMfaKeyMetadata(SetMfaKeyMetadataRequest.newBuilder()
+        .setKeyId(0).setMetadataCiphertext(ByteString.copyFrom(new byte[160])).build()));
+    assertMfaUnavailable(() -> authenticatedServiceStub().removeMfaKey(RemoveMfaKeyRequest.newBuilder().setKeyId(0).build()));
+    assertMfaUnavailable(() -> authenticatedServiceStub().startMfaVerification(StartMfaVerificationRequest.getDefaultInstance()));
+    assertMfaUnavailable(() -> authenticatedServiceStub().finishMfaVerification(FinishMfaVerificationRequest.newBuilder()
+        .setTotpPassword(123456).build()));
+
+    verifyNoInteractions(accounts, rates, numbers, recovery);
+  }
+
+  private static void assertMfaUnavailable(final Runnable operation) {
+    var failure = assertThrows(StatusRuntimeException.class, operation::run);
+    assertThat(failure.getStatus().getCode()).isEqualTo(Status.Code.UNAVAILABLE);
+  }
 }

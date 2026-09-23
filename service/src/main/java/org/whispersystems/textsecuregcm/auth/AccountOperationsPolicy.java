@@ -13,6 +13,7 @@ public enum AccountOperationsPolicy {
   public void requireLinkedDevices() { require("Linked devices and device transfer"); }
   public void requirePhoneNumberChange() { require("Phone number changes"); }
   public void requireRecoveryPasswordChanges() { require("Recovery password changes"); }
+  public void requireMfaOperations() { require("MFA operations"); }
 
   public void requireDeviceTarget(byte deviceId) {
     if (deviceId != org.whispersystems.textsecuregcm.storage.Device.PRIMARY_ID) requireLinkedDevices();

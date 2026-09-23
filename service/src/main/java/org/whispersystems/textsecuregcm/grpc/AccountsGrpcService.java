@@ -612,6 +612,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public GenerateTotpKeyResponse generateTotpKey(final GenerateTotpKeyRequest request) {
+    operationsPolicy.requireMfaOperations();
     try {
       final Account account = getAuthenticatedAccount();
       if (account.getNumber().isPresent()) {
@@ -640,6 +641,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public ConfirmTotpKeyResponse confirmTotpKey(final ConfirmTotpKeyRequest request) {
+    operationsPolicy.requireMfaOperations();
     try {
       final Account account = getAuthenticatedAccount();
       if (account.getNumber().isPresent()) {
@@ -669,6 +671,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public StartWebAuthnRegistrationResponse startWebAuthnRegistration(final StartWebAuthnRegistrationRequest request) {
+    operationsPolicy.requireMfaOperations();
 
     final Account account = getAuthenticatedAccount();
     if (account.getNumber().isPresent()) {
@@ -695,6 +698,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public FinishWebAuthnRegistrationResponse finishWebAuthnRegistration(final FinishWebAuthnRegistrationRequest request) {
+    operationsPolicy.requireMfaOperations();
     final Account account = getAuthenticatedAccount();
     if (account.getNumber().isPresent()) {
       throw GrpcExceptions.invalidArguments("WebAuthn keys may not be set for an account with a number");
@@ -721,6 +725,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public ListMfaKeysResponse listMfaKeys(final ListMfaKeysRequest request) {
+    operationsPolicy.requireMfaOperations();
     final ListMfaKeysResponse.Builder responseBuilder = ListMfaKeysResponse.newBuilder();
 
     getAuthenticatedAccount().getMfaKeys().forEach((keyId, mfaKey) -> {
@@ -741,6 +746,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public SetMfaKeyMetadataResponse setMfaKeyMetadata(final SetMfaKeyMetadataRequest request) {
+    operationsPolicy.requireMfaOperations();
     final byte keyId = validateMfaKeyId(request.getKeyId());
 
     try {
@@ -769,6 +775,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public RemoveMfaKeyResponse removeMfaKey(final RemoveMfaKeyRequest request) {
+    operationsPolicy.requireMfaOperations();
     final byte keyId = validateMfaKeyId(request.getKeyId());
 
     accountsManager.update(AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier(), account -> {
@@ -783,6 +790,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public StartMfaVerificationResponse startMfaVerification(final StartMfaVerificationRequest request) {
+    operationsPolicy.requireMfaOperations();
     final Account account = getAuthenticatedAccount();
 
     final StartMfaVerificationResponse.Builder builder = StartMfaVerificationResponse.newBuilder()
@@ -797,6 +805,7 @@ public class AccountsGrpcService extends SimpleAccountsGrpc.AccountsImplBase {
 
   @Override
   public FinishMfaVerificationResponse finishMfaVerification(final FinishMfaVerificationRequest request) throws RateLimitExceededException {
+    operationsPolicy.requireMfaOperations();
     rateLimiters.getCheckMfaLimiter().validate(AuthenticationUtil.requireAuthenticatedDevice().accountIdentifier());
 
     final Account account = getAuthenticatedAccount();
