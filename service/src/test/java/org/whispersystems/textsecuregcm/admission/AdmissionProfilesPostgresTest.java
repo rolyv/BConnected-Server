@@ -29,6 +29,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.signal.chat.profile.*;
 import org.signal.libsignal.protocol.ServiceId;
 import org.signal.libsignal.zkgroup.*;
@@ -251,6 +252,43 @@ class AdmissionProfilesPostgresTest {
   @Test void successfulV1PublicationDeletesStaleV2InSameTransaction() throws Exception {
     nativeProfiles.setBoth(fixture.aci,storedProfile(),new VersionedProfile(version,new byte[]{9},null,commitment.serialize()),null);
     assertThat(((ContainerResponse)invoke(Route.HTTP_SET)).getStatus()).isEqualTo(200);assertThat(nativeProfiles.getV2(fixture.aci,version)).isEmpty();
+  }
+  @ParameterizedTest @ValueSource(booleans={false,true})
+  void initialIosShapedV1PublicationCreatesProfileWithoutPriorRowOrCurrentVersion(boolean withName) throws Exception {
+    try (var connection=fixture.flow.ds.getConnection();
+         var delete=connection.prepareStatement("DELETE FROM signal.profiles_v1 WHERE account_id=?")) {
+      delete.setObject(1,fixture.aci);delete.executeUpdate();
+    }
+    var initial=account();initial.setCurrentProfileVersion(null);
+    new AccountsPostgres(fixture.flow.ds,fixture.flow.http.clock,Runnable::run).update(initial);
+    refreshPrincipal();
+    assertThat(nativeProfiles.getV1(fixture.aci,versionHex)).isEmpty();
+    assertThat(account().getCurrentProfileVersion()).isEmpty();
+    int before=account().getVersion();
+    byte[] name=withName?new byte[81]:null;
+    // Match OWSRequestFactory's actual JSON shape: a missing name is omitted, never null.
+    var request=new LinkedHashMap<String,Object>();
+    request.put("avatar",true);request.put("sameAvatar",true);request.put("badgeIds",List.of());
+    request.put("commitment",Base64.getEncoder().encodeToString(commitment.serialize()));
+    request.put("phoneNumberSharing",Base64.getEncoder().encodeToString(new byte[29]));
+    request.put("version",versionHex);
+    if(withName) request.put("name",Base64.getEncoder().encodeToString(name));
+    var malformed=new LinkedHashMap<>(request);
+    malformed.put("name",Base64.getEncoder().encodeToString(new byte[1]));
+    assertThat(http("PUT","/v1/profile",malformed,true).getStatus()).isEqualTo(400);
+    malformed.put("name","");
+    assertThat(http("PUT","/v1/profile",malformed,true).getStatus()).isEqualTo(400);
+    assertThat(nativeProfiles.getV1(fixture.aci,versionHex)).isEmpty();
+    assertThat(account().getVersion()).isEqualTo(before);
+    var response=http("PUT","/v1/profile",request,true);
+    assertThat(response.getStatus()).isEqualTo(200);
+    assertThat(response.hasEntity()).isFalse();
+    var created=nativeProfiles.getV1(fixture.aci,versionHex).orElseThrow();
+    assertThat(created.name()).isEqualTo(name);
+    assertThat(created.avatar()).isNull();
+    assertThat(created.phoneNumberSharing()).hasSize(29);
+    assertThat(account().getCurrentProfileVersion().orElseThrow()).containsExactly(version);
+    assertThat(account().getVersion()).isEqualTo(before+1);
   }
   @Test void profileGuardCannotChangeDeviceOrIdentityFields() throws Exception {
     String original=row();assertThrows(jakarta.ws.rs.WebApplicationException.class,()->profiles.http(principal,p->{

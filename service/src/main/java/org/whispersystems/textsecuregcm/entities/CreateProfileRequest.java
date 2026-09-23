@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import org.signal.libsignal.zkgroup.profiles.ProfileKeyCommitment;
 import org.whispersystems.textsecuregcm.util.ByteArrayBase64WithPaddingAdapter;
 import org.whispersystems.textsecuregcm.util.ExactlySize;
@@ -38,7 +39,10 @@ public record CreateProfileRequest(
   @JsonProperty
   @JsonSerialize(using = ByteArrayBase64WithPaddingAdapter.Serializing.class)
   @JsonDeserialize(using = ByteArrayBase64WithPaddingAdapter.Deserializing.class)
-  @ExactlySize({81, 285})
+  // A first profile may have no encrypted name. Size rejects an explicit empty ciphertext;
+  // ExactlySize still restricts every present ciphertext to a valid padded length.
+  @Size(min = 1)
+  @ExactlySize({0, 81, 285})
   byte[] name,
 
   @Schema(description = "Encrypted about emoji. Padded base64.")
