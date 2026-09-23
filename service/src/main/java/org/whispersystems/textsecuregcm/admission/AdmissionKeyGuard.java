@@ -87,6 +87,10 @@ public final class AdmissionKeyGuard {
         : account.getPhoneNumberIdentifier().orElseThrow(() -> new Failure(404));
   }
   public void requirePublication() { if (target != null) throw new Failure(401); }
+  public AdmissionServiceClient.Binding publicationBinding(Connection connection) {
+    requirePublication();
+    return checked(() -> gate.keyPublicationBinding(connection, caller, callerAci, callerDevice));
+  }
   public void requireCurrent() {
     checked(() -> {
       if (target == null) caller.requireCurrent(callerAci, callerDevice);

@@ -319,6 +319,11 @@ public final class AdmissionEntitlementGate {
     receipt.requireFreshCurrentEntitlement();
   }
 
+  AdmissionServiceClient.Binding keyPublicationBinding(Connection connection, DeviceAuthorization caller, UUID aci, byte device) {
+    requireCurrentKeys(connection, caller, aci, device, null, aci);
+    return caller.membership.snapshot.binding();
+  }
+
   /** Seal exactly one permitted self-update without renewing its original private-service receipt. */
   Authorization accountMutationResult(Connection connection, DeviceAuthorization caller, Account written) {
     final Authorization original = caller.membership;

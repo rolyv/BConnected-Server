@@ -1325,6 +1325,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         gcpPilot ? null : new DonationController(clock, zkReceiptOperations, redeemedReceiptsManager, accountsManager, config.getBadges(),
             ReceiptCredentialPresentation::new, donationPermitsManager, rateLimiters),
         new KeysController(rateLimiters, keysManager, accountsManager, groupZkSecretParams, Clock.systemUTC(), admissionGate, admittedKeys),
+        gcpPilot ? new org.whispersystems.textsecuregcm.controllers.InitialPreKeyPublicationController(admissionGate, admittedKeys, rateLimiters) : null,
         gcpPilot ? null : new KeyTransparencyController(keyTransparencyServiceClient),
         new MessageController(rateLimiters, messageByteLimitCardinalityEstimator, messageSender, accountsManager,
             phoneNumberIdentifiers, reportMessageManager, groupZkSecretParams, spamChecker, Clock.systemUTC(), gcpPilot),

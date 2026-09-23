@@ -52,6 +52,25 @@ public final class AdmittedKeysPostgres {
       return null;
     });
   }
+  /** Initial-only durable operation: recorded replay must never execute either replacing store again. */
+  public CompletableFuture<Boolean> publishInitial(AdmissionKeyGuard guard, IdentityType identity, UUID operation,
+      org.whispersystems.textsecuregcm.entities.InitialPreKeyPublication publication) {
+    guard.requirePublication();
+    java.util.Objects.requireNonNull(operation); java.util.Objects.requireNonNull(publication);
+    var account = guard.account();
+    if (!publication.signedFor(identity == IdentityType.ACI ? account.getAccountIdentityKey()
+        : account.getPhoneNumberIdentityKey().orElse(null))) throw AdmissionKeyGuard.unavailable();
+    return transaction(guard, identity, (connection, identifier) -> {
+      var decision = InitialPreKeyPublicationsPostgres.reserve(connection, guard.publicationBinding(connection),
+          operation, identity, identifier, publication.digest());
+      if (decision == InitialPreKeyPublicationsPostgres.Decision.CONFLICT) return false;
+      if (decision == InitialPreKeyPublicationsPostgres.Decision.APPLY) {
+        SingleUseECPreKeysPostgres.store(connection, identifier, Device.PRIMARY_ID, publication.ec());
+        SingleUseKEMPreKeysPostgres.store(connection, identifier, Device.PRIMARY_ID, publication.kem());
+      }
+      return true;
+    });
+  }
   public CompletableFuture<Optional<KeysManager.DevicePreKeys>> take(AdmissionKeyGuard guard, IdentityType identity) {
     return transaction(guard, identity, (connection, identifier) -> {
       final var signed = signedEc.find(connection, identifier, Device.PRIMARY_ID);
