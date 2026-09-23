@@ -154,6 +154,12 @@ public final class AdmissionEntitlementGate {
       return accountSnapshot(membership.snapshot);
     }
 
+    /** Immutable group-operation binding, checked under this original device receipt. */
+    public Binding groupOperationBinding() {
+      requireCurrent(projection.aci(), projection.deviceId());
+      return membership.snapshot.binding();
+    }
+
     /** Metadata from the credential-verified snapshot, not a separate cached account read. */
     public Instant primaryDeviceLastSeen() {
       return primaryDeviceLastSeen;
