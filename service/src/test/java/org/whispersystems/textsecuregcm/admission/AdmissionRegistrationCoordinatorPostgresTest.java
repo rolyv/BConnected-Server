@@ -46,11 +46,12 @@ class AdmissionRegistrationCoordinatorPostgresTest {
               "003-accounts",
               "011-telnyx-registration",
               "013-registration-operations",
-              "014-registration-claims"))
+              "014-registration-claims",
+              "016-phone-signup"))
         s.execute(Files.readString(Path.of("../bconnected/migrations/" + migration + ".sql")));
       s.execute(
           "TRUNCATE"
-              + " signal.registration_operations,signal.registration_sessions,signal.registration_quotas,signal.accounts");
+              + " signal.phone_signup_operations,signal.registration_operations,signal.registration_sessions,signal.registration_quotas,signal.accounts");
     }
     http = new AdmissionProtocolFixture();
     operations =
@@ -149,6 +150,43 @@ class AdmissionRegistrationCoordinatorPostgresTest {
 
   void check() throws Exception {
     coordinator.checkCode(input, "123456", TIMEOUT);
+  }
+
+  UUID verifiedSignupReceipt() throws Exception {
+    UUID proof = UUID.randomUUID();
+    String nonceHash = AdmissionTestData.hash(9);
+    long verifiedAt = http.clock.millis() - Duration.ofDays(1).toMillis();
+    byte[] nativeId = new byte[32]; new java.security.SecureRandom().nextBytes(nativeId);
+    try (var connection = ds.getConnection(); var insert = connection.prepareStatement("""
+        INSERT INTO signal.phone_signup_operations(operation_id,nonce_hash,phone_lookup_hash,
+          requested_number,native_session_id,native_session_expires_ms,created_ms,
+          application_expires_ms,verified_at_ms,proof_expires_ms,community_confirmed)
+        VALUES(?,?,?,?,?,?,?,?,?,?,true)
+        """)) {
+      insert.setObject(1, proof); insert.setString(2, nonceHash); insert.setString(3, AdmissionTestData.hash(8));
+      insert.setString(4, NUMBER); insert.setBytes(5, nativeId);
+      insert.setLong(6, verifiedAt + 600_000); insert.setLong(7, verifiedAt - 1000);
+      insert.setLong(8, verifiedAt + 600_000); insert.setLong(9, verifiedAt);
+      insert.setLong(10, verifiedAt + Duration.ofDays(30).toMillis()); insert.executeUpdate();
+    }
+    http.mutateClaim = body -> { body.put("signupProofId", proof.toString()); body.put("communitySessionHash", nonceHash); };
+    return proof;
+  }
+
+  @Test void approvedDurableSignupSkipsSecondSmsAndStillRequiresFreshApprovalForPermit() throws Exception {
+    verifiedSignupReceipt();
+    var initial = begin();
+    assertThat(initial.verified()).isTrue();
+    assertThat(begin().operationId()).isEqualTo(initial.operationId());
+    assertThat(coordinator.status(initial.operationId(), input, TIMEOUT).verified()).isTrue();
+    send(); check();
+    assertThat(coordinator.attestVerifiedPhone(input).permit().binding().canonicalVerifiedNumber()).isEqualTo(NUMBER);
+    assertThat(count("SELECT count(*) FROM signal.registration_sessions")).isZero();
+    assertThat(count("SELECT count(*) FROM signal.registration_quotas")).isZero();
+    verifyNoInteractions(provider);
+    http.claimStatus = 403;
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, () -> coordinator.attestVerifiedPhone(input));
+    verifyNoInteractions(provider);
   }
 
   @Test

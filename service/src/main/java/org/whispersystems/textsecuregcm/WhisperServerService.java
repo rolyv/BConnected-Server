@@ -1376,6 +1376,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     if (dmAlphaEnrollment != null) {
       environment.jersey().register(dmAlphaEnrollment.controller());
+      environment.jersey().register(dmAlphaEnrollment.signupController());
       environment.jersey().register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(true));
       webSocketEnvironment.jersey().register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(false));
     }

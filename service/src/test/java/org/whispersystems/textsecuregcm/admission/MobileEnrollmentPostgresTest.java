@@ -163,6 +163,22 @@ class MobileEnrollmentPostgresTest {
     assertThat(flow.count("SELECT count(*) FROM signal.accounts")).isZero();
   }
 
+  @Test void previouslyVerifiedSignupCreatesPendingAccountWithoutAnotherNativeSmsSession() throws Exception {
+    flow.verifiedSignupReceipt();
+    UUID id = begin();
+    assertThat(request(id + "/status").body().path("phoneVerified").asBoolean()).isTrue();
+    var pending = request(id + "/complete");
+    assertThat(pending.status()).isEqualTo(202);
+    assertThat(pending.body().path("state").asText()).isEqualTo("pending_confirmation");
+    assertThat(flow.count("SELECT count(*) FROM signal.accounts")).isEqualTo(1);
+    assertThat(flow.count("SELECT count(*) FROM signal.registration_sessions")).isZero();
+    verifyNoInteractions(flow.provider);
+    activate();
+    var active = request(id + "/status");
+    assertThat(active.status()).isEqualTo(200);
+    assertThat(active.body().path("registrationAuthorized").asBoolean()).isTrue();
+  }
+
   @Test void alphaCohortRejectsBeforeClaimsSessionsOrProviderAndAllowsItsOriginalMember() throws Exception {
     jersey.onShutdown(null);
     allowedMembers = Set.of(UUID.randomUUID(), UUID.randomUUID()); install();

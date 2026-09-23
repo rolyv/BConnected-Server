@@ -214,6 +214,8 @@ public final class AdmissionServiceClient implements AutoCloseable {
   /** Eligibility for one immutable operation, not permission to create or activate an account. */
   public static final class FreshClaim {
     private final UUID memberId, operationId;
+    private final UUID signupProofId;
+    private final String communitySessionHash;
     private final long approvalEpoch, expiresAt, startNanos;
     private final LongSupplier monotonic;
     private final Clock clock;
@@ -225,7 +227,9 @@ public final class AdmissionServiceClient implements AutoCloseable {
         long expiresAt,
         long startNanos,
         LongSupplier monotonic,
-        Clock clock) {
+        Clock clock,
+        UUID signupProofId,
+        String communitySessionHash) {
       this.memberId = memberId;
       this.operationId = operationId;
       this.approvalEpoch = approvalEpoch;
@@ -233,6 +237,8 @@ public final class AdmissionServiceClient implements AutoCloseable {
       this.startNanos = startNanos;
       this.monotonic = monotonic;
       this.clock = clock;
+      this.signupProofId = signupProofId;
+      this.communitySessionHash = communitySessionHash;
     }
 
     public UUID memberId() {
@@ -250,6 +256,9 @@ public final class AdmissionServiceClient implements AutoCloseable {
     public long expiresAtMillis() {
       return expiresAt;
     }
+
+    public UUID signupProofId() { return signupProofId; }
+    public String communitySessionHash() { return communitySessionHash; }
 
     public void requireFresh() {
       long elapsed = monotonic.getAsLong() - startNanos;
@@ -296,15 +305,26 @@ public final class AdmissionServiceClient implements AutoCloseable {
                   "serverRequestCommitment",
                   operation.serverRequestCommitment()));
       JsonNode json = response.json();
-      exact(
-          json,
-          Set.of(
+      boolean signup = json.has("signupProofId") || json.has("communitySessionHash");
+      var expectedFields = new HashSet<>(Set.of(
               "signalOperationId",
               "memberId",
               "approvalEpoch",
               "expiresAt",
               "status",
               "registrationAuthorized"));
+      if (signup) expectedFields.addAll(Set.of("signupProofId", "communitySessionHash"));
+      exact(json, expectedFields);
+      UUID signupProofId = null;
+      String sessionHash = null;
+      if (signup) {
+        String proof = text(json, "signupProofId");
+        signupProofId = UUID.fromString(proof);
+        uuid(signupProofId);
+        if (!signupProofId.toString().equals(proof)) throw failure(Failure.INVALID_RESPONSE);
+        sessionHash = text(json, "communitySessionHash");
+        requireHash(sessionHash);
+      }
       if (!text(json, "signalOperationId").equals(operation.operationId().toString())
           || !text(json, "memberId").equals(operation.memberId().toString())
           || !text(json, "status").equals("claimed")
@@ -321,7 +341,9 @@ public final class AdmissionServiceClient implements AutoCloseable {
               expires,
               response.startNanos(),
               monotonic,
-              clock);
+              clock,
+              signupProofId,
+              sessionHash);
       claim.requireFresh();
       return claim;
     } catch (AdmissionServiceException e) {
@@ -329,6 +351,60 @@ public final class AdmissionServiceClient implements AutoCloseable {
     } catch (Exception ignored) {
       throw failure(Failure.INVALID_RESPONSE);
     }
+  }
+
+  /** Eligibility for a bounded phone challenge; never alumni admission or account authority. */
+  public static final class SignupClaim {
+    private final long expiresAt, startNanos;
+    private final Clock clock;
+    private final LongSupplier monotonic;
+
+    private SignupClaim(long expiresAt, long startNanos, Clock clock, LongSupplier monotonic) {
+      this.expiresAt = expiresAt; this.startNanos = startNanos;
+      this.clock = clock; this.monotonic = monotonic;
+    }
+    public long expiresAtMillis() { return expiresAt; }
+    public void requireFresh() {
+      long elapsed = monotonic.getAsLong() - startNanos;
+      if (elapsed < 0 || elapsed >= TimeUnit.SECONDS.toNanos(4) || clock.millis() >= expiresAt)
+        throw failure(Failure.EXPIRED);
+    }
+    @Override public String toString() { return "SignupClaim[redacted]"; }
+  }
+
+  public SignupClaim signupClaim(UUID applicationId, String nonceHash, String phoneLookupHash) {
+    uuid(applicationId); requireHash(nonceHash); requireHash(phoneLookupHash);
+    var response = exchange("signup-claims", Map.of("applicationId", applicationId.toString(),
+        "signupOperationId", applicationId.toString(), "nonceHash", nonceHash, "phoneLookupHash", phoneLookupHash));
+    exact(response.json(), Set.of("applicationId", "signupOperationId", "expiresAt", "status"));
+    if (!text(response.json(), "applicationId").equals(applicationId.toString())
+        || !text(response.json(), "signupOperationId").equals(applicationId.toString())
+        || !text(response.json(), "status").equals("phone_verification_required"))
+      throw failure(Failure.INVALID_RESPONSE);
+    long expiresAt = integer(response.json(), "expiresAt");
+    if (expiresAt > clock.millis() + TimeUnit.MINUTES.toMillis(30) + 5000)
+      throw failure(Failure.INVALID_RESPONSE);
+    var claim = new SignupClaim(expiresAt, response.startNanos(), clock, monotonic);
+    claim.requireFresh();
+    return claim;
+  }
+
+  public void confirmSignupPhone(UUID applicationId, String nonceHash, String phoneLookupHash,
+      String phoneBinding, long verifiedAt, long proofExpiresAt) {
+    uuid(applicationId); requireHash(nonceHash); requireHash(phoneLookupHash); requireHash(phoneBinding);
+    if (verifiedAt < 0 || verifiedAt > clock.millis() + 5000 || proofExpiresAt <= clock.millis()
+        || proofExpiresAt <= verifiedAt || proofExpiresAt - verifiedAt > TimeUnit.DAYS.toMillis(30))
+      throw failure(Failure.DENIED);
+    var response = exchange("signup-verifications", Map.of("applicationId", applicationId.toString(),
+        "signupOperationId", applicationId.toString(), "nonceHash", nonceHash, "phoneLookupHash", phoneLookupHash,
+        "phoneBinding", phoneBinding, "verifiedAt", verifiedAt, "proofExpiresAt", proofExpiresAt));
+    exact(response.json(), Set.of("applicationId", "status"));
+    if (!text(response.json(), "applicationId").equals(applicationId.toString())
+        || !text(response.json(), "status").equals("verified")) throw failure(Failure.INVALID_RESPONSE);
+  }
+
+  private static void requireHash(String hash) {
+    if (hash == null || !hash.matches("[a-f0-9]{64}")) throw failure(Failure.INVALID_RESPONSE);
   }
 
   public AdmissionPermitVerifier.VerifiedPermit attest(

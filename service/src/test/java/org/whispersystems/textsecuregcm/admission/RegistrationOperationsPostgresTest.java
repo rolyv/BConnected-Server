@@ -3,15 +3,20 @@ package org.whispersystems.textsecuregcm.admission;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.HexFormat;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -52,9 +57,12 @@ class RegistrationOperationsPostgresTest {
       s.execute(Files.readString(Path.of("../bconnected/migrations/011-telnyx-registration.sql")));
       s.execute(
           Files.readString(Path.of("../bconnected/migrations/013-registration-operations.sql")));
+      s.execute(Files.readString(Path.of("../bconnected/migrations/014-registration-claims.sql")));
+      s.execute(Files.readString(Path.of("../bconnected/migrations/016-phone-signup.sql")));
       s.execute(
           "TRUNCATE"
-              + " signal.registration_operations,signal.registration_sessions,signal.registration_quotas,signal.accounts");
+              + " signal.phone_signup_operations,signal.registration_operations,signal.registration_sessions,"
+              + "signal.registration_quotas,signal.accounts");
     }
     clock = new MutableClock().setTimeInstant(Instant.parse("2026-09-20T12:00:00Z"));
     operations =
@@ -116,6 +124,136 @@ class RegistrationOperationsPostgresTest {
       s.setBytes(1, session);
       s.executeUpdate();
     }
+  }
+
+  private static String sha256(String value) throws Exception {
+    return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+        .digest(value.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  private AdmissionServiceClient.FreshClaim signupClaim(UUID proofId, String nonceHash) {
+    var claim = mock(AdmissionServiceClient.FreshClaim.class);
+    when(claim.signupProofId()).thenReturn(proofId);
+    when(claim.communitySessionHash()).thenReturn(nonceHash);
+    when(claim.approvalEpoch()).thenReturn(1L);
+    when(claim.expiresAtMillis()).thenReturn(clock.millis() + 240_000);
+    return claim;
+  }
+
+  private UUID insertSignupProof(String number, String nonceHash, boolean confirmed,
+      long verifiedAt, long proofExpires) throws Exception {
+    UUID proofId = UUID.randomUUID();
+    byte[] nativeSession = new byte[32];
+    new java.security.SecureRandom().nextBytes(nativeSession);
+    long now = clock.millis();
+    try (var connection = ds.getConnection()) {
+      try (var insertSession = connection.prepareStatement("""
+          INSERT INTO signal.registration_sessions(id,number,expires_ms,verified)
+          VALUES(?,?,?,true)
+          """)) {
+        insertSession.setBytes(1, nativeSession);
+        insertSession.setString(2, number);
+        insertSession.setLong(3, now + 600_000);
+        insertSession.executeUpdate();
+      }
+      try (var insertProof = connection.prepareStatement("""
+          INSERT INTO signal.phone_signup_operations
+            (operation_id,nonce_hash,phone_lookup_hash,requested_number,native_session_id,
+             native_session_expires_ms,created_ms,application_expires_ms,verified_at_ms,
+             proof_expires_ms,community_confirmed)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?)
+          """)) {
+        insertProof.setObject(1, proofId);
+        insertProof.setString(2, nonceHash);
+        insertProof.setString(3, "a".repeat(64));
+        insertProof.setString(4, number);
+        insertProof.setBytes(5, nativeSession);
+        insertProof.setLong(6, now + 600_000);
+        insertProof.setLong(7, now);
+        insertProof.setLong(8, now + 1_800_000);
+        insertProof.setLong(9, verifiedAt);
+        insertProof.setLong(10, proofExpires);
+        insertProof.setBoolean(11, confirmed);
+        insertProof.executeUpdate();
+      }
+    }
+    return proofId;
+  }
+
+  @Test
+  void confirmedSignupProofAttachesOnceAndCannotBeConsumedByAnotherOperation() throws Exception {
+    var first = prepare();
+    String nonceHash = sha256(nonce(7));
+    UUID proofId = insertSignupProof(NUMBER, nonceHash, true, clock.millis(),
+        clock.millis() + java.time.Duration.ofDays(30).toMillis());
+    var claim = signupClaim(proofId, nonceHash);
+    operations.attachSignupProof(first, claim);
+    assertThat(operations.hasSignupProof(first)).isTrue();
+    var verified = operations.readVerifiedPhone(first);
+    assertThat(verified.operationId()).isEqualTo(first.operationId());
+    assertThat(verified.canonicalNumber()).isEqualTo(NUMBER);
+    operations.attachSignupProof(first, claim); // Exact retry must be idempotent.
+
+    attempt = nonce(9);
+    challenge = nonce(10);
+    var second = prepare();
+    assertThrows(RegistrationOperations.OperationRejectedException.class,
+        () -> operations.attachSignupProof(second, signupClaim(proofId, nonceHash)));
+    try (var connection = ds.getConnection();
+         var query = connection.prepareStatement("""
+             SELECT consumed_registration_operation_id,consumed_member_id
+             FROM signal.phone_signup_operations WHERE operation_id=?
+             """)) {
+      query.setObject(1, proofId);
+      try (var rows = query.executeQuery()) {
+        assertThat(rows.next()).isTrue();
+        assertThat(rows.getObject(1, UUID.class)).isEqualTo(first.operationId());
+        assertThat(rows.getObject(2, UUID.class)).isEqualTo(member);
+      }
+    }
+  }
+
+  @Test
+  void signupProofRejectsUnconfirmedExpiredNonceAndPhoneMismatch() throws Exception {
+    var operation = prepare();
+    String nonceHash = sha256(nonce(7));
+    long now = clock.millis();
+    UUID proofId = insertSignupProof(NUMBER, nonceHash, false, now, now + 600_000);
+    var matching = signupClaim(proofId, nonceHash);
+    assertThrows(RegistrationOperations.OperationRejectedException.class,
+        () -> operations.attachSignupProof(operation, matching));
+    try (var connection = ds.getConnection(); var update = connection.prepareStatement("""
+        UPDATE signal.phone_signup_operations SET community_confirmed=true,
+          verified_at_ms=?,proof_expires_ms=? WHERE operation_id=?
+        """)) {
+      update.setLong(1, now - 120_000);
+      update.setLong(2, now - 60_000);
+      update.setObject(3, proofId);
+      update.executeUpdate();
+    }
+    assertThrows(RegistrationOperations.OperationRejectedException.class,
+        () -> operations.attachSignupProof(operation, matching));
+    try (var connection = ds.getConnection(); var update = connection.prepareStatement("""
+        UPDATE signal.phone_signup_operations SET verified_at_ms=?,proof_expires_ms=?
+        WHERE operation_id=?
+        """)) {
+      update.setLong(1, now);
+      update.setLong(2, now + 600_000);
+      update.setObject(3, proofId);
+      update.executeUpdate();
+    }
+    assertThrows(RegistrationOperations.OperationRejectedException.class,
+        () -> operations.attachSignupProof(operation, signupClaim(proofId, sha256(nonce(8)))));
+    try (var connection = ds.getConnection(); var update = connection.prepareStatement("""
+        UPDATE signal.phone_signup_operations SET requested_number=? WHERE operation_id=?
+        """)) {
+      update.setString(1, "+13055550124");
+      update.setObject(2, proofId);
+      update.executeUpdate();
+    }
+    assertThrows(RegistrationOperations.OperationRejectedException.class,
+        () -> operations.attachSignupProof(operation, matching));
+    assertThat(operations.hasSignupProof(operation)).isFalse();
   }
 
   @Test

@@ -19,6 +19,7 @@ public final class DmAlphaEnrollment implements Managed {
   private final MobileEnrollmentBodyReader bodies;
   private final AdmissionConfirmationWorker confirmation;
   private final MobileEnrollmentController controller;
+  private final PhoneSignupController signupController;
 
   public DmAlphaEnrollment(DmAlphaConfiguration configuration, DataSource dataSource, Clock clock,
       Duration recoveryRetention, AdmissionServiceClient admission, AdmissionEntitlementGate gate,
@@ -36,6 +37,9 @@ public final class DmAlphaEnrollment implements Managed {
     bodies = new MobileEnrollmentBodyReader(Duration.ofSeconds(5), 8);
     controller = new MobileEnrollmentController(service, bodies, request ->
         trustedSource(request.getProperty(RemoteAddressFilter.REMOTE_ADDRESS_ATTRIBUTE_NAME)));
+    signupController = new PhoneSignupController(new PhoneSignupService(dataSource, clock, nativeRegistration,
+        admission, configuration.phoneBindingKey().value()), bodies, request ->
+        trustedSource(request.getProperty(RemoteAddressFilter.REMOTE_ADDRESS_ATTRIBUTE_NAME)));
     confirmation = new AdmissionConfirmationWorker(new AdmissionConfirmationOutbox(
         dataSource, admission, Set.copyOf(configuration.memberIds())));
   }
@@ -49,6 +53,7 @@ public final class DmAlphaEnrollment implements Managed {
   }
 
   public MobileEnrollmentController controller() { return controller; }
+  public PhoneSignupController signupController() { return signupController; }
   @Override public void start() { confirmation.start(); }
   @Override public void stop() {
     try { confirmation.stop(); } finally { bodies.close(); }

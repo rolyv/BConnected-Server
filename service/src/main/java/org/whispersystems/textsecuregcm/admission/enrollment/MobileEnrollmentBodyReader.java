@@ -25,12 +25,17 @@ public final class MobileEnrollmentBodyReader implements AutoCloseable {
   }
 
   public MobileEnrollmentRequest read(InputStream body, MobileEnrollmentParser.Operation operation, String number) {
+    return parse(body, input -> MobileEnrollmentParser.parse(input, operation, number));
+  }
+
+  <T> T parse(InputStream body, java.util.function.Function<InputStream, T> parser) {
     Objects.requireNonNull(body);
-    final Future<MobileEnrollmentRequest> read;
+    Objects.requireNonNull(parser);
+    final Future<T> read;
     long started = System.nanoTime();
     try {
       read = executor.submit(() -> {
-        try (body) { return MobileEnrollmentParser.parse(body, operation, number); }
+        try (body) { return parser.apply(body); }
       });
     } catch (RejectedExecutionException rejected) { throw new Unavailable(); }
     try {
@@ -38,7 +43,7 @@ public final class MobileEnrollmentBodyReader implements AutoCloseable {
       if (remaining <= 0) throw new TimeoutException();
       return read.get(remaining, TimeUnit.NANOSECONDS);
     } catch (ExecutionException failure) {
-      if (failure.getCause() instanceof MobileEnrollmentParser.InvalidRequestException invalid) throw invalid;
+      if (failure.getCause() instanceof IllegalArgumentException invalid) throw invalid;
       throw new Unavailable();
     } catch (TimeoutException | InterruptedException unavailable) {
       read.cancel(true);

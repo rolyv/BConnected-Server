@@ -113,6 +113,10 @@ public final class AdmissionRegistrationCoordinator {
       throw new IllegalArgumentException("Trusted source address required");
     var operation = authenticate(input);
     var claim = admission.claim(operation, input.bindingChallenge());
+    if (claim.signupProofId() != null) {
+      operations.attachSignupProof(operation, claim);
+      return signupStatus(operation);
+    }
     final com.google.i18n.phonenumbers.Phonenumber.PhoneNumber number;
     try {
       number = PhoneNumberUtil.getInstance().parse(operation.requestedNumber(), null);
@@ -148,6 +152,7 @@ public final class AdmissionRegistrationCoordinator {
     var operation = operations.authenticateExisting(expectedOperationId, input, false);
     var claim = admission.claim(operation, input.bindingChallenge());
     byte[] session = operations.requireClaimedSession(operation, claim);
+    if (operations.hasSignupProof(operation)) return signupStatus(operation);
     return status(
         operation,
         registration.sendVerificationCode(
@@ -173,6 +178,7 @@ public final class AdmissionRegistrationCoordinator {
     var operation = operations.authenticateExisting(expectedOperationId, input, false);
     var claim = admission.claim(operation, input.bindingChallenge());
     byte[] session = operations.requireClaimedSession(operation, claim);
+    if (operations.hasSignupProof(operation)) return signupStatus(operation);
     return status(
         operation, registration.checkVerificationCode(session, code, timeout, claim::requireFresh));
   }
@@ -199,6 +205,7 @@ public final class AdmissionRegistrationCoordinator {
   public SessionStatus status(UUID expectedOperationId, Input input, Duration timeout) {
     timeout(timeout);
     var operation = operations.authenticateExisting(expectedOperationId, input, false);
+    if (operations.hasSignupProof(operation)) return signupStatus(operation);
     byte[] session = operations.assignedSessionId(operation)
         .orElseThrow(() -> new IllegalStateException("Registration session unavailable"));
     return status(operation, registration.getSession(session, timeout)
@@ -216,6 +223,11 @@ public final class AdmissionRegistrationCoordinator {
         input.request(),
         input.signalAgent(),
         input.userAgent());
+  }
+
+  private SessionStatus signupStatus(RegistrationOperations.AuthenticatedOperation operation) {
+    operations.readVerifiedPhone(operation);
+    return new SessionStatus(operation.operationId(), true, null, null, operations.remainingSessionSeconds(operation));
   }
 
   private SessionStatus status(

@@ -7,6 +7,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Objects;
@@ -484,6 +485,106 @@ public final class RegistrationOperations {
         });
   }
 
+  /** Consume a verified signup receipt for exactly one approved native registration operation. */
+  void attachSignupProof(AuthenticatedOperation operation, AdmissionServiceClient.FreshClaim claim) {
+    if (claim.signupProofId() == null || claim.communitySessionHash() == null)
+      throw new OperationRejectedException();
+    transaction(connection -> {
+      Stored stored = lock(connection, operation);
+      requireClaim(connection, stored, operation, claim, true);
+      UUID existing = signupProofId(connection, stored.id);
+      if (stored.session != null) {
+        if (!claim.signupProofId().equals(existing)) throw new OperationRejectedException();
+        requireSession(connection, stored, true);
+        return null;
+      }
+      try (var query = connection.prepareStatement(
+          "SELECT * FROM signal.phone_signup_operations WHERE operation_id=? FOR UPDATE")) {
+        query.setObject(1, claim.signupProofId());
+        try (var row = query.executeQuery()) {
+          long now = clock.millis();
+          if (!row.next() || !row.getBoolean("community_confirmed")
+              || row.getObject("verified_at_ms") == null || row.getLong("verified_at_ms") > now + 5000
+              || row.getLong("proof_expires_ms") <= now
+              || row.getLong("proof_expires_ms") - row.getLong("verified_at_ms") > Duration.ofDays(30).toMillis()
+              || !stored.number.equals(row.getString("requested_number"))
+              || !equal(unhex(claim.communitySessionHash()), unhex(row.getString("nonce_hash"))))
+            throw new OperationRejectedException();
+          UUID consumed = row.getObject("consumed_registration_operation_id", UUID.class);
+          UUID member = row.getObject("consumed_member_id", UUID.class);
+          if (consumed != null && (!consumed.equals(stored.id) || !stored.member.equals(member)))
+            throw new OperationRejectedException();
+          if (consumed == null) {
+            try (var consume = connection.prepareStatement("""
+                UPDATE signal.phone_signup_operations SET consumed_registration_operation_id=?,consumed_member_id=?
+                WHERE operation_id=? AND consumed_registration_operation_id IS NULL
+                """)) {
+              consume.setObject(1, stored.id); consume.setObject(2, stored.member);
+              consume.setObject(3, claim.signupProofId());
+              if (consume.executeUpdate() != 1) throw new OperationRejectedException();
+            }
+          }
+          try (var attach = connection.prepareStatement("""
+              UPDATE signal.registration_operations SET phone_signup_proof_id=?,verification_session_id=?,
+                verification_session_hash=?,verification_session_expires_ms=?
+              WHERE operation_id=? AND verification_session_id IS NULL
+              """)) {
+            attach.setObject(1, claim.signupProofId()); attach.setBytes(2, row.getBytes("native_session_id"));
+            attach.setBytes(3, signupProofHash(claim.signupProofId()));
+            attach.setLong(4, row.getLong("proof_expires_ms")); attach.setObject(5, stored.id);
+            if (attach.executeUpdate() != 1) throw new OperationRejectedException();
+          }
+          claim.requireOperation(operation);
+          requireActive(stored);
+        }
+      }
+      return null;
+    });
+  }
+
+  boolean hasSignupProof(AuthenticatedOperation operation) {
+    return transaction(connection -> {
+      Stored stored = lock(connection, operation);
+      if (signupProofId(connection, stored.id) == null) return false;
+      requireSession(connection, stored, true);
+      return true;
+    });
+  }
+
+  private static byte[] signupProofHash(UUID id) {
+    return hash("bconnected.signup-phone-proof.v1", id.toString().getBytes(StandardCharsets.US_ASCII));
+  }
+
+  private UUID signupProofId(Connection connection, UUID operationId) throws SQLException {
+    try (var query = connection.prepareStatement(
+        "SELECT phone_signup_proof_id FROM signal.registration_operations WHERE operation_id=?")) {
+      query.setObject(1, operationId);
+      try (var row = query.executeQuery()) {
+        if (!row.next()) throw new OperationRejectedException();
+        return row.getObject(1, UUID.class);
+      }
+    }
+  }
+
+  private void requireSignupProof(Connection connection, Stored stored, UUID proofId) throws SQLException {
+    try (var query = connection.prepareStatement(
+        "SELECT * FROM signal.phone_signup_operations WHERE operation_id=? FOR SHARE")) {
+      query.setObject(1, proofId);
+      try (var row = query.executeQuery()) {
+        long now = clock.millis();
+        if (!row.next() || !row.getBoolean("community_confirmed") || row.getObject("verified_at_ms") == null
+            || row.getLong("verified_at_ms") > now + 5000 || row.getLong("proof_expires_ms") <= now
+            || !stored.id.equals(row.getObject("consumed_registration_operation_id", UUID.class))
+            || !stored.member.equals(row.getObject("consumed_member_id", UUID.class))
+            || !stored.number.equals(row.getString("requested_number"))
+            || !equal(stored.session, row.getBytes("native_session_id"))
+            || !equal(stored.sessionHash, signupProofHash(proofId))
+            || !Objects.equals(stored.sessionExpires, row.getLong("proof_expires_ms")))
+          throw new OperationRejectedException();
+      }
+    }
+  }
+
   private void requireClaim(
       Connection connection,
       Stored stored,
@@ -493,6 +594,8 @@ public final class RegistrationOperations {
       throws SQLException {
     claim.requireOperation(operation);
     requireActive(stored);
+    UUID proof = signupProofId(connection, stored.id);
+    if (proof != null && !proof.equals(claim.signupProofId())) throw new OperationRejectedException();
     if (claim.expiresAtMillis() > stored.expires || claim.expiresAtMillis() <= clock.millis())
       throw new OperationRejectedException();
     try (var query =
@@ -528,6 +631,12 @@ public final class RegistrationOperations {
   private byte[] requireSession(Connection connection, Stored stored, boolean requireVerified)
       throws SQLException {
     if (stored.session == null) throw new OperationRejectedException();
+    UUID proof = signupProofId(connection, stored.id);
+    if (proof != null) {
+      requireSignupProof(connection, stored, proof);
+      requireActive(stored);
+      return stored.session.clone();
+    }
     try (var query =
         connection.prepareStatement(
             "SELECT number,expires_ms,verified FROM signal.registration_sessions WHERE"
@@ -627,6 +736,12 @@ public final class RegistrationOperations {
         connection -> {
           var stored = lock(connection, authenticated);
           if (stored.session == null) throw new OperationRejectedException();
+          UUID proof = signupProofId(connection, stored.id);
+          if (proof != null) {
+            requireSignupProof(connection, stored, proof);
+            requireActive(stored);
+            return new VerifiedPhone(stored.id, stored.number, hex(stored.sessionHash), clock.millis(), stored.sessionExpires);
+          }
           try (var statement =
               connection.prepareStatement(
                   "SELECT number,expires_ms,verified FROM"

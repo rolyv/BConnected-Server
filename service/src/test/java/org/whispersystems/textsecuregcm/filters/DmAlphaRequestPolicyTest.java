@@ -63,6 +63,18 @@ class DmAlphaRequestPolicyTest {
   }
 
   @Test
+  void signupIsExplicitRestOnlyAndHasNoAccountCreationAction() throws Exception {
+    String base = "/v1/bconnected/signup/";
+    for (String action : new String[] {"begin", OPERATION + "/send-code", OPERATION + "/check-code", OPERATION + "/status"}) {
+      assertAllowed(new DmAlphaRequestPolicy(true), new Request("POST", base + action));
+      assertDenied(new DmAlphaRequestPolicy(false), new Request("POST", base + action));
+    }
+    for (String action : new String[] {OPERATION + "/complete", OPERATION + "/status?x=1", OPERATION + "/send-code/extra"})
+      assertDenied(new DmAlphaRequestPolicy(true), new Request("POST", base + action));
+    assertDenied(new DmAlphaRequestPolicy(true), new Request("GET", base + "begin"));
+  }
+
+  @Test
   void deniesStoriesMultiRecipientAndUnknownOrExpandedRoutes() throws Exception {
     DmAlphaRequestPolicy policy = new DmAlphaRequestPolicy(true);
     for (Request request : new Request[] {

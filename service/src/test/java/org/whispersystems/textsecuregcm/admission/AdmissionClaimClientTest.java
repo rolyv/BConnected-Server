@@ -68,6 +68,27 @@ class AdmissionClaimClientTest {
   }
 
   @Test
+  void signupProofMustHaveBothCanonicalFieldsAndKeepsLegacyClaimsUnchanged() {
+    assertThat(claim().signupProofId()).isNull();
+    var proof = UUID.randomUUID();
+    var sessionHash = AdmissionTestData.hash(6);
+    http.mutateClaim = b -> { b.put("signupProofId", proof.toString()); b.put("communitySessionHash", sessionHash); };
+    var verified = claim();
+    assertThat(verified.signupProofId()).isEqualTo(proof);
+    assertThat(verified.communitySessionHash()).isEqualTo(sessionHash);
+    for (String field : List.of("signupProofId", "communitySessionHash")) {
+      http.mutateClaim = b -> b.put(field, field.equals("signupProofId") ? proof.toString() : sessionHash);
+      assertThrows(AdmissionServiceClient.AdmissionServiceException.class, this::claim);
+    }
+    for (String invalid : List.of("00000000-0000-0000-0000-000000000000", "1-1-1-1-1", proof.toString().toUpperCase())) {
+      http.mutateClaim = b -> { b.put("signupProofId", invalid); b.put("communitySessionHash", sessionHash); };
+      assertThrows(AdmissionServiceClient.AdmissionServiceException.class, this::claim);
+    }
+    http.mutateClaim = b -> { b.put("signupProofId", proof.toString()); b.put("communitySessionHash", "z".repeat(64)); };
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, this::claim);
+  }
+
+  @Test
   void changedClaimTupleUnknownFieldsWrongStatusAndAuthorizationAreRejected() {
     Map<String, Object> changed =
         Map.of(
