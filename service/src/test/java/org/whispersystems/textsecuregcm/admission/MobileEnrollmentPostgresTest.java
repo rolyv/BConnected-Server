@@ -43,6 +43,7 @@ class MobileEnrollmentPostgresTest {
   int entitlementStatus = 200;
   String password = AdmissionRegistrationCoordinatorPostgresTest.PASSWORD;
   String currentUserAgent = "BConnected/current-upgrade";
+  Set<UUID> allowedMembers;
 
   @BeforeEach void setup() throws Exception {
     accounts = new AdmissionAccountCreatorPostgresTest();
@@ -78,8 +79,9 @@ class MobileEnrollmentPostgresTest {
 
   void install() {
     var service = new MobileEnrollmentService(flow.operations, flow.coordinator, accounts.creator,
-        new AdmissionEntitlementGate(flow.ds, entitlementClient), Duration.ofSeconds(3));
+        new AdmissionEntitlementGate(flow.ds, entitlementClient), Duration.ofSeconds(3), allowedMembers);
     jersey = new ApplicationHandler(new ResourceConfig()
+        .register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(true))
         .register(new JacksonMessageBodyProvider(SystemMapper.jsonMapper()))
         .register(new VirtualExecutorServiceProvider("enrollment-rest-test", 4))
         .register(new MobileEnrollmentController(service, bodies, request -> "192.0.2.1")));
@@ -110,6 +112,7 @@ class MobileEnrollmentPostgresTest {
     if (contentType != null) request.header("Content-Type", contentType);
     request.header("User-Agent", currentUserAgent);
     request.header("X-Forwarded-For", "198.51.100.254"); // Never the trusted resolver's value.
+    request.setProperty(org.whispersystems.textsecuregcm.filters.RemoteAddressFilter.REMOTE_ADDRESS_ATTRIBUTE_NAME, "192.0.2.1");
     request.setEntityStream(new ByteArrayInputStream(body));
     var output = new ByteArrayOutputStream();
     var response = jersey.apply(request, output).get(10, TimeUnit.SECONDS);
@@ -158,6 +161,50 @@ class MobileEnrollmentPostgresTest {
     assertThat(flow.http.attestations).isEmpty();
     verifyNoInteractions(flow.provider);
     assertThat(flow.count("SELECT count(*) FROM signal.accounts")).isZero();
+  }
+
+  @Test void alphaCohortRejectsBeforeClaimsSessionsOrProviderAndAllowsItsOriginalMember() throws Exception {
+    jersey.onShutdown(null);
+    allowedMembers = Set.of(UUID.randomUUID(), UUID.randomUUID()); install();
+    error(request("begin"), 404, "ENROLLMENT_UNAVAILABLE");
+    assertThat(flow.count("SELECT count(*) FROM signal.registration_operations")).isZero();
+    assertThat(flow.http.claims).isEmpty(); verifyNoInteractions(flow.provider);
+    jersey.onShutdown(null);
+    allowedMembers = Set.of(UUID.fromString(envelope.path("memberId").asText()), UUID.randomUUID()); install();
+    begin();
+    assertThat(flow.count("SELECT count(*) FROM signal.registration_operations")).isEqualTo(1);
+    verifyNoInteractions(flow.provider);
+  }
+
+  @Test void composedAlphaConfirmsPendingAccountThroughManagedWorkerAndReturnsFreshActiveIdentity() throws Exception {
+    byte[] phoneKey = new byte[32]; Arrays.fill(phoneKey, (byte) 1);
+    var config = new org.whispersystems.textsecuregcm.configuration.DmAlphaConfiguration(
+        Set.of(UUID.fromString(envelope.path("memberId").asText()), UUID.randomUUID()),
+        new org.whispersystems.textsecuregcm.configuration.secrets.SecretBytes(new byte[32]),
+        new org.whispersystems.textsecuregcm.configuration.secrets.SecretBytes(phoneKey),
+        Map.of("test-key", Base64.getEncoder().encodeToString(flow.http.key.getPublic().getEncoded())));
+    var composed = new DmAlphaEnrollment(config, flow.ds, flow.http.clock, Duration.ofDays(1),
+        flow.http.client, new AdmissionEntitlementGate(flow.ds, flow.http.client), flow.nativeSessions);
+    try {
+      jersey.onShutdown(null);
+      jersey = new ApplicationHandler(new ResourceConfig()
+          .register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(true))
+          .register(new JacksonMessageBodyProvider(SystemMapper.jsonMapper()))
+          .register(new VirtualExecutorServiceProvider("alpha-composed-test", 4))
+          .register(composed.controller()));
+      UUID id = pending();
+      assertThat(request(id + "/status").body().path("registrationAuthorized").asBoolean()).isFalse();
+      composed.start();
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (flow.count("SELECT count(*) FROM signal.admissions WHERE status='ACTIVE'") == 0
+          && System.nanoTime() < deadline) Thread.sleep(10);
+      var result = request(id + "/status");
+      assertThat(result.status()).isEqualTo(200);
+      assertThat(result.body().path("state").asText()).isEqualTo("active");
+      assertThat(result.body().path("registrationAuthorized").asBoolean()).isTrue();
+      assertThat(result.body().path("account").path("deviceId").asInt()).isEqualTo(1);
+      verifyNoInteractions(flow.provider);
+    } finally { composed.stop(); }
   }
 
   @ParameterizedTest @ValueSource(strings = {"send-code", "check-code", "complete", "status"})

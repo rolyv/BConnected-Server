@@ -65,6 +65,14 @@ final class AdmissionProtocolFixture implements AutoCloseable {
                 result.put("registrationAuthorized", false);
                 mutateClaim.accept(result);
                 afterClaim.run();
+              } else if (request.uri().getPath().endsWith("/confirmations")
+                  || request.uri().getPath().endsWith("/entitlements")) {
+                body.fields().forEachRemaining(e -> result.put(e.getKey(), e.getValue().isNumber()
+                    ? e.getValue().longValue() : e.getValue().textValue()));
+                result.put("status", "confirmed");
+                result.put("confirmedAt", clock.millis() - 1000);
+                result.put("checkedAt", clock.millis());
+                result.put("validUntil", clock.millis() + 4000);
               } else {
                 attestations.add(body);
                 String operation = body.get("signalOperationId").textValue();

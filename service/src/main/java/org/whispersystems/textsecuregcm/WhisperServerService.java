@@ -841,6 +841,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
 
     final AccountAuthenticator accountAuthenticator;
     final AdmissionEntitlementGate admissionGate;
+    final org.whispersystems.textsecuregcm.admission.enrollment.DmAlphaEnrollment dmAlphaEnrollment;
     if (gcpPilot) {
       // Required for every pilot authentication. Failure to initialize has no legacy fallback.
       final AdmissionServiceClient admissionClient =
@@ -848,10 +849,17 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
       environment.lifecycle().manage(new io.dropwizard.lifecycle.Managed() {
         @Override public void stop() { admissionClient.close(); }
       });
-      admissionGate = new AdmissionEntitlementGate(postgres.dataSource(), admissionClient);
+      admissionGate = new AdmissionEntitlementGate(postgres.dataSource(), admissionClient,
+          config.getDmAlpha() == null ? null : config.getDmAlpha().memberIds());
       accountAuthenticator = AccountAuthenticator.withAdmission(admissionGate);
+      dmAlphaEnrollment = config.getDmAlpha() == null ? null :
+          new org.whispersystems.textsecuregcm.admission.enrollment.DmAlphaEnrollment(config.getDmAlpha(),
+              postgres.dataSource(), clock, config.getRecoveryRetention(), admissionClient, admissionGate,
+              registrationServiceClient);
+      if (dmAlphaEnrollment != null) environment.lifecycle().manage(dmAlphaEnrollment);
     } else {
       admissionGate = null;
+      dmAlphaEnrollment = null;
       accountAuthenticator = new AccountAuthenticator(accountsManager);
     }
 
@@ -1208,8 +1216,12 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         .channelType(LocalServerChannel.class)
         .bossEventLoopGroup(omnibusLocalEventLoopGroup.getEventLoopGroup())
         .workerEventLoopGroup(omnibusLocalEventLoopGroup.getEventLoopGroup());
-    authenticatedServices.forEach(serverBuilder::addService);
-    unauthenticatedServices.forEach(serverBuilder::addService);
+    // This alpha uses authenticated native WebSocket chat. Unneeded gRPC APIs cannot be enabled
+    // by dynamic remote flags while the enrollment cohort is open.
+    if (dmAlphaEnrollment == null) {
+      authenticatedServices.forEach(serverBuilder::addService);
+      unauthenticatedServices.forEach(serverBuilder::addService);
+    }
     final ManagedGrpcServer localGrpcServer = new ManagedGrpcServer(serverBuilder.build());
 
     final String websocketServletPath = "/v1/websocket/";
@@ -1327,6 +1339,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
             ReceiptCredentialPresentation::new, donationPermitsManager, rateLimiters),
         new KeysController(rateLimiters, keysManager, accountsManager, groupZkSecretParams, Clock.systemUTC(), admissionGate, admittedKeys),
         gcpPilot ? new org.whispersystems.textsecuregcm.controllers.InitialPreKeyPublicationController(admissionGate, admittedKeys, rateLimiters) : null,
+        dmAlphaEnrollment == null ? null : new org.whispersystems.textsecuregcm.controllers.BConnectedRecipientController(admissionGate, rateLimiters),
         gcpPilot ? null : new KeyTransparencyController(keyTransparencyServiceClient),
         new MessageController(rateLimiters, messageByteLimitCardinalityEstimator, messageSender, accountsManager,
             phoneNumberIdentifiers, reportMessageManager, groupZkSecretParams, spamChecker, Clock.systemUTC(), gcpPilot),
@@ -1359,6 +1372,12 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     for (Object controller : commonControllers) {
       environment.jersey().register(controller);
       webSocketEnvironment.jersey().register(controller);
+    }
+
+    if (dmAlphaEnrollment != null) {
+      environment.jersey().register(dmAlphaEnrollment.controller());
+      environment.jersey().register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(true));
+      webSocketEnvironment.jersey().register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(false));
     }
 
     WebSocketEnvironment<AuthenticatedDevice> provisioningEnvironment = new WebSocketEnvironment<>(environment,

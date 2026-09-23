@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import javax.sql.DataSource;
 import org.whispersystems.textsecuregcm.admission.AdmissionServiceClient.Binding;
@@ -23,10 +24,18 @@ import org.whispersystems.textsecuregcm.util.SystemMapper;
 public final class AdmissionEntitlementGate {
   private final DataSource dataSource;
   private final AdmissionServiceClient client;
+  private final Set<UUID> allowedMembers;
 
   public AdmissionEntitlementGate(DataSource dataSource, AdmissionServiceClient client) {
+    this(dataSource, client, null);
+  }
+
+  /** An explicit cohort constrains callers and recipients at every local proof recheck. */
+  public AdmissionEntitlementGate(DataSource dataSource, AdmissionServiceClient client,
+      Set<UUID> allowedMembers) {
     this.dataSource = Objects.requireNonNull(dataSource);
     this.client = Objects.requireNonNull(client);
+    this.allowedMembers = allowedMembers == null ? null : Set.copyOf(allowedMembers);
   }
 
   public static final class DeniedException extends RuntimeException {
@@ -355,7 +364,7 @@ public final class AdmissionEntitlementGate {
     }
   }
 
-  private static Snapshot readLocked(Connection connection, UUID aci) throws SQLException {
+  private Snapshot readLocked(Connection connection, UUID aci) throws SQLException {
     final String account;
     // Separate statements preserve the account -> admission -> outbox lock order. FOR SHARE also
     // conflicts with non-key updates to device/credential JSON, unlike FOR KEY SHARE.
@@ -381,6 +390,9 @@ public final class AdmissionEntitlementGate {
             || !"ACTIVE".equals(rows.getString("status"))
             || rows.getObject("activated_at") == null
             || rows.getObject("suspended_at") != null) throw denied();
+        if (allowedMembers != null && !allowedMembers.contains(rows.getObject("member_id", UUID.class))) {
+          throw denied();
+        }
         permit = rows.getBytes("permit_id");
         try {
           binding =

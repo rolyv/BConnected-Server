@@ -181,8 +181,54 @@ class GcpRuntimeConfigurationTest {
   }
 
   private static WhisperServerConfiguration read(final String yaml) throws Exception {
+    byte[] phoneKey = new byte[32]; java.util.Arrays.fill(phoneKey, (byte) 1);
     SecretsModule.INSTANCE.setSecretStore(new SecretStore(Map.of("collation",
-        new SecretString(Base64.getEncoder().encodeToString(new byte[32])))));
+        new SecretString(Base64.getEncoder().encodeToString(new byte[32])), "alphaPhone",
+        new SecretString(Base64.getEncoder().encodeToString(phoneKey)))));
     return SystemMapper.yamlMapper().readValue(yaml, WhisperServerConfiguration.class);
+  }
+
+  private static String alpha() throws Exception {
+    var pin = java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair().getPublic();
+    return """
+        server:
+          applicationConnectors:
+            - type: h2c
+              port: 8080
+              bindHost: 127.0.0.1
+              useForwardedHeaders: true
+        dmAlpha:
+          memberIds: [00000000-0000-4000-8000-000000000001, 00000000-0000-4000-8000-000000000002]
+          requestCommitmentKey: secret://collation
+          phoneBindingKey: secret://alphaPhone
+          admissionPublicKeys:
+            test: %s
+        """.formatted(Base64.getEncoder().encodeToString(pin.getEncoded()));
+  }
+
+  @Test void dmAlphaIsAbsentByDefaultAndNeedsExplicitOwnedComposition() throws Exception {
+    assertThat(read(PILOT).getDmAlpha()).isNull();
+    var config = read(PILOT + alpha());
+    config.validateRuntimeConfiguration();
+    assertThat(config.getDmAlpha().memberIds()).hasSize(2);
+    assertThat(config.getDmAlpha().permitKeys()).hasSize(1);
+    assertThat(config.getDmAlpha().toString()).isEqualTo("DmAlphaConfiguration[redacted]");
+  }
+
+  @Test void dmAlphaCannotTrustAnExposedOrUnconfiguredForwarder() throws Exception {
+    var alpha = alpha();
+    for (String invalid : new String[] {alpha.replace("127.0.0.1", "0.0.0.0"),
+        alpha.replace("useForwardedHeaders: true", "useForwardedHeaders: false")})
+      assertThrows(IllegalArgumentException.class, () -> read(PILOT + invalid).validateRuntimeConfiguration());
+  }
+
+  @Test void dmAlphaCannotEnablePushOrReuseKeysOrChangeCohortSize() throws Exception {
+    var alpha = alpha();
+    assertThrows(Exception.class, () -> read(PILOT + alpha.replace("secret://alphaPhone", "secret://collation")));
+    assertThrows(Exception.class, () -> read(PILOT + alpha.replace(", 00000000-0000-4000-8000-000000000002", "")));
+    assertThrows(IllegalArgumentException.class, () -> read(PILOT + alpha + """
+        pilotIntegrations:
+          apnsEnabled: true
+        """).validateRuntimeConfiguration());
   }
 }

@@ -17,6 +17,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -24,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -145,7 +147,9 @@ class AdmissionConfirmationOutboxPostgresTest {
         s.setObject(2, binding.memberId());
         s.setObject(3, binding.aci());
         s.setObject(4, binding.signalOperationId());
-        for (int i = 5; i <= 9; i++) s.setBytes(i, new byte[32]);
+        for (int i = 5; i <= 9; i++) {
+          s.setBytes(i, syntheticHash(binding.signalOperationId(), i));
+        }
         s.executeUpdate();
       }
       try (var s =
@@ -166,6 +170,45 @@ class AdmissionConfirmationOutboxPostgresTest {
     return AdmissionPermitVerifier.decode(binding.permitId(), 32);
   }
 
+  private static byte[] syntheticHash(UUID operationId, int field) throws Exception {
+    return MessageDigest.getInstance("SHA-256")
+        .digest((operationId + ":" + field).getBytes(StandardCharsets.US_ASCII));
+  }
+
+  private void insertPending(Binding additional) throws Exception {
+    try (var c = db.getConnection()) {
+      try (var s =
+          c.prepareStatement(
+              "INSERT INTO signal.accounts(aci,number,pni,version,data) VALUES(?,?,?,0,'{}')")) {
+        s.setObject(1, additional.aci());
+        s.setString(2, "+12025550198");
+        s.setObject(3, UUID.randomUUID());
+        s.executeUpdate();
+      }
+      try (var s =
+          c.prepareStatement(
+              """
+              INSERT INTO signal.admissions(permit_id,member_id,aci,signal_operation_id,registration_attempt_hash,
+                server_verification_session_hash,device_key_commitment,phone_binding,server_request_commitment,
+                approval_epoch,issued_at_seconds,expires_at_seconds) VALUES(?,?,?,?,?,?,?,?,?,1,1,2)
+              """)) {
+        s.setBytes(1, AdmissionPermitVerifier.decode(additional.permitId(), 32));
+        s.setObject(2, additional.memberId());
+        s.setObject(3, additional.aci());
+        s.setObject(4, additional.signalOperationId());
+        for (int i = 5; i <= 9; i++) {
+          s.setBytes(i, syntheticHash(additional.signalOperationId(), i));
+        }
+        s.executeUpdate();
+      }
+      try (var s =
+          c.prepareStatement("INSERT INTO signal.admission_confirmation_outbox(permit_id) VALUES(?)")) {
+        s.setBytes(1, AdmissionPermitVerifier.decode(additional.permitId(), 32));
+        s.executeUpdate();
+      }
+    }
+  }
+
   private void sql(String sql) throws Exception {
     try (var c = db.getConnection();
         var s = c.createStatement()) {
@@ -184,12 +227,40 @@ class AdmissionConfirmationOutboxPostgresTest {
 
   private boolean confirmed() throws Exception {
     try (var c = db.getConnection();
-        var s = c.createStatement();
-        var rows =
-            s.executeQuery(
-                "SELECT confirmed_at IS NOT NULL FROM signal.admission_confirmation_outbox")) {
-      rows.next();
-      return rows.getBoolean(1);
+        var s = c.prepareStatement(
+            "SELECT confirmed_at IS NOT NULL FROM signal.admission_confirmation_outbox WHERE permit_id=?")) {
+      s.setBytes(1, java.util.Base64.getUrlDecoder().decode(binding.permitId()));
+      try (var rows = s.executeQuery()) {
+        if (!rows.next()) throw new AssertionError("Missing synthetic confirmation row");
+        return rows.getBoolean(1);
+      }
+    }
+  }
+
+  private String status(UUID aci) throws Exception {
+    try (var c = db.getConnection();
+        var s = c.prepareStatement("SELECT status FROM signal.admissions WHERE aci=?")) {
+      s.setObject(1, aci);
+      try (var rows = s.executeQuery()) {
+        if (!rows.next()) throw new AssertionError("Missing synthetic admission");
+        return rows.getString(1);
+      }
+    }
+  }
+
+  private int confirmationAttempts(UUID aci) throws Exception {
+    try (var c = db.getConnection();
+        var s =
+            c.prepareStatement(
+                """
+                SELECT o.attempt_count FROM signal.admission_confirmation_outbox o
+                JOIN signal.admissions a USING(permit_id) WHERE a.aci=?
+                """)) {
+      s.setObject(1, aci);
+      try (var rows = s.executeQuery()) {
+        if (!rows.next()) throw new AssertionError("Missing synthetic confirmation row");
+        return rows.getInt(1);
+      }
     }
   }
 
@@ -206,6 +277,24 @@ class AdmissionConfirmationOutboxPostgresTest {
     assertThat(confirmed()).isTrue();
     assertThat(outbox.runOne()).isEqualTo(Outcome.IDLE);
     assertThat(requests).hasSize(1);
+  }
+
+  @Test
+  void configuredCohortNeverClaimsOrActivatesOtherPendingMembers() throws Exception {
+    Binding outside =
+        new Binding(
+            UUID.randomUUID(), 1, UUID.randomUUID(), AdmissionTestData.id(), UUID.randomUUID());
+    insertPending(outside);
+    var cohortOutbox = new AdmissionConfirmationOutbox(db, client, Set.of(binding.memberId()));
+
+    assertThat(cohortOutbox.runOne()).isEqualTo(Outcome.ACTIVATED);
+    assertThat(status(binding.aci())).isEqualTo("ACTIVE");
+    assertThat(confirmed()).isTrue();
+    assertThat(status(outside.aci())).isEqualTo("PENDING");
+    assertThat(confirmationAttempts(outside.aci())).isZero();
+    assertThat(cohortOutbox.claim()).isEmpty();
+    assertThat(requests).hasSize(1);
+    assertThat(requests.getFirst().get("aci").asText()).isEqualTo(binding.aci().toString());
   }
 
   @Test

@@ -90,6 +90,11 @@ public class WhisperServerConfiguration extends Configuration {
   @NotNull @JsonProperty
   private RuntimeMode runtimeMode = RuntimeMode.LEGACY;
 
+  @Valid @JsonProperty
+  private org.whispersystems.textsecuregcm.configuration.DmAlphaConfiguration dmAlpha;
+
+  public org.whispersystems.textsecuregcm.configuration.DmAlphaConfiguration getDmAlpha() { return dmAlpha; }
+
   @Valid @NotNull @JsonProperty
   private GcsAvatarConfiguration gcpAvatars;
 
@@ -166,6 +171,15 @@ public class WhisperServerConfiguration extends Configuration {
     if (postgres == null || postgres.messageRetention() == null || postgres.recoveryRetention() == null)
       errors.add("All runtime modes require PostgreSQL with explicit messageRetention and recoveryRetention");
     if (gcpAvatars == null) errors.add("All runtime modes require gcpAvatars");
+    if (dmAlpha != null) {
+      if (!isGcpPilot() || isApnsEnabled() || isFcmEnabled() || isStorageEnabled() || isSvr2Enabled())
+        errors.add("Foreground DM alpha requires GCP_PILOT with push, storage and recovery disabled");
+      if (!(getServerFactory() instanceof DefaultServerFactory server)
+          || server.getApplicationConnectors().size() != 1
+          || !(server.getApplicationConnectors().getFirst() instanceof io.dropwizard.jetty.HttpConnectorFactory http)
+          || !"127.0.0.1".equals(http.getBindHost()) || !http.isUseForwardedHeaders())
+        errors.add("DM alpha REST requires one loopback connector with owned-proxy forwarding");
+    }
     if (isGcpPilot()) {
       if (!(dynamicConfig instanceof MonitoredFileObjectConfiguration) || !(asnTable instanceof MonitoredFileObjectConfiguration))
         errors.add("GCP_PILOT requires type:file dynamicConfig and asnTable sources");

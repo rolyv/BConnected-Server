@@ -7,13 +7,14 @@ import java.sql.SQLException;
 import java.util.Base64;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import javax.sql.DataSource;
 import org.whispersystems.textsecuregcm.admission.AdmissionServiceClient.Binding;
 import org.whispersystems.textsecuregcm.admission.AdmissionServiceClient.FreshEntitlement;
 
 /**
- * Bounded durable confirmation work. Not registered with a runtime scheduler yet. Before enabling
+ * Bounded durable confirmation work. Explicit DM alpha composition owns its runtime scheduler. Before enabling
  * this worker, every account capability must require ACTIVE state AND fresh current entitlement;
  * the ACTIVE flag by itself is never authorization. No provider or HTTP call holds a SQL lock.
  */
@@ -54,10 +55,21 @@ public final class AdmissionConfirmationOutbox {
 
   private final DataSource dataSource;
   private final AdmissionServiceClient client;
+  private final Set<UUID> memberIds;
 
   public AdmissionConfirmationOutbox(DataSource dataSource, AdmissionServiceClient client) {
+    this(dataSource, client, null);
+  }
+
+  /** Restrict confirmation work to an immutable member cohort. */
+  public AdmissionConfirmationOutbox(DataSource dataSource, AdmissionServiceClient client,
+      Set<UUID> memberIds) {
     this.dataSource = Objects.requireNonNull(dataSource);
     this.client = Objects.requireNonNull(client);
+    if (memberIds != null && memberIds.isEmpty()) {
+      throw new IllegalArgumentException("A confirmation cohort must not be empty");
+    }
+    this.memberIds = memberIds == null ? null : Set.copyOf(memberIds);
   }
 
   /** One row, one authenticated request, bounded retry scheduling; caller owns worker lifecycle. */
@@ -77,6 +89,7 @@ public final class AdmissionConfirmationOutbox {
   Optional<Lease> claim() {
     return transaction(
         connection -> {
+          java.sql.Array cohort = null;
           try (var statement =
                   connection.prepareStatement(
                       """
@@ -86,26 +99,34 @@ public final class AdmissionConfirmationOutbox {
                         AND o.next_attempt_at<=clock_timestamp()
                         AND (o.lease_id IS NULL OR o.lease_expires_at<=clock_timestamp())
                         AND EXISTS(SELECT 1 FROM signal.accounts accounts WHERE accounts.aci=a.aci)
+                        %s
                       ORDER BY o.next_attempt_at,o.permit_id LIMIT 1 FOR UPDATE OF o SKIP LOCKED
-                      """);
-              var rows = statement.executeQuery()) {
-            if (!rows.next()) return Optional.empty();
-            Binding binding = binding(rows);
-            int attempt =
-                (int) Math.min(Integer.MAX_VALUE, (long) rows.getInt("attempt_count") + 1);
-            UUID leaseId = UUID.randomUUID();
-            try (var update =
-                connection.prepareStatement(
-                    """
-                    UPDATE signal.admission_confirmation_outbox SET lease_id=?,
-                      lease_expires_at=clock_timestamp()+interval '30 seconds',attempt_count=? WHERE permit_id=?
-                    """)) {
-              update.setObject(1, leaseId);
-              update.setInt(2, attempt);
-              update.setBytes(3, permit(binding));
-              if (update.executeUpdate() != 1) throw new SQLException("Missing outbox row");
+                      """.formatted(memberIds == null ? "" : "AND a.member_id=ANY (?)"))) {
+            if (memberIds != null) {
+              cohort = connection.createArrayOf("uuid", memberIds.toArray(UUID[]::new));
             }
-            return Optional.of(new Lease(leaseId, binding, attempt));
+            if (cohort != null) statement.setArray(1, cohort);
+            try (var rows = statement.executeQuery()) {
+              if (!rows.next()) return Optional.empty();
+              Binding binding = binding(rows);
+              int attempt =
+                  (int) Math.min(Integer.MAX_VALUE, (long) rows.getInt("attempt_count") + 1);
+              UUID leaseId = UUID.randomUUID();
+              try (var update =
+                  connection.prepareStatement(
+                      """
+                      UPDATE signal.admission_confirmation_outbox SET lease_id=?,
+                        lease_expires_at=clock_timestamp()+interval '30 seconds',attempt_count=? WHERE permit_id=?
+                      """)) {
+                update.setObject(1, leaseId);
+                update.setInt(2, attempt);
+                update.setBytes(3, permit(binding));
+                if (update.executeUpdate() != 1) throw new SQLException("Missing outbox row");
+              }
+              return Optional.of(new Lease(leaseId, binding, attempt));
+            }
+          } finally {
+            if (cohort != null) cohort.free();
           }
         });
   }

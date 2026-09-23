@@ -18,7 +18,7 @@ import org.glassfish.jersey.server.ContainerRequest;
 import org.glassfish.jersey.server.ManagedAsync;
 import org.whispersystems.textsecuregcm.admission.AdmissionRegistrationCoordinator;
 
-/** Not registered by WhisperServerService. The future REST ingress must supply a trusted resolver. */
+/** Registered only by explicit DM-alpha composition on the owned REST listener with a trusted resolver. */
 @Path("/v1/bconnected/enrollment")
 @Produces(MediaType.APPLICATION_JSON)
 public final class MobileEnrollmentController {

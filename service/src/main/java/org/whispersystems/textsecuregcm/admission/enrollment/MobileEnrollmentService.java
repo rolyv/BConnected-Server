@@ -20,9 +20,17 @@ public final class MobileEnrollmentService {
   private final AdmissionAccountCreator creator;
   private final AdmissionEntitlementGate gate;
   private final Duration timeout;
+  private final java.util.Set<UUID> allowedMembers;
 
   public MobileEnrollmentService(RegistrationOperations operations, AdmissionRegistrationCoordinator coordinator,
       AdmissionAccountCreator creator, AdmissionEntitlementGate gate, Duration timeout) {
+    this(operations, coordinator, creator, gate, timeout, null);
+  }
+
+  /** A bounded alpha cohort is additional to current approved-alumni authorization. */
+  public MobileEnrollmentService(RegistrationOperations operations, AdmissionRegistrationCoordinator coordinator,
+      AdmissionAccountCreator creator, AdmissionEntitlementGate gate, Duration timeout,
+      java.util.Set<UUID> allowedMembers) {
     this.operations = Objects.requireNonNull(operations);
     this.coordinator = Objects.requireNonNull(coordinator);
     this.creator = Objects.requireNonNull(creator);
@@ -30,6 +38,7 @@ public final class MobileEnrollmentService {
     if (timeout == null || timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofSeconds(60)) > 0)
       throw new IllegalArgumentException("Bounded registration timeout required");
     this.timeout = timeout;
+    this.allowedMembers = allowedMembers == null ? null : java.util.Set.copyOf(allowedMembers);
   }
 
   public Result execute(MobileEnrollmentParser.Operation action, UUID operationId,
@@ -37,6 +46,8 @@ public final class MobileEnrollmentService {
       String acceptLanguage) {
     try {
       if (action == null || input == null) return error(Code.INVALID_REQUEST);
+      if (allowedMembers != null && !allowedMembers.contains(input.memberId()))
+        return error(Code.ENROLLMENT_UNAVAILABLE);
       if (action == MobileEnrollmentParser.Operation.BEGIN) {
         if (operationId != null) return error(Code.INVALID_REQUEST);
         return verification(coordinator.begin(input, trustedSourceAddress, timeout));

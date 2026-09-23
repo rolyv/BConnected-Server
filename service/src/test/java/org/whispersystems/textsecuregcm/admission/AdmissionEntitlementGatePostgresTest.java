@@ -111,6 +111,31 @@ class AdmissionEntitlementGatePostgresTest {
   }
 
   @Test
+  void cohortRejectsOtherwiseActiveCallersAndRecipientsBeforeHttp() {
+    gate = new AdmissionEntitlementGate(flow.ds, client, Set.of(UUID.randomUUID(), UUID.randomUUID()));
+    assertThrows(AdmissionEntitlementGate.DeniedException.class,
+        () -> gate.authorizeDevice(aci, (byte) 1, flow.input.password()));
+    assertThrows(AdmissionEntitlementGate.DeniedException.class, () -> gate.authorize(aci));
+    assertThat(requests.get()).isZero();
+  }
+
+  @Test
+  void cohortIsCopiedAndRecheckedAfterRemoteWait() {
+    var cohort = new HashSet<>(Set.of(flow.input.memberId(), UUID.randomUUID()));
+    gate = new AdmissionEntitlementGate(flow.ds, client, cohort);
+    cohort.clear();
+    var auth = gate.authorizeDevice(aci, (byte) 1, flow.input.password());
+    auth.requireCurrent(aci, (byte) 1);
+    gate.authorize(aci).requireCurrent(aci);
+    duringHttp = () -> sql("UPDATE signal.admissions SET member_id='" + UUID.randomUUID() + "'");
+    assertThrows(AdmissionEntitlementGate.DeniedException.class,
+        () -> gate.authorizeDevice(aci, (byte) 1, flow.input.password()));
+    assertThrows(AdmissionEntitlementGate.DeniedException.class,
+        () -> auth.requireCurrent(aci, (byte) 1));
+    assertThat(requests.get()).isEqualTo(3);
+  }
+
+  @Test
   void activeConfirmedMembershipCanBeRecheckedWithoutHttpRenewal() throws Exception {
     var authorization = gate.authorize(aci);
     authorization.requireCurrent(aci);
