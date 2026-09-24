@@ -26,6 +26,7 @@ import org.whispersystems.textsecuregcm.entities.RegistrationServiceSession;
 import org.whispersystems.textsecuregcm.registration.ClientType;
 import org.whispersystems.textsecuregcm.registration.MessageTransport;
 import org.whispersystems.textsecuregcm.registration.RegistrationServiceException;
+import org.whispersystems.textsecuregcm.registration.VerificationCodeExpiredException;
 import org.whispersystems.textsecuregcm.registration.telnyx.TelnyxRegistrationService;
 
 /**
@@ -163,6 +164,8 @@ public final class PhoneSignupService {
     final RegistrationServiceSession session;
     try {
       session = registration.checkVerificationCode(row.nativeSessionId, code, TIMEOUT, claim::requireFresh);
+    } catch (VerificationCodeExpiredException expiredCode) {
+      return error(Code.CODE_EXPIRED);
     } catch (RegistrationServiceException unavailableCode) {
       return error(Code.CODE_NOT_ACCEPTED);
     }

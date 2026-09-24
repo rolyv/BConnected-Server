@@ -28,6 +28,7 @@ import org.whispersystems.textsecuregcm.registration.RegistrationService;
 import org.whispersystems.textsecuregcm.registration.RegistrationServiceException;
 import org.whispersystems.textsecuregcm.registration.RegistrationServiceSenderException;
 import org.whispersystems.textsecuregcm.registration.TransportNotAllowedException;
+import org.whispersystems.textsecuregcm.registration.VerificationCodeExpiredException;
 
 /**
  * Durable coordinator behind VerificationController's CAPTCHA, push and fraud checks. Provider calls happen only
@@ -227,8 +228,9 @@ public final class TelnyxRegistrationService implements RegistrationService {
       if (count >= max) throw new Rejected(session, null, true);
       final long next = send ? state.nextSmsMs : state.nextCheckMs;
       if (next > now) throw new Rejected(session, Duration.ofMillis(next - now), true);
-      if (!send && (state.providerId == null || state.codeExpiresMs <= now)) {
-        throw new Rejected(session, null, false);
+      if (!send) {
+        if (state.providerId == null) throw new Rejected(session, null, false);
+        if (state.codeExpiresMs <= now) throw Rejected.expiredCode(session);
       }
       quota(connection, send ? "send:number" : "check:number", state.number,
           send ? policy.maxSmsPerNumber() : policy.maxChecksPerNumber(), now, session);
@@ -254,8 +256,16 @@ public final class TelnyxRegistrationService implements RegistrationService {
       final long codeExpires, final boolean accepted) {
     return transaction(connection -> {
       // Measure expiry after obtaining the row lock, not before a potentially blocking UPDATE.
-      load(connection, reservation.id, true).orElseThrow(() -> new Rejected(null, null, false));
+      final State current = load(connection, reservation.id, true)
+          .orElseThrow(() -> new Rejected(null, null, false));
       final long now = clock.millis();
+      // Attribute expiry only to this exact in-flight check. A later send, missing
+      // provider binding or expired session is not evidence that this code expired.
+      if (!reservation.send && !current.verified && current.expiresMs > now
+          && reservation.operationId.equals(current.operationId)
+          && reservation.providerId.equals(current.providerId) && current.codeExpiresMs <= now) {
+        throw Rejected.expiredCode(snapshot(current, now));
+      }
       final String mutation = reservation.send
           ? "provider_verification_id=?, code_expires_ms=LEAST(expires_ms, ?)"
           : "verified=?";
@@ -373,6 +383,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
     if (rejected.rateLimited && rejected.session != null) {
       throw new VerificationSessionRateLimitExceededException(rejected.session, rejected.retryAfter, true);
     }
+    if (rejected.codeExpired) throw new VerificationCodeExpiredException(rejected.session);
     throw new RegistrationServiceException(rejected.session);
   }
 
@@ -440,12 +451,21 @@ public final class TelnyxRegistrationService implements RegistrationService {
     private final RegistrationServiceSession session;
     private final Duration retryAfter;
     private final boolean rateLimited;
+    private final boolean codeExpired;
     private Rejected(@Nullable final RegistrationServiceSession session, @Nullable final Duration retryAfter,
         final boolean rateLimited) {
+      this(session, retryAfter, rateLimited, false);
+    }
+    private Rejected(@Nullable final RegistrationServiceSession session, @Nullable final Duration retryAfter,
+        final boolean rateLimited, final boolean codeExpired) {
       super(null, null, false, false);
       this.session = session;
       this.retryAfter = retryAfter;
       this.rateLimited = rateLimited;
+      this.codeExpired = codeExpired;
+    }
+    private static Rejected expiredCode(final RegistrationServiceSession session) {
+      return new Rejected(Objects.requireNonNull(session), null, false, true);
     }
   }
 }

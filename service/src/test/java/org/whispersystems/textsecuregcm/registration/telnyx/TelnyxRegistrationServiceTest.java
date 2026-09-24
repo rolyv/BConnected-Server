@@ -42,6 +42,7 @@ import org.whispersystems.textsecuregcm.entities.RegistrationServiceSession;
 import org.whispersystems.textsecuregcm.registration.ClientType;
 import org.whispersystems.textsecuregcm.registration.MessageTransport;
 import org.whispersystems.textsecuregcm.registration.RegistrationServiceException;
+import org.whispersystems.textsecuregcm.registration.VerificationCodeExpiredException;
 import org.whispersystems.textsecuregcm.registration.RegistrationServiceSenderException;
 import org.whispersystems.textsecuregcm.registration.TransportNotAllowedException;
 import org.whispersystems.textsecuregcm.spam.RegistrationRecoveryChecker;
@@ -273,9 +274,14 @@ class TelnyxRegistrationServiceTest {
     send(created.id());
     clock.incrementSeconds(300);
     assertThat(service.getSession(created.id(), TIMEOUT).orElseThrow().nextVerificationAttempt()).isNull();
-    assertThrows(RegistrationServiceException.class, () -> service.checkVerificationCode(created.id(), "123456", TIMEOUT));
+    assertThrows(VerificationCodeExpiredException.class,
+        () -> service.checkVerificationCode(created.id(), "123456", TIMEOUT));
+    assertThat(sessionColumn(created.id(), "check_count")).isZero();
     clock.incrementSeconds(300);
     assertThat(service.getSession(created.id(), TIMEOUT)).isEmpty();
+    assertThat(assertThrows(RegistrationServiceException.class,
+        () -> service.checkVerificationCode(created.id(), "123456", TIMEOUT)))
+        .isExactlyInstanceOf(RegistrationServiceException.class);
     assertThrows(RegistrationServiceException.class, () -> send(created.id()));
     verify(provider, never()).verify(any(), anyString(), anyString(), any());
   }
@@ -319,7 +325,8 @@ class TelnyxRegistrationServiceTest {
     when(provider.verify(any(), eq(NUMBER), eq("123456"), eq(TIMEOUT))).thenAnswer(_ -> {
       clock.incrementSeconds(5); return true;
     });
-    assertThrows(RegistrationServiceException.class, () -> service.checkVerificationCode(created.id(), "123456", TIMEOUT));
+    assertThrows(VerificationCodeExpiredException.class,
+        () -> service.checkVerificationCode(created.id(), "123456", TIMEOUT));
     assertThat(service.getSession(created.id(), TIMEOUT).orElseThrow().verified()).isFalse();
   }
 
@@ -335,7 +342,9 @@ class TelnyxRegistrationServiceTest {
     send(created.id());
     when(provider.verify(any(), eq(NUMBER), eq("123456"), eq(TIMEOUT)))
         .thenThrow(providerError(TelnyxVerifyException.Reason.NOT_FOUND));
-    assertThrows(RegistrationServiceException.class, () -> service.checkVerificationCode(created.id(), "123456", TIMEOUT));
+    assertThat(assertThrows(RegistrationServiceException.class,
+        () -> service.checkVerificationCode(created.id(), "123456", TIMEOUT)))
+        .isExactlyInstanceOf(RegistrationServiceException.class);
     assertThat(service.getSession(created.id(), TIMEOUT).orElseThrow().nextVerificationAttempt()).isNull();
   }
 

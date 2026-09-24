@@ -38,6 +38,7 @@ import org.whispersystems.textsecuregcm.admission.enrollment.MobileEnrollmentRes
 import org.whispersystems.textsecuregcm.registration.telnyx.TelnyxRegistrationPolicy;
 import org.whispersystems.textsecuregcm.registration.telnyx.TelnyxRegistrationService;
 import org.whispersystems.textsecuregcm.registration.telnyx.TelnyxVerifyClient;
+import org.whispersystems.textsecuregcm.registration.telnyx.TelnyxVerifyException;
 import org.whispersystems.textsecuregcm.util.MutableClock;
 
 @EnabledIfEnvironmentVariable(named = "BCONNECTED_TEST_JDBC_URL", matches = ".+")
@@ -216,6 +217,62 @@ class PhoneSignupServicePostgresTest {
     assertThat(call(MobileEnrollmentParser.Operation.STATUS).status()).isEqualTo(410);
     assertThat(call(MobileEnrollmentParser.Operation.SEND_CODE).status()).isEqualTo(410);
     verifyNoInteractions(provider);
+  }
+
+  @Test
+  void codeExpiryIsDistinctFromSessionExpiryAndDoesNotAuthorizeOrSendAnotherSms() throws Exception {
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    assertThat(call(MobileEnrollmentParser.Operation.SEND_CODE).status()).isEqualTo(200);
+    clock.incrementSeconds(300);
+    var expired = call(MobileEnrollmentParser.Operation.CHECK_CODE, nonce, NUMBER, "123456");
+    assertThat(expired.status()).isEqualTo(422);
+    assertThat(expired.body()).isEqualTo(new Error("CODE_EXPIRED", null));
+    var status = (Verification) call(MobileEnrollmentParser.Operation.STATUS).body();
+    assertThat(status.phoneVerified()).isFalse();
+    assertThat(status.registrationAuthorized()).isFalse();
+    assertThat(status.nextCheckSeconds()).isNull();
+    assertThat(status.nextSmsSeconds()).isZero();
+    verify(provider, times(1)).sendSms(NUMBER, TIMEOUT);
+    verify(provider, times(0)).verify(any(), anyString(), anyString(), any());
+    verifyNoConfirmation();
+    clock.incrementSeconds(300);
+    var sessionExpired = call(MobileEnrollmentParser.Operation.CHECK_CODE, nonce, NUMBER, "123456");
+    assertThat(sessionExpired.status()).isEqualTo(410);
+    assertThat(sessionExpired.body()).isEqualTo(new Error("ENROLLMENT_EXPIRED", null));
+  }
+
+  @Test
+  void codeExpiryDuringAcceptedProviderCheckStillReturnsExpiredWithoutProof() throws Exception {
+    when(provider.sendSms(eq(NUMBER), eq(TIMEOUT))).thenReturn(
+        new TelnyxVerifyClient.Verification(UUID.randomUUID(), NUMBER, 5));
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    assertThat(call(MobileEnrollmentParser.Operation.SEND_CODE).status()).isEqualTo(200);
+    when(provider.verify(any(), eq(NUMBER), eq("123456"), eq(TIMEOUT))).thenAnswer(_ -> {
+      clock.incrementSeconds(5);
+      return true;
+    });
+    var expired = call(MobileEnrollmentParser.Operation.CHECK_CODE, nonce, NUMBER, "123456");
+    assertThat(expired.status()).isEqualTo(422);
+    assertThat(expired.body()).isEqualTo(new Error("CODE_EXPIRED", null));
+    var status = (Verification) call(MobileEnrollmentParser.Operation.STATUS).body();
+    assertThat(status.phoneVerified()).isFalse();
+    assertThat(status.nextSmsSeconds()).isPositive();
+    verify(provider, times(1)).sendSms(NUMBER, TIMEOUT);
+    verifyNoConfirmation();
+  }
+
+  @Test
+  void absentCodeAndGenericProviderErrorsAreNotInventedExpiryEvidence() throws Exception {
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    var unsent = call(MobileEnrollmentParser.Operation.CHECK_CODE, nonce, NUMBER, "123456");
+    assertThat(unsent.body()).isEqualTo(new Error("CODE_NOT_ACCEPTED", null));
+    assertThat(call(MobileEnrollmentParser.Operation.SEND_CODE).status()).isEqualTo(200);
+    when(provider.verify(any(), eq(NUMBER), eq("123456"), eq(TIMEOUT))).thenThrow(
+        new TelnyxVerifyException(TelnyxVerifyException.Reason.NOT_FOUND, 404,
+            java.util.Optional.empty(), java.util.Optional.empty()));
+    var missing = call(MobileEnrollmentParser.Operation.CHECK_CODE, nonce, NUMBER, "123456");
+    assertThat(missing.body()).isEqualTo(new Error("CODE_NOT_ACCEPTED", null));
+    verifyNoConfirmation();
   }
 
   private void verifyNoConfirmation() {
