@@ -65,10 +65,12 @@ class PhoneSignupServicePostgresTest {
     ds.setUser("postgres");
     ds.setPassword(System.getenv("BCONNECTED_TEST_POSTGRES_PASSWORD"));
     try (var connection = ds.getConnection(); var statement = connection.createStatement()) {
+      statement.execute(Files.readString(Path.of("../bconnected/migrations/003-accounts.sql")));
       statement.execute(Files.readString(Path.of("../bconnected/migrations/011-telnyx-registration.sql")));
       statement.execute(Files.readString(Path.of("../bconnected/migrations/013-registration-operations.sql")));
       statement.execute(Files.readString(Path.of("../bconnected/migrations/016-phone-signup.sql")));
-      statement.execute("TRUNCATE signal.phone_signup_operations,signal.registration_operations,"
+      statement.execute(Files.readString(Path.of("../bconnected/migrations/017-signup-supersession.sql")));
+      statement.execute("TRUNCATE signal.phone_signup_supersessions,signal.accounts,signal.phone_signup_operations,signal.registration_operations,"
           + "signal.registration_sessions,signal.registration_quotas");
     }
     clock = new MutableClock().setTimeInstant(Instant.parse("2026-09-23T12:00:00Z"));
@@ -77,6 +79,8 @@ class PhoneSignupServicePostgresTest {
     var claim = mock(AdmissionServiceClient.SignupClaim.class);
     when(claim.expiresAtMillis()).thenReturn(clock.millis() + Duration.ofMinutes(30).toMillis());
     when(admission.signupClaim(any(), anyString(), anyString())).thenReturn(claim);
+    when(admission.supersedeSignup(any(), anyString(), anyString(), anyString(), any(), any(), anyString(), anyString()))
+        .thenAnswer(_ -> clock.millis() + Duration.ofMinutes(30).toMillis());
     var policy = new TelnyxRegistrationPolicy(Duration.ofMinutes(10), Duration.ofHours(1),
         10, 10, 10, 3, 10, 3, Duration.ofSeconds(30), Duration.ofSeconds(1));
     var nativeRegistration = new TelnyxRegistrationService(ds, provider, policy, new byte[32], clock);
@@ -273,6 +277,238 @@ class PhoneSignupServicePostgresTest {
     var missing = call(MobileEnrollmentParser.Operation.CHECK_CODE, nonce, NUMBER, "123456");
     assertThat(missing.body()).isEqualTo(new Error("CODE_NOT_ACCEPTED", null));
     verifyNoConfirmation();
+  }
+
+  private PhoneSignupSupersessionRequest correction(String replacement) {
+    byte[] bytes = new byte[32]; Arrays.fill(bytes, (byte) 9);
+    return new PhoneSignupSupersessionRequest(applicationId, nonce, NUMBER, UUID.randomUUID(), replacement,
+        Base64.getUrlEncoder().withoutPadding().encodeToString(bytes));
+  }
+  private void sql(String text) throws Exception {
+    try (var connection = ds.getConnection(); var statement = connection.createStatement()) { statement.execute(text); }
+  }
+
+  @Test void correctionBeforeBeginLeavesPermanentTombstoneAndStableReceiptWithoutSms() throws Exception {
+    var request = correction("+13055550124");
+    assertThat(signup.supersede(request, true).status()).isEqualTo(404);
+    assertThat(count("phone_signup_supersessions")).isZero();
+    var first = signup.supersede(request, false);
+    assertThat(first.status()).isEqualTo(200);
+    var receipt = (MobileEnrollmentResponse.Supersession) first.body();
+    assertThat(receipt.state()).isEqualTo("replacement_ready");
+    assertThat(receipt.originalApplicationId()).isEqualTo(applicationId);
+    assertThat(receipt.replacementApplicationId()).isNotEqualTo(applicationId).isNotEqualTo(request.correctionId());
+    assertThat(receipt.registrationAuthorized()).isFalse();
+    clock.incrementSeconds(3600);
+    assertThat(signup.supersede(request, true)).isEqualTo(first);
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(409);
+    assertThat(count("phone_signup_operations")).isZero();
+    assertThat(count("registration_sessions")).isZero();
+    verifyNoInteractions(provider);
+  }
+
+  @Test void correctionAuthenticatesExactOriginalAndFreezesEveryReplacementField() throws Exception {
+    var request = correction(NUMBER);
+    assertThat(signup.supersede(request, false).status()).isEqualTo(200);
+    var changed = new PhoneSignupSupersessionRequest(applicationId, nonce, NUMBER, request.correctionId(),
+        "+13055550124", request.replacementEnrollmentNonce());
+    assertThat(signup.supersede(changed, true).status()).isEqualTo(409);
+    assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(409);
+    var wrong = new PhoneSignupSupersessionRequest(applicationId, request.replacementEnrollmentNonce(), NUMBER,
+        request.correctionId(), NUMBER, nonce);
+    assertThat(signup.supersede(wrong, true).status()).isEqualTo(401);
+    assertThat(count("phone_signup_supersessions")).isEqualTo(1);
+  }
+
+  @Test void beginClaimIssuedBeforeCorrectionCannotAllocateAfterAbsenceFence() throws Exception {
+    CountDownLatch claimIssued = new CountDownLatch(1), continueBegin = new CountDownLatch(1);
+    var claim = mock(AdmissionServiceClient.SignupClaim.class);
+    when(claim.expiresAtMillis()).thenReturn(clock.millis() + 1800000);
+    when(admission.signupClaim(any(), anyString(), anyString())).thenAnswer(_ -> {
+      claimIssued.countDown(); assertThat(continueBegin.await(10, TimeUnit.SECONDS)).isTrue(); return claim;
+    });
+    var begin = CompletableFuture.supplyAsync(() -> call(MobileEnrollmentParser.Operation.BEGIN), executor);
+    assertThat(claimIssued.await(10, TimeUnit.SECONDS)).isTrue();
+    try { assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(200); }
+    finally { continueBegin.countDown(); }
+    assertThat(begin.get(10, TimeUnit.SECONDS).status()).isEqualTo(409);
+    assertThat(count("registration_sessions")).isZero();
+    verifyNoInteractions(provider);
+  }
+
+  @Test void concurrentCorrectionsCreateExactlyOneReplacementAndChangedOperationCannotWin() throws Exception {
+    var request = correction(NUMBER);
+    List<CompletableFuture<MobileEnrollmentResponse.Result>> tasks = new ArrayList<>();
+    for (int i = 0; i < 8; i++) tasks.add(CompletableFuture.supplyAsync(() -> signup.supersede(request, false), executor));
+    CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).get(15, TimeUnit.SECONDS);
+    var first = tasks.getFirst().join();
+    assertThat(first.status()).isEqualTo(200);
+    assertThat(tasks).allSatisfy(t -> assertThat(t.join()).isEqualTo(first));
+    assertThat(count("phone_signup_supersessions")).isEqualTo(1);
+    assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(409);
+    verifyNoInteractions(provider);
+  }
+
+  @Test void privateEligibilityDenialCannotInventUserConflictOrCreateFence() throws Exception {
+    var denied = mock(AdmissionServiceClient.AdmissionServiceException.class);
+    when(denied.failure()).thenReturn(AdmissionServiceClient.Failure.DENIED);
+    doThrow(denied).when(admission).requireSignupSupersessionEligible(any(), anyString(), anyString(), anyString());
+    var result = signup.supersede(correction(NUMBER), false);
+    assertThat(result.body()).isEqualTo(new Error("TEMPORARILY_UNAVAILABLE", null));
+    assertThat(result.status()).isEqualTo(503);
+    assertThat(count("phone_signup_supersessions")).isZero();
+    assertThat(count("phone_signup_operations")).isZero();
+    verifyNoInteractions(provider);
+  }
+
+  @Test void overlappingExactRetryRecoversReceiptWhenItsEligibilityCheckNowSeesRetired() throws Exception {
+    var request = correction(NUMBER);
+    CountDownLatch eligibilityStarted = new CountDownLatch(1), finishEligibility = new CountDownLatch(1);
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    var denied = mock(AdmissionServiceClient.AdmissionServiceException.class);
+    when(denied.failure()).thenReturn(AdmissionServiceClient.Failure.DENIED);
+    org.mockito.Mockito.doAnswer(_ -> {
+      if (calls.incrementAndGet() == 1) {
+        eligibilityStarted.countDown(); assertThat(finishEligibility.await(10, TimeUnit.SECONDS)).isTrue();
+        throw denied;
+      }
+      return null;
+    }).when(admission).requireSignupSupersessionEligible(any(), anyString(), anyString(), anyString());
+    var first = CompletableFuture.supplyAsync(() -> signup.supersede(request, false), executor);
+    assertThat(eligibilityStarted.await(10, TimeUnit.SECONDS)).isTrue();
+    MobileEnrollmentResponse.Result second;
+    try { second = signup.supersede(request, false); }
+    finally { finishEligibility.countDown(); }
+    assertThat(second.status()).isEqualTo(200);
+    assertThat(first.get(10, TimeUnit.SECONDS)).isEqualTo(second);
+    assertThat(count("phone_signup_supersessions")).isEqualTo(1);
+    verifyNoInteractions(provider);
+  }
+
+  @Test void lostPrivateReceiptRemainsRetiringAndRestartReconcilesSameOutboxWithoutSms() throws Exception {
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    var request = correction(NUMBER);
+    when(admission.supersedeSignup(any(), anyString(), anyString(), anyString(), any(), any(), anyString(), anyString()))
+        .thenThrow(new IllegalStateException("synthetic lost response"))
+        .thenReturn(clock.millis() + 1800000);
+    var pending = signup.supersede(request, false);
+    assertThat(pending.status()).isEqualTo(202);
+    var provisional = (MobileEnrollmentResponse.Supersession) pending.body();
+    assertThat(provisional.expiresAt()).isNull();
+    assertThat(call(MobileEnrollmentParser.Operation.STATUS).status()).isEqualTo(409);
+    signup = new PhoneSignupService(ds, clock, mock(TelnyxRegistrationService.class), admission, new byte[32]);
+    var recovered = signup.supersede(request, true);
+    assertThat(recovered.status()).isEqualTo(200);
+    assertThat(((MobileEnrollmentResponse.Supersession) recovered.body()).replacementApplicationId())
+        .isEqualTo(provisional.replacementApplicationId());
+    clock.incrementSeconds(3600);
+    assertThat(signup.supersede(request, true)).isEqualTo(recovered);
+    verify(admission, times(2)).supersedeSignup(eq(applicationId), anyString(), anyString(), anyString(),
+        eq(request.correctionId()), eq(provisional.replacementApplicationId()), anyString(), anyString());
+    verifyNoInteractions(provider);
+  }
+
+  @Test void inFlightAcceptedCheckCannotPersistProofAfterRetirement() throws Exception {
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    assertThat(call(MobileEnrollmentParser.Operation.SEND_CODE).status()).isEqualTo(200);
+    CountDownLatch issued = new CountDownLatch(1), finish = new CountDownLatch(1);
+    when(provider.verify(any(), eq(NUMBER), eq("123456"), eq(TIMEOUT))).thenAnswer(_ -> {
+      issued.countDown(); assertThat(finish.await(10, TimeUnit.SECONDS)).isTrue(); return true;
+    });
+    var check = CompletableFuture.supplyAsync(() -> call(MobileEnrollmentParser.Operation.CHECK_CODE, nonce, NUMBER, "123456"), executor);
+    assertThat(issued.await(10, TimeUnit.SECONDS)).isTrue();
+    try { assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(200); }
+    finally { finish.countDown(); }
+    assertThat(check.get(10, TimeUnit.SECONDS).status()).isEqualTo(422);
+    try (var c = ds.getConnection(); var q = c.createStatement();
+        var r = q.executeQuery("SELECT verified_at_ms,retired_ms FROM signal.phone_signup_operations")) {
+      assertThat(r.next()).isTrue(); assertThat(r.getObject(1)).isNull(); assertThat(r.getObject(2)).isNotNull();
+    }
+    assertThat(call(MobileEnrollmentParser.Operation.CHECK_CODE, nonce, NUMBER, "123456").status()).isEqualTo(409);
+    verifyNoConfirmation();
+  }
+
+  @Test void inFlightSendCannotRestoreProviderStateOrRefundQuotaAfterRetirement() throws Exception {
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    CountDownLatch issued = new CountDownLatch(1), finish = new CountDownLatch(1);
+    when(provider.sendSms(eq(NUMBER), eq(TIMEOUT))).thenAnswer(_ -> {
+      issued.countDown(); assertThat(finish.await(10, TimeUnit.SECONDS)).isTrue();
+      return new TelnyxVerifyClient.Verification(UUID.randomUUID(), NUMBER, 300);
+    });
+    var send = CompletableFuture.supplyAsync(() -> call(MobileEnrollmentParser.Operation.SEND_CODE), executor);
+    assertThat(issued.await(10, TimeUnit.SECONDS)).isTrue();
+    try { assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(200); }
+    finally { finish.countDown(); }
+    assertThat(send.get(10, TimeUnit.SECONDS).status()).isEqualTo(503);
+    try (var c = ds.getConnection(); var q = c.createStatement();
+        var r = q.executeQuery("SELECT provider_verification_id,sms_count,retired_ms FROM signal.registration_sessions")) {
+      assertThat(r.next()).isTrue(); assertThat(r.getObject(1)).isNull();
+      assertThat(r.getInt(2)).isEqualTo(1); assertThat(r.getObject(3)).isNotNull();
+    }
+    assertThat(call(MobileEnrollmentParser.Operation.SEND_CODE).status()).isEqualTo(409);
+    verify(provider, times(1)).sendSms(NUMBER, TIMEOUT);
+    verifyNoConfirmation();
+  }
+
+  @Test void verifiedNativeSessionOrDurableProofPreventsCorrection() throws Exception {
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    sql("UPDATE signal.registration_sessions SET verified=true");
+    assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(409);
+    assertThat(count("phone_signup_supersessions")).isZero();
+    assertThat(call(MobileEnrollmentParser.Operation.STATUS).status()).isEqualTo(200);
+    assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(409);
+    assertThat(count("phone_signup_supersessions")).isZero();
+  }
+
+  @Test void existingAccountPreventsCorrectionWithoutModifyingAccount() throws Exception {
+    sql("INSERT INTO signal.accounts(aci,number,pni,version,data) VALUES ('" + UUID.randomUUID()
+        + "','" + NUMBER + "','" + UUID.randomUUID() + "',1,'{}')");
+    assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(409);
+    assertThat(count("phone_signup_supersessions")).isZero();
+    assertThat(count("accounts")).isEqualTo(1);
+    verifyNoInteractions(provider);
+  }
+
+  @Test void retirementStorageConstraintsForbidProofOrNewNativeLease() throws Exception {
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    assertThat(signup.supersede(correction(NUMBER), false).status()).isEqualTo(200);
+    for (String mutation : List.of("UPDATE signal.registration_sessions SET verified=true",
+        "UPDATE signal.registration_sessions SET operation_id='" + UUID.randomUUID() + "',operation_expires_ms=1",
+        "UPDATE signal.phone_signup_operations SET verified_at_ms=1,proof_expires_ms=2")) {
+      var error = org.junit.jupiter.api.Assertions.assertThrows(java.sql.SQLException.class, () -> sql(mutation));
+      assertThat(error.getSQLState()).isEqualTo("23514");
+    }
+    verifyNoInteractions(provider);
+  }
+
+  @Test void missingLiveNativeStateFailsClosedButExpiredUnprovedAttemptCanRenew() throws Exception {
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    sql("DELETE FROM signal.registration_sessions");
+    var request = correction(NUMBER);
+    assertThat(signup.supersede(request, false).status()).isEqualTo(503);
+    assertThat(count("phone_signup_supersessions")).isZero();
+    clock.incrementSeconds(1801);
+    assertThat(signup.supersede(request, false).status()).isEqualTo(200);
+    verifyNoInteractions(provider);
+  }
+
+  @Test void correctionDoesNotResetNumberOrSourceQuotas() throws Exception {
+    var policy = new TelnyxRegistrationPolicy(Duration.ofMinutes(10), Duration.ofHours(1),
+        10, 10, 3, 3, 10, 3, Duration.ofSeconds(30), Duration.ofSeconds(1));
+    signup = new PhoneSignupService(ds, clock, new TelnyxRegistrationService(ds, provider, policy, new byte[32], clock),
+        admission, new byte[32]);
+    assertThat(call(MobileEnrollmentParser.Operation.BEGIN).status()).isEqualTo(200);
+    for (int i = 0; i < 3; i++) {
+      assertThat(call(MobileEnrollmentParser.Operation.SEND_CODE).status()).isEqualTo(200);
+      clock.incrementSeconds(30);
+    }
+    var request = correction(NUMBER);
+    var receipt = (MobileEnrollmentResponse.Supersession) signup.supersede(request, false).body();
+    assertThat(signup.execute(MobileEnrollmentParser.Operation.BEGIN, receipt.replacementApplicationId(),
+        request.replacementEnrollmentNonce(), NUMBER, null, SOURCE, null).status()).isEqualTo(200);
+    assertThat(signup.execute(MobileEnrollmentParser.Operation.SEND_CODE, receipt.replacementApplicationId(),
+        request.replacementEnrollmentNonce(), NUMBER, null, SOURCE, null).status()).isEqualTo(429);
+    verify(provider, times(3)).sendSms(NUMBER, TIMEOUT);
   }
 
   private void verifyNoConfirmation() {

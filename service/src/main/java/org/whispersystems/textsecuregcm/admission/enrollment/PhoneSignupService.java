@@ -83,12 +83,208 @@ public final class PhoneSignupService {
     }
   }
 
+  /** An explicit correction creates a durable fence; status can only reconcile that exact existing fence. */
+  public Result supersede(PhoneSignupSupersessionRequest request, boolean statusOnly) {
+    try {
+      if (request == null || request.applicationId() == null || request.correctionId() == null
+          || request.applicationId().equals(new UUID(0, 0)) || request.correctionId().equals(new UUID(0, 0))
+          || request.applicationId().equals(request.correctionId())) throw new IllegalArgumentException();
+      String number = canonical(request.phoneNumber()), replacement = canonical(request.replacementPhoneNumber());
+      String nonce = nonceHash(request.enrollmentNonce()), replacementNonce = nonceHash(request.replacementEnrollmentNonce());
+      if (nonce.equals(replacementNonce)) throw new IllegalArgumentException();
+      String lookup = sha256("bconnected.phone-allowlist.v1\0" + number);
+      String replacementLookup = sha256("bconnected.phone-allowlist.v1\0" + replacement);
+      Correction correction;
+      try (var connection = dataSource.getConnection()) {
+        correction = correction(connection, request.applicationId(), false);
+      }
+      if (correction == null) {
+        if (statusOnly) return error(Code.ENROLLMENT_UNAVAILABLE);
+        // Authenticate absent BEGIN privately BEFORE creating a tombstone, even when the challenge expired.
+        try {
+          admission.requireSignupSupersessionEligible(request.applicationId(), nonce, lookup, phoneBinding(number));
+        } catch (RuntimeException eligibilityFailure) {
+          // A concurrent exact retry may already have retired the community application. Its durable
+          // outbox is the recovery authority; the now-stale eligibility denial must not undo idempotency.
+          try (var connection = dataSource.getConnection()) {
+            correction = correction(connection, request.applicationId(), false);
+          }
+          if (correction == null) throw eligibilityFailure;
+        }
+        if (correction == null) correction = retire(request.applicationId(), request.correctionId(), nonce, lookup, number,
+            replacementNonce, replacementLookup, replacement);
+      }
+      authenticateCorrection(correction, request.correctionId(), nonce, lookup, number,
+          replacementNonce, replacementLookup, replacement);
+      return reconcile(correction);
+    } catch (Rejected rejected) {
+      return error(rejected.code);
+    } catch (AdmissionServiceClient.AdmissionServiceException denied) {
+      // HTTP denial can originate at Cloud Run IAM. It is not authoritative user-credential evidence.
+      return error(Code.TEMPORARILY_UNAVAILABLE);
+    } catch (IllegalArgumentException malformed) {
+      return error(Code.INVALID_REQUEST);
+    } catch (SQLException conflict) {
+      return error("23505".equals(conflict.getSQLState()) ? Code.ENROLLMENT_CONFLICT : Code.TEMPORARILY_UNAVAILABLE);
+    } catch (Exception unavailable) {
+      return error(Code.TEMPORARILY_UNAVAILABLE);
+    }
+  }
+
+  private Correction retire(UUID id, UUID correctionId, String nonce, String lookup, String number,
+      String replacementNonce, String replacementLookup, String replacementNumber) throws SQLException {
+    try (var connection = dataSource.getConnection()) {
+      connection.setAutoCommit(false);
+      try {
+        try (var lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)")) {
+          lock.setString(1, id.toString()); lock.execute();
+        }
+        Correction existing = correction(connection, id, true);
+        if (existing != null) {
+          authenticateCorrection(existing, correctionId, nonce, lookup, number,
+              replacementNonce, replacementLookup, replacementNumber);
+          connection.commit();
+          return existing;
+        }
+        Row row = load(connection, id, true);
+        if (row != null) {
+          authenticate(row, nonce, lookup, number);
+          if (row.verifiedAt != null || row.confirmed) throw new Rejected(Code.ENROLLMENT_CONFLICT);
+        }
+        // Existing account/registration state is never rewritten, detached, or recovered by correction.
+        try (var guard = connection.prepareStatement("""
+            SELECT EXISTS(SELECT 1 FROM signal.accounts WHERE number=?)
+              OR EXISTS(SELECT 1 FROM signal.registration_operations
+                        WHERE phone_signup_proof_id=? OR requested_number=?)
+            """)) {
+          guard.setString(1, number); guard.setObject(2, id); guard.setString(3, number);
+          try (var result = guard.executeQuery()) {
+            result.next(); if (result.getBoolean(1)) throw new Rejected(Code.ENROLLMENT_CONFLICT);
+          }
+        }
+        long now = clock.millis();
+        if (row != null) {
+          try (var nativeRead = connection.prepareStatement("""
+              SELECT number,verified,expires_ms,retired_ms FROM signal.registration_sessions WHERE id=? FOR UPDATE
+              """)) {
+            nativeRead.setBytes(1, row.nativeSessionId);
+            try (var result = nativeRead.executeQuery()) {
+              if (result.next()) {
+                if (!number.equals(result.getString("number")) || result.getLong("expires_ms") != row.nativeExpires
+                    || result.getBoolean("verified") || result.getObject("retired_ms") != null)
+                  throw new Rejected(Code.ENROLLMENT_CONFLICT);
+              } else if (now < row.nativeExpires) {
+                // A missing live session is unknown state, not negative proof.
+                throw new Rejected(Code.TEMPORARILY_UNAVAILABLE);
+              }
+            }
+          }
+          // Same native lock as reserve/complete. Clearing the lease fences already-issued provider calls.
+          try (var retire = connection.prepareStatement("""
+              UPDATE signal.registration_sessions SET retired_ms=?,operation_id=NULL,operation_expires_ms=NULL
+              WHERE id=? AND NOT verified AND retired_ms IS NULL
+              """)) {
+            retire.setLong(1, now); retire.setBytes(2, row.nativeSessionId); retire.executeUpdate();
+          }
+          try (var retire = connection.prepareStatement("""
+              UPDATE signal.phone_signup_operations SET retired_ms=? WHERE operation_id=?
+                AND verified_at_ms IS NULL AND NOT community_confirmed
+                AND consumed_registration_operation_id IS NULL AND consumed_member_id IS NULL AND retired_ms IS NULL
+              """)) {
+            retire.setLong(1, now); retire.setObject(2, id);
+            if (retire.executeUpdate() != 1) throw new Rejected(Code.ENROLLMENT_CONFLICT);
+          }
+        }
+        UUID replacementId;
+        do { replacementId = UUID.randomUUID(); } while (replacementId.equals(id) || replacementId.equals(correctionId));
+        try (var insert = connection.prepareStatement("""
+            INSERT INTO signal.phone_signup_supersessions
+              (original_application_id,correction_id,replacement_application_id,nonce_hash,phone_lookup_hash,
+               requested_number,replacement_nonce_hash,replacement_phone_lookup_hash,replacement_number,retired_ms)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """)) {
+          insert.setObject(1, id); insert.setObject(2, correctionId); insert.setObject(3, replacementId);
+          insert.setString(4, nonce); insert.setString(5, lookup); insert.setString(6, number);
+          insert.setString(7, replacementNonce); insert.setString(8, replacementLookup);
+          insert.setString(9, replacementNumber); insert.setLong(10, now); insert.executeUpdate();
+        }
+        Correction result = correction(connection, id, false);
+        connection.commit();
+        return result;
+      } catch (SQLException | RuntimeException | java.lang.Error failure) {
+        connection.rollback(); throw failure;
+      }
+    }
+  }
+
+  private Result reconcile(Correction row) throws SQLException {
+    if (row.expiresAt == null) {
+      final long expires;
+      try {
+        expires = admission.supersedeSignup(row.originalId, row.nonceHash, row.lookupHash, phoneBinding(row.number),
+            row.correctionId, row.replacementId, row.replacementNonceHash, row.replacementLookupHash);
+        if (expires <= row.retiredAt || expires > clock.millis() + MAX_APPLICATION_MS + 5000)
+          throw new IllegalArgumentException();
+      } catch (RuntimeException uncertain) {
+        // The fence is committed. Even a denied/malformed private response cannot restore the old operation.
+        return correctionSnapshot(row);
+      }
+      try (var connection = dataSource.getConnection(); var update = connection.prepareStatement("""
+          UPDATE signal.phone_signup_supersessions SET replacement_expires_ms=?
+          WHERE original_application_id=? AND correction_id=? AND replacement_application_id=?
+            AND (replacement_expires_ms IS NULL OR replacement_expires_ms=?)
+          """)) {
+        update.setLong(1, expires); update.setObject(2, row.originalId); update.setObject(3, row.correctionId);
+        update.setObject(4, row.replacementId); update.setLong(5, expires);
+        if (update.executeUpdate() != 1) throw new Rejected(Code.ENROLLMENT_CONFLICT);
+        row = correction(connection, row.originalId, false);
+      }
+    }
+    return correctionSnapshot(row);
+  }
+
+  private static Result correctionSnapshot(Correction row) {
+    return new Result(row.expiresAt == null ? 202 : 200, new Supersession(row.correctionId, row.originalId,
+        row.replacementId, row.expiresAt == null ? "retiring" : "replacement_ready", row.expiresAt, false));
+  }
+
+  private static void authenticateCorrection(Correction row, UUID correctionId, String nonce, String lookup,
+      String number, String replacementNonce, String replacementLookup, String replacementNumber) {
+    if (!MessageDigest.isEqual(row.nonceHash.getBytes(StandardCharsets.US_ASCII), nonce.getBytes(StandardCharsets.US_ASCII))
+        || !row.lookupHash.equals(lookup) || !row.number.equals(number)) throw new Rejected(Code.INVALID_CREDENTIALS);
+    if (!row.correctionId.equals(correctionId) || !row.replacementNonceHash.equals(replacementNonce)
+        || !row.replacementLookupHash.equals(replacementLookup) || !row.replacementNumber.equals(replacementNumber))
+      throw new Rejected(Code.ENROLLMENT_CONFLICT);
+  }
+
+  private static Correction correction(Connection connection, UUID id, boolean lock) throws SQLException {
+    try (var query = connection.prepareStatement(
+        "SELECT * FROM signal.phone_signup_supersessions WHERE original_application_id=?" + (lock ? " FOR UPDATE" : ""))) {
+      query.setObject(1, id);
+      try (var result = query.executeQuery()) { return result.next() ? new Correction(result) : null; }
+    }
+  }
+
+  private record Correction(UUID originalId, UUID correctionId, UUID replacementId, String nonceHash,
+      String lookupHash, String number, String replacementNonceHash, String replacementLookupHash,
+      String replacementNumber, long retiredAt, Long expiresAt) {
+    private Correction(ResultSet row) throws SQLException {
+      this(row.getObject("original_application_id", UUID.class), row.getObject("correction_id", UUID.class),
+          row.getObject("replacement_application_id", UUID.class), row.getString("nonce_hash"),
+          row.getString("phone_lookup_hash"), row.getString("requested_number"), row.getString("replacement_nonce_hash"),
+          row.getString("replacement_phone_lookup_hash"), row.getString("replacement_number"),
+          row.getLong("retired_ms"), row.getObject("replacement_expires_ms", Long.class));
+    }
+    @Override public String toString() { return "SignupCorrection[redacted]"; }
+  }
+
   private Result begin(UUID id, String nonceHash, String lookupHash, String number, String source) throws Exception {
     if (source == null || source.isBlank()) throw new IllegalArgumentException("Trusted source required");
     // A verified application may no longer issue an unverified private claim. Its native
     // operation is already bound, so authenticate the existing row and resume callback recovery.
     final boolean existingOperation;
     try (var connection = dataSource.getConnection()) {
+      rejectRetired(connection, id);
       Row existing = load(connection, id, false);
       if (existing != null) {
         authenticate(existing, nonceHash, lookupHash, number);
@@ -106,6 +302,7 @@ public final class PhoneSignupService {
           lock.setString(1, id.toString());
           lock.execute();
         }
+        rejectRetired(connection, id);
         Row row = load(connection, id, true);
         if (row == null) {
           claim.requireFresh();
@@ -197,7 +394,7 @@ public final class PhoneSignupService {
           var update = connection.prepareStatement("""
               UPDATE signal.phone_signup_operations SET community_confirmed=true
               WHERE operation_id=? AND nonce_hash=? AND phone_lookup_hash=?
-                AND verified_at_ms=? AND proof_expires_ms=?
+                AND verified_at_ms=? AND proof_expires_ms=? AND retired_ms IS NULL
               """)) {
         update.setObject(1, id);
         update.setString(2, nonceHash);
@@ -215,6 +412,7 @@ public final class PhoneSignupService {
     try (var connection = dataSource.getConnection()) {
       connection.setAutoCommit(false);
       try {
+        rejectRetired(connection, id);
         Row row = load(connection, id, true);
         if (row == null) throw new Rejected(Code.ENROLLMENT_UNAVAILABLE);
         authenticate(row, nonceHash, lookupHash, number);
@@ -225,17 +423,17 @@ public final class PhoneSignupService {
             return;
           }
           try (var nativeRead = connection.prepareStatement("""
-              SELECT number,verified,expires_ms FROM signal.registration_sessions WHERE id=? FOR UPDATE
+              SELECT number,verified,expires_ms,retired_ms FROM signal.registration_sessions WHERE id=? FOR UPDATE
               """)) {
             nativeRead.setBytes(1, row.nativeSessionId);
             try (var result = nativeRead.executeQuery()) {
-              if (!result.next() || !number.equals(result.getString("number"))
+              if (!result.next() || result.getObject("retired_ms") != null || !number.equals(result.getString("number"))
                   || result.getLong("expires_ms") != row.nativeExpires)
                 throw new Rejected(Code.TEMPORARILY_UNAVAILABLE);
               if (result.getBoolean("verified") && result.getLong("expires_ms") > now) {
                 try (var update = connection.prepareStatement("""
                     UPDATE signal.phone_signup_operations SET verified_at_ms=?,proof_expires_ms=?
-                    WHERE operation_id=? AND verified_at_ms IS NULL
+                    WHERE operation_id=? AND verified_at_ms IS NULL AND retired_ms IS NULL
                     """)) {
                   update.setLong(1, now);
                   update.setLong(2, Math.addExact(now, PROOF_MS));
@@ -256,6 +454,7 @@ public final class PhoneSignupService {
 
   private Row authenticated(UUID id, String nonceHash, String lookupHash, String number) throws SQLException {
     try (var connection = dataSource.getConnection()) {
+      rejectRetired(connection, id);
       Row row = load(connection, id, false);
       if (row == null) throw new Rejected(Code.ENROLLMENT_UNAVAILABLE);
       authenticate(row, nonceHash, lookupHash, number);
@@ -264,6 +463,7 @@ public final class PhoneSignupService {
   }
 
   private static void authenticate(Row row, String nonceHash, String lookupHash, String number) {
+    if (row.retiredAt != null) throw new Rejected(Code.ENROLLMENT_CONFLICT);
     if (!MessageDigest.isEqual(row.nonceHash.getBytes(StandardCharsets.US_ASCII),
             nonceHash.getBytes(StandardCharsets.US_ASCII))
         || !MessageDigest.isEqual(row.lookupHash.getBytes(StandardCharsets.US_ASCII),
@@ -308,6 +508,16 @@ public final class PhoneSignupService {
       try (var result = query.executeQuery()) {
         if (!result.next()) throw new Rejected(Code.TEMPORARILY_UNAVAILABLE);
         return result.getLong(1);
+      }
+    }
+  }
+
+  private static void rejectRetired(Connection connection, UUID id) throws SQLException {
+    try (var query = connection.prepareStatement(
+        "SELECT 1 FROM signal.phone_signup_supersessions WHERE original_application_id=?")) {
+      query.setObject(1, id);
+      try (var result = query.executeQuery()) {
+        if (result.next()) throw new Rejected(Code.ENROLLMENT_CONFLICT);
       }
     }
   }
@@ -366,13 +576,14 @@ public final class PhoneSignupService {
   }
 
   private record Row(UUID id, String nonceHash, String lookupHash, String number, byte[] nativeSessionId,
-      long nativeExpires, long applicationExpires, Long verifiedAt, Long proofExpires, boolean confirmed) {
+      long nativeExpires, long applicationExpires, Long verifiedAt, Long proofExpires, boolean confirmed, Long retiredAt) {
     private Row(ResultSet result) throws SQLException {
       this(result.getObject("operation_id", UUID.class), result.getString("nonce_hash"),
           result.getString("phone_lookup_hash"), result.getString("requested_number"),
           result.getBytes("native_session_id"), result.getLong("native_session_expires_ms"),
           result.getLong("application_expires_ms"), result.getObject("verified_at_ms", Long.class),
-          result.getObject("proof_expires_ms", Long.class), result.getBoolean("community_confirmed"));
+          result.getObject("proof_expires_ms", Long.class), result.getBoolean("community_confirmed"),
+          result.getObject("retired_ms", Long.class));
     }
   }
 

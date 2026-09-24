@@ -39,6 +39,29 @@ public final class PhoneSignupController {
     return handle(MobileEnrollmentParser.Operation.STATUS, id, request, body);
   }
 
+  @POST @Path("/{id}/supersede") @ManagedAsync
+  public Response supersede(@PathParam("id") String id, @Context ContainerRequest request, InputStream body) {
+    return supersession(id, request, body, false);
+  }
+  @POST @Path("/{id}/supersession-status") @ManagedAsync
+  public Response supersessionStatus(@PathParam("id") String id, @Context ContainerRequest request, InputStream body) {
+    return supersession(id, request, body, true);
+  }
+
+  private Response supersession(String id, ContainerRequest request, InputStream body, boolean statusOnly) {
+    Result result;
+    try {
+      if (request.getMediaType() == null || !MediaType.APPLICATION_JSON_TYPE.isCompatible(request.getMediaType()))
+        throw new IllegalArgumentException();
+      var parsed = reader.parse(body, PhoneSignupSupersessionRequest::parse);
+      if (!parsed.applicationId().toString().equals(id)) throw new IllegalArgumentException();
+      result = service.supersede(parsed, statusOnly);
+    } catch (IllegalArgumentException invalid) { result = error(Code.INVALID_REQUEST); }
+    catch (RuntimeException unavailable) { result = error(Code.TEMPORARILY_UNAVAILABLE); }
+    return Response.status(result.status()).type(MediaType.APPLICATION_JSON_TYPE)
+        .header("Cache-Control", "no-store").entity(result.body()).build();
+  }
+
   private Response handle(MobileEnrollmentParser.Operation action, String id, ContainerRequest request,
       InputStream body) {
     Result result;

@@ -403,6 +403,53 @@ public final class AdmissionServiceClient implements AutoCloseable {
         || !text(response.json(), "status").equals("verified")) throw failure(Failure.INVALID_RESPONSE);
   }
 
+  /** Private authentication/negative proof check; expiration alone does not invalidate the original nonce. */
+  public void requireSignupSupersessionEligible(UUID applicationId, String nonceHash, String phoneLookupHash,
+      String phoneBinding) {
+    var request = signupSupersessionIdentity(applicationId, nonceHash, phoneLookupHash, phoneBinding);
+    var response = exchange("signup-supersession-eligibility", request);
+    exact(response.json(), Set.of("applicationId", "signupOperationId", "status"));
+    if (!text(response.json(), "applicationId").equals(applicationId.toString())
+        || !text(response.json(), "signupOperationId").equals(applicationId.toString())
+        || !text(response.json(), "status").equals("supersession_eligible")) throw failure(Failure.INVALID_RESPONSE);
+  }
+
+  /** Called only after committing the permanent native retirement fence and immutable outbox tuple. */
+  public long supersedeSignup(UUID applicationId, String nonceHash, String phoneLookupHash, String phoneBinding,
+      UUID correctionId, UUID replacementApplicationId, String replacementNonceHash, String replacementPhoneLookupHash) {
+    uuid(correctionId); uuid(replacementApplicationId); requireHash(replacementNonceHash);
+    requireHash(replacementPhoneLookupHash);
+    if (applicationId.equals(correctionId) || applicationId.equals(replacementApplicationId)
+        || correctionId.equals(replacementApplicationId) || nonceHash.equals(replacementNonceHash))
+      throw failure(Failure.INVALID_RESPONSE);
+    var request = new java.util.HashMap<>(signupSupersessionIdentity(applicationId, nonceHash, phoneLookupHash, phoneBinding));
+    request.put("correctionId", correctionId.toString());
+    request.put("replacementApplicationId", replacementApplicationId.toString());
+    request.put("replacementNonceHash", replacementNonceHash);
+    request.put("replacementPhoneLookupHash", replacementPhoneLookupHash);
+    var response = exchange("signup-supersessions", request);
+    exact(response.json(), Set.of("correctionId", "originalApplicationId", "replacementApplicationId", "state",
+        "expiresAt", "registrationAuthorized"));
+    if (!text(response.json(), "correctionId").equals(correctionId.toString())
+        || !text(response.json(), "originalApplicationId").equals(applicationId.toString())
+        || !text(response.json(), "replacementApplicationId").equals(replacementApplicationId.toString())
+        || !text(response.json(), "state").equals("replacement_ready")
+        || !response.json().get("registrationAuthorized").isBoolean()
+        || response.json().get("registrationAuthorized").booleanValue()) throw failure(Failure.INVALID_RESPONSE);
+    long expires = integer(response.json(), "expiresAt");
+    // An exact receipt remains recoverable after expiry; recovery must never renew its deadline.
+    if (expires <= 0 || expires > clock.millis() + TimeUnit.MINUTES.toMillis(30) + 5000)
+      throw failure(Failure.INVALID_RESPONSE);
+    return expires;
+  }
+
+  private static Map<String, Object> signupSupersessionIdentity(UUID applicationId, String nonceHash,
+      String phoneLookupHash, String phoneBinding) {
+    uuid(applicationId); requireHash(nonceHash); requireHash(phoneLookupHash); requireHash(phoneBinding);
+    return Map.of("applicationId", applicationId.toString(), "signupOperationId", applicationId.toString(),
+        "nonceHash", nonceHash, "phoneLookupHash", phoneLookupHash, "phoneBinding", phoneBinding);
+  }
+
   private static void requireHash(String hash) {
     if (hash == null || !hash.matches("[a-f0-9]{64}")) throw failure(Failure.INVALID_RESPONSE);
   }

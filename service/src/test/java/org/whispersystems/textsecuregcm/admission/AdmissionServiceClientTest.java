@@ -127,6 +127,33 @@ class AdmissionServiceClientTest {
             });
   }
 
+  @Test void signupSupersessionPrivateContractIsExactAndExpiredReceiptDoesNotRenew() throws Exception {
+    UUID original = UUID.randomUUID(), correction = UUID.randomUUID(), replacement = UUID.randomUUID();
+    rawBody = JSON.writeValueAsString(Map.of("applicationId", original.toString(), "signupOperationId", original.toString(),
+        "status", "supersession_eligible"));
+    client.requireSignupSupersessionEligible(original, "a".repeat(64), "b".repeat(64), "c".repeat(64));
+    assertThat(requests.getLast().uri().getPath()).endsWith("/signup-supersession-eligibility");
+    assertThat(bodies.getLast().size()).isEqualTo(5);
+    var receipt = new LinkedHashMap<String, Object>(Map.of("correctionId", correction.toString(),
+        "originalApplicationId", original.toString(), "replacementApplicationId", replacement.toString(),
+        "state", "replacement_ready", "expiresAt", clock.millis() - 1000, "registrationAuthorized", false));
+    rawBody = JSON.writeValueAsString(receipt);
+    assertThat(client.supersedeSignup(original, "a".repeat(64), "b".repeat(64), "c".repeat(64), correction,
+        replacement, "d".repeat(64), "e".repeat(64))).isEqualTo(clock.millis() - 1000);
+    assertThat(requests.getLast().uri().getPath()).endsWith("/signup-supersessions");
+    assertThat(bodies.getLast().size()).isEqualTo(9);
+    for (String field : List.of("correctionId", "originalApplicationId", "replacementApplicationId", "state", "registrationAuthorized")) {
+      var wrong = new LinkedHashMap<>(receipt);
+      wrong.put(field, field.equals("registrationAuthorized") ? true : UUID.randomUUID().toString());
+      rawBody = JSON.writeValueAsString(wrong);
+      assertThrows(AdmissionServiceClient.AdmissionServiceException.class, () -> client.supersedeSignup(original,
+          "a".repeat(64), "b".repeat(64), "c".repeat(64), correction, replacement, "d".repeat(64), "e".repeat(64)));
+    }
+    receipt.put("phoneVerified", true); rawBody = JSON.writeValueAsString(receipt);
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, () -> client.supersedeSignup(original,
+        "a".repeat(64), "b".repeat(64), "c".repeat(64), correction, replacement, "d".repeat(64), "e".repeat(64)));
+  }
+
   private AdmissionServiceClient newClient(
       AdmissionServiceClient.TokenProvider token, AdmissionServiceConfiguration config) {
     return new AdmissionServiceClient(config, http, token, clock, nanos::get, new SecureRandom());

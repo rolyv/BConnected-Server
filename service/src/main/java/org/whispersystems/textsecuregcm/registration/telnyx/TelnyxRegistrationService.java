@@ -217,7 +217,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
     return transaction(connection -> {
       final State state = load(connection, id, true).orElseThrow(() -> new Rejected(null, null, false));
       final long now = clock.millis();
-      if (state.expiresMs <= now) throw new Rejected(null, null, false);
+      if (state.retiredMs != null || state.expiresMs <= now) throw new Rejected(null, null, false);
       final RegistrationServiceSession session = snapshot(state, now);
       if (state.verified) throw new Rejected(session, null, false);
       if (state.operationId != null && state.operationExpiresMs > now) {
@@ -259,6 +259,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
       final State current = load(connection, reservation.id, true)
           .orElseThrow(() -> new Rejected(null, null, false));
       final long now = clock.millis();
+      if (current.retiredMs != null) throw new Rejected(null, null, false);
       // Attribute expiry only to this exact in-flight check. A later send, missing
       // provider binding or expired session is not evidence that this code expired.
       if (!reservation.send && !current.verified && current.expiresMs > now
@@ -271,7 +272,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
           : "verified=?";
       try (var statement = connection.prepareStatement("UPDATE signal.registration_sessions SET " + mutation + """
           , operation_id=NULL, operation_expires_ms=NULL
-          WHERE id=? AND operation_id=? AND expires_ms>? AND operation_expires_ms>?
+          WHERE id=? AND operation_id=? AND retired_ms IS NULL AND expires_ms>? AND operation_expires_ms>?
           """ + (reservation.send ? "" : " AND code_expires_ms>?"))) {
         int parameter = 1;
         if (reservation.send) {
@@ -302,7 +303,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
       try (var statement = connection.prepareStatement("UPDATE signal.registration_sessions SET " + cooldown
           + "=GREATEST(" + cooldown + ", ?), operation_id=NULL, operation_expires_ms=NULL"
           + (discardProvider ? ", provider_verification_id=NULL, code_expires_ms=NULL" : "")
-          + " WHERE id=? AND operation_id=?")) {
+          + " WHERE id=? AND operation_id=? AND retired_ms IS NULL")) {
         final long delay = retryAfter == null || retryAfter.isNegative() ? 0
             : Math.min(retryAfter.toMillis(), policy.sessionLifetime().toMillis());
         statement.setLong(1, Math.addExact(now, delay));
@@ -359,7 +360,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
   }
 
   private static Optional<State> active(final Optional<State> state, final long now) {
-    return state.filter(s -> s.expiresMs > now);
+    return state.filter(s -> s.retiredMs == null && s.expiresMs > now);
   }
 
   private RegistrationServiceSession snapshot(final State state, final long now) {
@@ -438,12 +439,13 @@ public final class TelnyxRegistrationService implements RegistrationService {
   private record Reservation(byte[] id, String number, UUID providerId, UUID operationId, long startedMs, boolean send) {}
 
   private record State(byte[] id, String number, long expiresMs, boolean verified, UUID providerId, long codeExpiresMs,
-      int smsCount, int checkCount, long nextSmsMs, long nextCheckMs, UUID operationId, long operationExpiresMs) {
+      int smsCount, int checkCount, long nextSmsMs, long nextCheckMs, UUID operationId, long operationExpiresMs, Long retiredMs) {
     private State(final ResultSet rows) throws SQLException {
       this(rows.getBytes("id"), rows.getString("number"), rows.getLong("expires_ms"), rows.getBoolean("verified"),
           rows.getObject("provider_verification_id", UUID.class), rows.getLong("code_expires_ms"),
           rows.getInt("sms_count"), rows.getInt("check_count"), rows.getLong("next_sms_ms"), rows.getLong("next_check_ms"),
-          rows.getObject("operation_id", UUID.class), rows.getLong("operation_expires_ms"));
+          rows.getObject("operation_id", UUID.class), rows.getLong("operation_expires_ms"),
+          rows.getObject("retired_ms", Long.class));
     }
   }
 

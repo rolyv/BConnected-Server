@@ -503,7 +503,7 @@ public final class RegistrationOperations {
         query.setObject(1, claim.signupProofId());
         try (var row = query.executeQuery()) {
           long now = clock.millis();
-          if (!row.next() || !row.getBoolean("community_confirmed")
+          if (!row.next() || row.getObject("retired_ms") != null || !row.getBoolean("community_confirmed")
               || row.getObject("verified_at_ms") == null || row.getLong("verified_at_ms") > now + 5000
               || row.getLong("proof_expires_ms") <= now
               || row.getLong("proof_expires_ms") - row.getLong("verified_at_ms") > Duration.ofDays(30).toMillis()
@@ -572,7 +572,7 @@ public final class RegistrationOperations {
       query.setObject(1, proofId);
       try (var row = query.executeQuery()) {
         long now = clock.millis();
-        if (!row.next() || !row.getBoolean("community_confirmed") || row.getObject("verified_at_ms") == null
+        if (!row.next() || row.getObject("retired_ms") != null || !row.getBoolean("community_confirmed") || row.getObject("verified_at_ms") == null
             || row.getLong("verified_at_ms") > now + 5000 || row.getLong("proof_expires_ms") <= now
             || !stored.id.equals(row.getObject("consumed_registration_operation_id", UUID.class))
             || !stored.member.equals(row.getObject("consumed_member_id", UUID.class))

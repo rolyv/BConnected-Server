@@ -65,11 +65,13 @@ class DmAlphaRequestPolicyTest {
   @Test
   void signupIsExplicitRestOnlyAndHasNoAccountCreationAction() throws Exception {
     String base = "/v1/bconnected/signup/";
-    for (String action : new String[] {"begin", OPERATION + "/send-code", OPERATION + "/check-code", OPERATION + "/status"}) {
+    for (String action : new String[] {"begin", OPERATION + "/send-code", OPERATION + "/check-code", OPERATION + "/status",
+        OPERATION + "/supersede", OPERATION + "/supersession-status"}) {
       assertAllowed(new DmAlphaRequestPolicy(true), new Request("POST", base + action));
       assertDenied(new DmAlphaRequestPolicy(false), new Request("POST", base + action));
     }
-    for (String action : new String[] {OPERATION + "/complete", OPERATION + "/status?x=1", OPERATION + "/send-code/extra"})
+    for (String action : new String[] {OPERATION + "/complete", OPERATION + "/status?x=1", OPERATION + "/send-code/extra",
+        OPERATION + "/supersede/extra", OPERATION + "/supersession-status?x=1", OPERATION + "/cancel"})
       assertDenied(new DmAlphaRequestPolicy(true), new Request("POST", base + action));
     assertDenied(new DmAlphaRequestPolicy(true), new Request("GET", base + "begin"));
   }

@@ -13,6 +13,10 @@ public final class MobileEnrollmentResponse {
   public record Verification(UUID operationId, String state, boolean phoneVerified, Long nextSmsSeconds,
       Long nextCheckSeconds, long expiresInSeconds, boolean registrationAuthorized) {}
 
+  @JsonInclude(JsonInclude.Include.ALWAYS)
+  public record Supersession(UUID correctionId, UUID originalApplicationId, UUID replacementApplicationId,
+      String state, Long expiresAt, boolean registrationAuthorized) {}
+
   @JsonInclude(JsonInclude.Include.NON_NULL)
   public record AccountStatus(UUID operationId, String state, boolean registrationAuthorized,
       AccountProjection account) {}

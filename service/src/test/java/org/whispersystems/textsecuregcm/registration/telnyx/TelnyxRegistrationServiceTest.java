@@ -74,6 +74,7 @@ class TelnyxRegistrationServiceTest {
     dataSource.setPassword(System.getenv("BCONNECTED_TEST_POSTGRES_PASSWORD"));
     try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
       statement.execute(Files.readString(Path.of("../bconnected/migrations/011-telnyx-registration.sql")));
+      statement.execute("ALTER TABLE signal.registration_sessions ADD COLUMN IF NOT EXISTS retired_ms bigint");
       statement.execute("TRUNCATE signal.registration_sessions, signal.registration_quotas");
     }
     clock = new MutableClock().setTimeInstant(Instant.parse("2026-09-20T12:00:00Z"));

@@ -47,7 +47,8 @@ class AdmissionRegistrationCoordinatorPostgresTest {
               "011-telnyx-registration",
               "013-registration-operations",
               "014-registration-claims",
-              "016-phone-signup"))
+              "016-phone-signup",
+              "017-signup-supersession"))
         s.execute(Files.readString(Path.of("../bconnected/migrations/" + migration + ".sql")));
       s.execute(
           "TRUNCATE"

@@ -59,6 +59,7 @@ class RegistrationOperationsPostgresTest {
           Files.readString(Path.of("../bconnected/migrations/013-registration-operations.sql")));
       s.execute(Files.readString(Path.of("../bconnected/migrations/014-registration-claims.sql")));
       s.execute(Files.readString(Path.of("../bconnected/migrations/016-phone-signup.sql")));
+      s.execute(Files.readString(Path.of("../bconnected/migrations/017-signup-supersession.sql")));
       s.execute(
           "TRUNCATE"
               + " signal.phone_signup_operations,signal.registration_operations,signal.registration_sessions,"
