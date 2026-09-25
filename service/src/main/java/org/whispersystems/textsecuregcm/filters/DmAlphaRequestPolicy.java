@@ -76,6 +76,11 @@ public final class DmAlphaRequestPolicy implements ContainerRequestFilter {
       return noQuery(query);
     }
 
+    if ("POST".equals(method) && ("/v1/bconnected/directory/search".equals(path)
+        || "/v1/bconnected/directory/resolve".equals(path))) {
+      return noQuery(query);
+    }
+
     if ("GET".equals(method) && "/v1/accounts/whoami".equals(path)) {
       return noQuery(query);
     }

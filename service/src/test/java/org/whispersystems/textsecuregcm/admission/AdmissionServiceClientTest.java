@@ -154,6 +154,101 @@ class AdmissionServiceClientTest {
         "a".repeat(64), "b".repeat(64), "c".repeat(64), correction, replacement, "d".repeat(64), "e".repeat(64)));
   }
 
+  private void directoryResponse(Map<String, Object> response, int count) {
+    var caller = new LinkedHashMap<String, Object>();
+    for (String field : List.of("memberId", "approvalEpoch", "signalOperationId", "jti", "aci")) caller.put(field, response.get(field));
+    Object nonce = response.get("requestNonce");
+    Object target = response.get("targetAci");
+    var rows = new ArrayList<Map<String, Object>>();
+    for (int index = 0; index < count; index++) {
+      var row = new LinkedHashMap<>(caller);
+      row.put("aci", target == null ? UUID.randomUUID().toString() : target);
+      row.put("confirmedAt", clock.millis() - 1000);
+      row.put("fullName", "Synthetic " + "x".repeat(90));
+      row.put("graduationYear", 2005);
+      rows.add(row);
+    }
+    response.clear();
+    response.put("caller", caller); response.put("requestNonce", nonce); response.put("status", "confirmed");
+    response.put("checkedAt", clock.millis()); response.put("validUntil", clock.millis() + 4000);
+    response.put("members", rows); response.put("nextOffset", count == 20 ? 20 : null);
+  }
+
+  @Test void directoryUsesExactCallerAndBodyOnlyQueryWithLargerBoundedBatch() throws Exception {
+    mutate = response -> {
+      directoryResponse(response, 20);
+      assertThat(JSON.valueToTree(response).toString().getBytes(StandardCharsets.UTF_8).length)
+          .isGreaterThan(AdmissionServiceClient.MAX_RESPONSE_BYTES).isLessThan(AdmissionServiceClient.MAX_DIRECTORY_RESPONSE_BYTES);
+    };
+    var page = client.directory(binding, "Synthetic 2005", 0, null);
+    assertThat(page.members).hasSize(20);
+    assertThat(page.nextOffset).isEqualTo(20);
+    assertThat(requests.getLast().uri().getPath()).isEqualTo("/internal/v1/admission/directory-search");
+    assertThat(requests.getLast().uri().getQuery()).isNull();
+    assertThat(bodies.getLast().size()).isEqualTo(8);
+    assertThat(bodies.getLast().get("query").textValue()).isEqualTo("Synthetic 2005");
+    nanos.addAndGet(TimeUnit.MILLISECONDS.toNanos(4000));
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, page::requireFresh);
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, page.members.getFirst().entitlement()::requireFresh);
+  }
+
+  @Test void directoryNeverRenewsOriginalBudgetForEmptyOrDelayedResponses() {
+    mutate = response -> directoryResponse(response, 0);
+    var empty = client.directory(binding, "", 0, null);
+    assertThat(empty.members).isEmpty();
+    nanos.addAndGet(TimeUnit.MILLISECONDS.toNanos(4000));
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, empty::requireFresh);
+    responseDelay = () -> nanos.addAndGet(TimeUnit.MILLISECONDS.toNanos(4000));
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, () -> client.directory(binding, "", 0, null));
+  }
+
+  @Test void directoryRejectsChangedCallerNoncePaginationAndMetadata() {
+    for (String bad : List.of("caller", "nonce", "status", "name", "year", "aci", "unknown", "duplicate", "offset", "deadline")) {
+      mutate = response -> {
+        directoryResponse(response, 1);
+        @SuppressWarnings("unchecked") var rows = (List<Map<String, Object>>) response.get("members");
+        switch (bad) {
+          case "caller" -> {
+            @SuppressWarnings("unchecked") var caller = (Map<String, Object>) response.get("caller");
+            caller.put("aci", UUID.randomUUID().toString());
+          }
+          case "nonce" -> response.put("requestNonce", AdmissionTestData.id());
+          case "status" -> response.put("status", "pending");
+          case "name" -> rows.getFirst().put("fullName", "bad\nname");
+          case "year" -> rows.getFirst().put("graduationYear", 3000);
+          case "aci" -> rows.getFirst().put("aci", "1-1-1-1-1");
+          case "unknown" -> rows.getFirst().put("phoneNumber", "+10000000000");
+          case "duplicate" -> rows.add(rows.getFirst());
+          case "offset" -> response.put("nextOffset", 20);
+          case "deadline" -> response.put("validUntil", clock.millis() + 4001);
+        }
+      };
+      assertThrows(AdmissionServiceClient.AdmissionServiceException.class, () -> client.directory(binding, "", 0, null), bad);
+    }
+  }
+
+  @Test void directoryResolveBindsExactTargetAndNeverPages() {
+    var target = UUID.randomUUID();
+    mutate = response -> directoryResponse(response, 1);
+    assertThat(client.directory(binding, null, null, target).members.getFirst().entitlement().binding().aci()).isEqualTo(target);
+    assertThat(bodies.getLast().size()).isEqualTo(7);
+    assertThat(requests.getLast().uri().getPath()).endsWith("/directory-resolve");
+    mutate = response -> {
+      directoryResponse(response, 1);
+      @SuppressWarnings("unchecked") var rows = (List<Map<String, Object>>) response.get("members");
+      rows.getFirst().put("aci", UUID.randomUUID().toString());
+    };
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, () -> client.directory(binding, null, null, target));
+  }
+
+  @Test void directoryStillRejectsOversizedAndDuplicateKeyPrivateResponses() {
+    mutate = response -> directoryResponse(response, 1);
+    rawTransform = value -> value + " ".repeat(AdmissionServiceClient.MAX_DIRECTORY_RESPONSE_BYTES);
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, () -> client.directory(binding, "", 0, null));
+    rawTransform = value -> value.replace("\"status\":\"confirmed\"", "\"status\":\"confirmed\",\"status\":\"confirmed\"");
+    assertThrows(AdmissionServiceClient.AdmissionServiceException.class, () -> client.directory(binding, "", 0, null));
+  }
+
   private AdmissionServiceClient newClient(
       AdmissionServiceClient.TokenProvider token, AdmissionServiceConfiguration config) {
     return new AdmissionServiceClient(config, http, token, clock, nanos::get, new SecureRandom());

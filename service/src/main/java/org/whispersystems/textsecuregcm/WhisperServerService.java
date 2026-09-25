@@ -1340,6 +1340,7 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
         new KeysController(rateLimiters, keysManager, accountsManager, groupZkSecretParams, Clock.systemUTC(), admissionGate, admittedKeys),
         gcpPilot ? new org.whispersystems.textsecuregcm.controllers.InitialPreKeyPublicationController(admissionGate, admittedKeys, rateLimiters) : null,
         dmAlphaEnrollment == null ? null : new org.whispersystems.textsecuregcm.controllers.BConnectedRecipientController(admissionGate, rateLimiters),
+        dmAlphaEnrollment == null ? null : new org.whispersystems.textsecuregcm.controllers.BConnectedDirectoryController(admissionGate, rateLimiters),
         gcpPilot ? null : new KeyTransparencyController(keyTransparencyServiceClient),
         new MessageController(rateLimiters, messageByteLimitCardinalityEstimator, messageSender, accountsManager,
             phoneNumberIdentifiers, reportMessageManager, groupZkSecretParams, spamChecker, Clock.systemUTC(), gcpPilot),

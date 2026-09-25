@@ -42,6 +42,8 @@ import java.util.function.LongSupplier;
  */
 public final class AdmissionServiceClient implements AutoCloseable {
   static final int MAX_RESPONSE_BYTES = 8192;
+  static final int MAX_DIRECTORY_RESPONSE_BYTES = 32768;
+  private static final Set<String> BINDING_FIELDS = Set.of("memberId", "approvalEpoch", "signalOperationId", "jti", "aci");
   private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
   private static final Set<String> FIELDS =
       Set.of(
@@ -566,6 +568,109 @@ public final class AdmissionServiceClient implements AutoCloseable {
     return request("entitlements", ReceiptPurpose.CURRENT_ENTITLEMENT, binding);
   }
 
+  /** Names remain private until the native gate validates this exact binding and ACTIVE account. */
+  static record DirectoryMember(FreshEntitlement entitlement, String fullName, int graduationYear) {
+    @Override public String toString() { return "DirectoryMember[redacted]"; }
+  }
+
+  static final class DirectoryPage {
+    final List<DirectoryMember> members;
+    final Integer nextOffset;
+    private final long startNanos, budgetNanos, validUntil;
+    private final LongSupplier monotonic;
+    private final Clock clock;
+    DirectoryPage(List<DirectoryMember> members, Integer nextOffset, Exchange response, long budgetNanos,
+        long validUntil, LongSupplier monotonic, Clock clock) {
+      this.members = List.copyOf(members); this.nextOffset = nextOffset;
+      this.startNanos = response.startNanos(); this.budgetNanos = budgetNanos; this.validUntil = validUntil;
+      this.monotonic = monotonic; this.clock = clock;
+    }
+    void requireFresh() {
+      long elapsed = monotonic.getAsLong() - startNanos;
+      if (elapsed < 0 || elapsed >= budgetNanos || clock.millis() >= validUntil) throw failure(Failure.EXPIRED);
+    }
+    @Override public String toString() { return "DirectoryPage[redacted]"; }
+  }
+
+  DirectoryPage directory(Binding caller, String query, Integer offset, UUID targetAci) {
+    Objects.requireNonNull(caller);
+    boolean resolve = targetAci != null;
+    if (resolve ? query != null || offset != null : query == null || offset == null || offset < 0 || offset > 10000)
+      throw new IllegalArgumentException("Invalid directory request");
+    if (resolve) uuid(targetAci);
+    byte[] nonceBytes = new byte[32]; random.nextBytes(nonceBytes);
+    String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
+    var body = new java.util.LinkedHashMap<String, Object>(bindingFields(caller));
+    body.put("requestNonce", nonce);
+    if (resolve) body.put("targetAci", targetAci.toString());
+    else { body.put("query", query); body.put("offset", offset); }
+    var response = exchange(resolve ? "directory-resolve" : "directory-search", body, MAX_DIRECTORY_RESPONSE_BYTES);
+    var json = response.json();
+    exact(json, Set.of("caller", "requestNonce", "status", "checkedAt", "validUntil", "members", "nextOffset"));
+    if (!readBinding(json.get("caller")).equals(caller) || !text(json, "requestNonce").equals(nonce)
+        || !text(json, "status").equals("confirmed")) throw failure(Failure.INVALID_RESPONSE);
+    long checked = integer(json, "checkedAt"), valid = integer(json, "validUntil");
+    long budget = freshnessBudget(response, checked, valid);
+    var rows = json.get("members");
+    if (!rows.isArray() || rows.size() > (resolve ? 1 : 20)) throw failure(Failure.INVALID_RESPONSE);
+    var members = new java.util.ArrayList<DirectoryMember>();
+    var acis = new HashSet<UUID>();
+    for (var row : rows) {
+      exact(row, Set.of("memberId", "approvalEpoch", "signalOperationId", "jti", "aci", "confirmedAt", "fullName", "graduationYear"));
+      var bindingObject = JSON.createObjectNode();
+      for (var field : BINDING_FIELDS) bindingObject.set(field, row.get(field));
+      var binding = readBinding(bindingObject);
+      if (!acis.add(binding.aci()) || (resolve && !binding.aci().equals(targetAci))) throw failure(Failure.INVALID_RESPONSE);
+      long confirmed = integer(row, "confirmedAt"), year = integer(row, "graduationYear");
+      String name = text(row, "fullName");
+      if (confirmed > checked || name.isBlank() || name.length() > 100
+          || name.codePoints().anyMatch(value -> Character.isISOControl(value) || (value >= 0xd800 && value <= 0xdfff))
+          || year < 1940 || year > clock.instant().atZone(java.time.ZoneOffset.UTC).getYear())
+        throw failure(Failure.INVALID_RESPONSE);
+      var entitlement = new FreshEntitlement(binding, ReceiptPurpose.CURRENT_ENTITLEMENT,
+          confirmed, checked, valid, response.startNanos(), budget, monotonic, clock);
+      entitlement.requireFresh();
+      members.add(new DirectoryMember(entitlement, name, (int) year));
+    }
+    Integer next = null;
+    if (!json.get("nextOffset").isNull()) {
+      long value = integer(json, "nextOffset");
+      if (resolve || value != offset + 20L || value > 10000 || rows.size() != 20) throw failure(Failure.INVALID_RESPONSE);
+      next = (int) value;
+    }
+    var page = new DirectoryPage(members, next, response, budget, valid, monotonic, clock);
+    page.requireFresh();
+    return page;
+  }
+
+  private static Map<String, Object> bindingFields(Binding binding) {
+    return Map.of("memberId", binding.memberId().toString(), "approvalEpoch", binding.approvalEpoch(),
+        "signalOperationId", binding.signalOperationId().toString(), "jti", binding.permitId(), "aci", binding.aci().toString());
+  }
+
+  private static Binding readBinding(JsonNode value) {
+    exact(value, BINDING_FIELDS);
+    try {
+      var member = canonicalUuid(text(value, "memberId"));
+      var operation = canonicalUuid(text(value, "signalOperationId"));
+      var aci = canonicalUuid(text(value, "aci"));
+      return new Binding(member, integer(value, "approvalEpoch"), operation, text(value, "jti"), aci);
+    } catch (IllegalArgumentException malformed) { throw failure(Failure.INVALID_RESPONSE); }
+  }
+
+  private static UUID canonicalUuid(String text) {
+    var value = UUID.fromString(text);
+    if (!value.toString().equals(text)) throw new IllegalArgumentException();
+    return value;
+  }
+
+  private long freshnessBudget(Exchange response, long checked, long valid) {
+    if (valid <= checked || valid - checked > 4000 || checked > clock.millis() + 5000)
+      throw failure(Failure.INVALID_RESPONSE);
+    if (valid <= clock.millis() || valid <= response.startMillis()) throw failure(Failure.EXPIRED);
+    return TimeUnit.MILLISECONDS.toNanos(Math.min(4000, Math.min(valid - checked, valid - response.startMillis())));
+  }
+
   private FreshEntitlement request(String path, ReceiptPurpose purpose, Binding binding) {
     Objects.requireNonNull(binding);
     byte[] nonceBytes = new byte[32];
@@ -629,6 +734,10 @@ public final class AdmissionServiceClient implements AutoCloseable {
   }
 
   private Exchange exchange(String path, Map<String, Object> requestBody) {
+    return exchange(path, requestBody, MAX_RESPONSE_BYTES);
+  }
+
+  private Exchange exchange(String path, Map<String, Object> requestBody, int maxResponseBytes) {
     long startNanos = monotonic.getAsLong(), startMillis = clock.millis();
     long timeoutNanos = configuration.requestTimeout().toNanos();
     Future<String> tokenFuture = null;
@@ -659,7 +768,7 @@ public final class AdmissionServiceClient implements AutoCloseable {
               .header("Accept", "application/json")
               .POST(HttpRequest.BodyPublishers.ofByteArray(body))
               .build();
-      responseFuture = http.sendAsync(request, boundedBodyHandler());
+      responseFuture = http.sendAsync(request, boundedBodyHandler(maxResponseBytes));
       HttpResponse<byte[]> response =
           responseFuture.get(remaining(startNanos, timeoutNanos), TimeUnit.NANOSECONDS);
       remaining(startNanos, timeoutNanos);
@@ -671,7 +780,7 @@ public final class AdmissionServiceClient implements AutoCloseable {
       if (!uri.equals(response.uri())
           || response.previousResponse().isPresent()
           || response.body() == null
-          || response.body().length > MAX_RESPONSE_BYTES
+          || response.body().length > maxResponseBytes
           || response.headers().firstValue("Content-Encoding").isPresent()
           || !response
               .headers()
@@ -755,6 +864,10 @@ public final class AdmissionServiceClient implements AutoCloseable {
   }
 
   static HttpResponse.BodyHandler<byte[]> boundedBodyHandler() {
+    return boundedBodyHandler(MAX_RESPONSE_BYTES);
+  }
+
+  private static HttpResponse.BodyHandler<byte[]> boundedBodyHandler(int maxResponseBytes) {
     return info ->
         new HttpResponse.BodySubscriber<>() {
           private final HttpResponse.BodySubscriber<byte[]> delegate =
@@ -778,7 +891,7 @@ public final class AdmissionServiceClient implements AutoCloseable {
           public void onNext(List<ByteBuffer> buffers) {
             if (done) return;
             for (var value : buffers) received += value.remaining();
-            if (received > MAX_RESPONSE_BYTES) {
+            if (received > maxResponseBytes) {
               done = true;
               subscription.cancel();
               delegate.onError(new IOException("Admission response exceeds limit"));

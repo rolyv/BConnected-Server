@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -194,6 +195,69 @@ public final class AdmissionEntitlementGate {
     requireAci(aci);
     Snapshot original = transaction(connection -> readLocked(connection, aci));
     return authorizeSnapshot(original);
+  }
+
+  /** The public directory contains labels only, never phone numbers or admission identifiers. */
+  public record DirectoryMember(UUID aci, byte deviceId, String fullName, int graduationYear) {
+    @Override public String toString() { return "DirectoryMember[redacted]"; }
+  }
+  public record DirectoryPage(List<DirectoryMember> members, Integer nextOffset) {
+    public DirectoryPage { members = List.copyOf(members); }
+    @Override public String toString() { return "DirectoryPage[redacted]"; }
+  }
+
+  /** Retains every original receipt until the response has been constructed. No receipt renewal. */
+  public final class DirectoryAuthorization {
+    private final DeviceAuthorization caller;
+    private final AdmissionServiceClient.DirectoryPage privatePage;
+    private final List<Authorization> targets;
+    private final DirectoryPage page;
+    private DirectoryAuthorization(DeviceAuthorization caller, AdmissionServiceClient.DirectoryPage privatePage,
+        List<Authorization> targets, DirectoryPage page) {
+      this.caller = caller; this.privatePage = privatePage; this.targets = List.copyOf(targets); this.page = page;
+    }
+    public DirectoryPage page() { requireCurrent(); return page; }
+    public void requireCurrent() {
+      privatePage.requireFresh();
+      transaction(connection -> {
+        caller.requireCurrent(connection, caller.projection.aci(), caller.deviceId, caller.deviceCreated);
+        for (var target : targets) {
+          try { AdmissionEntitlementGate.this.requireCurrent(connection, target, target.snapshot.binding().aci()); }
+          catch (DeniedException noLongerVisible) { throw unavailable(); }
+        }
+        return null;
+      });
+      privatePage.requireFresh();
+      requireReceipt(caller.membership.snapshot, caller.membership.receipt);
+      for (var target : targets) requireReceipt(target.snapshot, target.receipt);
+    }
+    @Override public String toString() { return "DirectoryAuthorization[redacted]"; }
+  }
+
+  public DirectoryAuthorization directory(DeviceAuthorization caller, UUID expectedCaller, byte expectedDevice,
+      String query, Integer offset, UUID targetAci) {
+    if (caller == null || caller.membership.owner != this || expectedDevice != 1) throw denied();
+    caller.requireCurrent(expectedCaller, expectedDevice);
+    var privatePage = client.directory(caller.groupOperationBinding(), query, offset, targetAci);
+    caller.requireCurrent(expectedCaller, expectedDevice);
+    var targets = new java.util.ArrayList<Authorization>();
+    var members = new java.util.ArrayList<DirectoryMember>();
+    for (var row : privatePage.members) {
+      privatePage.requireFresh();
+      UUID aci = row.entitlement().binding().aci();
+      final Snapshot snapshot;
+      try { snapshot = transaction(connection -> readLocked(connection, aci)); }
+      catch (DeniedException hiddenTarget) { continue; } // Not locally ACTIVE or outside this cohort.
+      requireReceipt(snapshot, row.entitlement()); // Metadata must belong to the exact local binding.
+      var proof = new Authorization(this, snapshot, row.entitlement());
+      var account = accountSnapshot(snapshot);
+      if (account.getDevices().size() != 1 || account.getDevice((byte) 1).isEmpty()) continue;
+      targets.add(proof);
+      members.add(new DirectoryMember(aci, (byte) 1, row.fullName(), row.graduationYear()));
+    }
+    var result = new DirectoryAuthorization(caller, privatePage, targets, new DirectoryPage(members, privatePage.nextOffset));
+    result.requireCurrent();
+    return result;
   }
 
   /** Both original proofs are checked under one native transaction, including its elapsed budget. */

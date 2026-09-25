@@ -23,6 +23,8 @@ class DmAlphaRequestPolicyTest {
     for (Request request : new Request[] {
         new Request("PUT", "/v1/bconnected/keys/initial/" + OPERATION + "?identity=aci"),
         new Request("GET", "/v1/bconnected/recipients/" + ACI),
+        new Request("POST", "/v1/bconnected/directory/search"),
+        new Request("POST", "/v1/bconnected/directory/resolve"),
         new Request("GET", "/v1/accounts/whoami"),
         new Request("PUT", "/v1/accounts/attributes/"),
         new Request("PUT", "/v1/profile"),
@@ -81,6 +83,10 @@ class DmAlphaRequestPolicyTest {
     DmAlphaRequestPolicy policy = new DmAlphaRequestPolicy(true);
     for (Request request : new Request[] {
         new Request("PUT", "/v1/messages/" + ACI + "?story=true"),
+        new Request("GET", "/v1/bconnected/directory/search"),
+        new Request("POST", "/v1/bconnected/directory/search?query=name"),
+        new Request("POST", "/v1/bconnected/directory/resolve/"),
+        new Request("POST", "/v1/bconnected/directory/export"),
         new Request("PUT", "/v1/messages/multi_recipient"),
         new Request("GET", "/v1/messages"),
         new Request("DELETE", "/v1/messages/" + UUID.randomUUID()),
