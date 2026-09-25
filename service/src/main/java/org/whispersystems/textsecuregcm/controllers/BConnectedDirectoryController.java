@@ -61,7 +61,7 @@ public final class BConnectedDirectoryController {
       final Request request;
       try { request = parse(input, resolve); }
       catch (IllegalArgumentException invalid) { return response(400, null); }
-      rates.getPreKeysLimiter().validate(principal.accountIdentifier());
+      rates.getBConnectedDirectoryLimiter().validate(principal.accountIdentifier());
       caller.requireCurrent(); // Rate-limit/queue waits never refresh the original device proof.
       var authorization = gate.directory(principal.admissionAuthorization(), principal.accountIdentifier(),
           principal.deviceId(), request.query(), request.offset(), request.aci());

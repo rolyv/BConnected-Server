@@ -17,6 +17,7 @@ import io.lettuce.core.ScriptOutputType;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
@@ -32,8 +33,11 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
+import org.whispersystems.textsecuregcm.configuration.dynamic.DynamicConfiguration;
 import org.whispersystems.textsecuregcm.redis.ClusterLuaScript;
 import org.whispersystems.textsecuregcm.redis.RedisClusterExtension;
+import org.whispersystems.textsecuregcm.storage.DynamicConfigurationManager;
+import org.whispersystems.textsecuregcm.util.MockUtils;
 import org.whispersystems.textsecuregcm.util.TestClock;
 
 class LeakyBucketRateLimiterTest {
@@ -57,6 +61,31 @@ class LeakyBucketRateLimiterTest {
   @AfterEach
   void tearDown() {
     retryExecutor.shutdown();
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void directoryAndPreKeysHaveIndependentBudgetsAndRefillRates() {
+    final DynamicConfiguration configuration = mock(DynamicConfiguration.class);
+    when(configuration.getLimits()).thenReturn(Map.of());
+    final DynamicConfigurationManager<DynamicConfiguration> dynamicConfig =
+        MockUtils.buildMock(DynamicConfigurationManager.class, cfg -> when(cfg.getConfiguration()).thenReturn(configuration));
+    final TestClock clock = TestClock.pinned(Instant.now());
+    final RateLimiters rates = new RateLimiters(dynamicConfig, validateRateLimitScript,
+        REDIS_CLUSTER_EXTENSION.getRedisCluster(), retryExecutor, clock);
+    final RateLimiter preKeys = rates.getPreKeysLimiter();
+    final RateLimiter directory = rates.getBConnectedDirectoryLimiter();
+    final String account = RandomStringUtils.insecure().nextAlphanumeric(16);
+
+    for (int i = 0; i < 6; i++) assertDoesNotThrow(() -> preKeys.validate(account));
+    assertThrows(RateLimitExceededException.class, () -> preKeys.validate(account));
+    for (int i = 0; i < 60; i++) assertDoesNotThrow(() -> directory.validate(account));
+    assertThrows(RateLimitExceededException.class, () -> directory.validate(account));
+
+    clock.pin(clock.instant().plusSeconds(1));
+    assertDoesNotThrow(() -> directory.validate(account));
+    assertThrows(RateLimitExceededException.class, () -> directory.validate(account));
+    assertThrows(RateLimitExceededException.class, () -> preKeys.validate(account));
   }
 
   @ParameterizedTest

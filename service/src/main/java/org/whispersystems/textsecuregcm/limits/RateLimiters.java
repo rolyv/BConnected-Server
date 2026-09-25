@@ -23,6 +23,7 @@ public class RateLimiters extends BaseRateLimiters<RateLimiters.For> {
     ATTACHMENT_BYTES("attachmentCreateBytes", new RateLimiterConfig(DataSize.gigabytes(1).toBytes(), Duration.ofNanos(1000), true)),
     BACKUP_ATTACHMENT("backupAttachmentCreate", new RateLimiterConfig(10_000, Duration.ofSeconds(1), true)),
     PRE_KEYS("prekeys", new RateLimiterConfig(6, Duration.ofMinutes(10), false)),
+    BCONNECTED_DIRECTORY("bconnectedDirectory", new RateLimiterConfig(60, Duration.ofSeconds(1), false)),
     MESSAGES("messages", new RateLimiterConfig(60, Duration.ofSeconds(1), true)),
     STORIES("stories", new RateLimiterConfig(5_000, Duration.ofSeconds(8), true)),
     ALLOCATE_DEVICE("allocateDevice", new RateLimiterConfig(6, Duration.ofMinutes(2), false)),
@@ -117,6 +118,10 @@ public class RateLimiters extends BaseRateLimiters<RateLimiters.For> {
 
   public RateLimiter getPreKeysLimiter() {
     return forDescriptor(For.PRE_KEYS);
+  }
+
+  public RateLimiter getBConnectedDirectoryLimiter() {
+    return forDescriptor(For.BCONNECTED_DIRECTORY);
   }
 
   public RateLimiter getAttachmentLimiter() {

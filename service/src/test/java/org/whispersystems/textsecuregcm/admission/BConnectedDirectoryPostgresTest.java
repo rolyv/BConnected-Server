@@ -11,6 +11,7 @@ import io.dropwizard.auth.basic.BasicCredentialAuthFilter;
 import io.dropwizard.jersey.jackson.JacksonMessageBodyProvider;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import org.glassfish.jersey.internal.MapPropertiesDelegate;
@@ -21,7 +22,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.whispersystems.textsecuregcm.auth.*;
 import org.whispersystems.textsecuregcm.controllers.BConnectedDirectoryController;
+import org.whispersystems.textsecuregcm.controllers.RateLimitExceededException;
 import org.whispersystems.textsecuregcm.limits.*;
+import org.whispersystems.textsecuregcm.mappers.RateLimitExceededExceptionMapper;
 import org.whispersystems.textsecuregcm.util.HeaderUtils;
 import org.whispersystems.textsecuregcm.util.SystemMapper;
 
@@ -33,6 +36,7 @@ class BConnectedDirectoryPostgresTest {
   UUID recipient;
   Map<String, Object> recipientRow;
   RateLimiter limiter;
+  RateLimiters rates;
   AuthenticatedDevice original;
   boolean retainOriginal;
 
@@ -72,14 +76,15 @@ class BConnectedDirectoryPostgresTest {
     if (jersey != null) jersey.onShutdown(null);
     var proof = fixture.gate.authorizeDevice(fixture.aci, (byte) 1, fixture.flow.input.password());
     original = new AuthenticatedDevice(fixture.aci, (byte) 1, proof.primaryDeviceLastSeen(), proof);
-    var rates = mock(RateLimiters.class); limiter = mock(RateLimiter.class);
-    when(rates.getPreKeysLimiter()).thenReturn(limiter);
+    rates = mock(RateLimiters.class); limiter = mock(RateLimiter.class);
+    when(rates.getBConnectedDirectoryLimiter()).thenReturn(limiter);
     var live = AccountAuthenticator.withAdmission(fixture.gate);
     var auth = mock(AccountAuthenticator.class);
     when(auth.authenticate(any())).thenAnswer(call -> retainOriginal ? Optional.of(original) : live.authenticate(call.getArgument(0)));
     jersey = new ApplicationHandler(new ResourceConfig()
         .register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(false))
         .register(new JacksonMessageBodyProvider(SystemMapper.jsonMapper()))
+        .register(new RateLimitExceededExceptionMapper())
         .register(new AuthDynamicFeature(new BasicCredentialAuthFilter.Builder<AuthenticatedDevice>()
             .setRealm("fixture").setAuthenticator(auth).buildAuthFilter()))
         .register(new AuthValueFactoryProvider.Binder<>(AuthenticatedDevice.class))
@@ -120,6 +125,29 @@ class BConnectedDirectoryPostgresTest {
     assertThat(json(response)).isEqualTo("{\"aci\":\"" + recipient
         + "\",\"deviceId\":1,\"fullName\":\"Synthetic Alumni\",\"graduationYear\":2005}");
     assertThat(request("resolve", "{\"aci\":\"" + UUID.randomUUID() + "\"}", true).getStatus()).isEqualTo(404);
+  }
+
+  @Test void searchAndResolveShareDirectoryBudgetWithoutConsumingPreKeys() throws Exception {
+    for (int i = 0; i < 8; i++) {
+      var response = i % 2 == 0 ? search() : request("resolve", "{\"aci\":\"" + recipient + "\"}", true);
+      assertThat(response.getStatus()).isEqualTo(200);
+    }
+    verify(limiter, times(8)).validate(fixture.aci);
+    verify(rates, never()).getPreKeysLimiter();
+  }
+
+  @Test void exhaustedDirectoryBudgetRejectsBeforePrivateLookup() throws Exception {
+    retainOriginal = true;
+    doThrow(new RateLimitExceededException(Duration.ofSeconds(1))).when(limiter).validate(fixture.aci);
+    int before = fixture.requests.get();
+    for (String action : List.of("search", "resolve")) {
+      var response = action.equals("search") ? search()
+          : request(action, "{\"aci\":\"" + recipient + "\"}", true);
+      assertThat(response.getStatus()).isEqualTo(429);
+      assertThat(response.getHeaderString("Retry-After")).isEqualTo("1");
+    }
+    assertThat(fixture.requests.get()).isEqualTo(before);
+    verify(rates, never()).getPreKeysLimiter();
   }
 
   @Test void anonymousRequestHasNoDirectoryOrLimiterSideEffects() throws Exception {
