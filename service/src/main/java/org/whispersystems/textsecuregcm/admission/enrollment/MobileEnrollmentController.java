@@ -83,7 +83,7 @@ public final class MobileEnrollmentController {
     }
   }
 
-  private static BasicCredentials credentials(String header) {
+  static BasicCredentials credentials(String header) {
     try {
       if (header == null || header.length() > 1024 || !header.regionMatches(true, 0, "Basic ", 0, 6)) return null;
       byte[] decoded = Base64.getDecoder().decode(header.substring(6));

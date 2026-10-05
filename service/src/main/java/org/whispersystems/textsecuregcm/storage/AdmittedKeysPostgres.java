@@ -62,7 +62,7 @@ public final class AdmittedKeysPostgres {
         : account.getPhoneNumberIdentityKey().orElse(null))) throw AdmissionKeyGuard.unavailable();
     return transaction(guard, identity, (connection, identifier) -> {
       var decision = InitialPreKeyPublicationsPostgres.reserve(connection, guard.publicationBinding(connection),
-          operation, identity, identifier, publication.digest());
+          operation, identity, identifier, publication.digest(), account.getDevice(Device.PRIMARY_ID).orElseThrow().getCreated());
       if (decision == InitialPreKeyPublicationsPostgres.Decision.CONFLICT) return false;
       if (decision == InitialPreKeyPublicationsPostgres.Decision.APPLY) {
         SingleUseECPreKeysPostgres.store(connection, identifier, Device.PRIMARY_ID, publication.ec());

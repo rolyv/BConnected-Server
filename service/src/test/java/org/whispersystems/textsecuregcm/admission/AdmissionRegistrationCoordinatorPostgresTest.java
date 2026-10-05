@@ -45,6 +45,7 @@ class AdmissionRegistrationCoordinatorPostgresTest {
           List.of(
               "003-accounts",
               "011-telnyx-registration",
+              "018-verification-time",
               "013-registration-operations",
               "014-registration-claims",
               "016-phone-signup",

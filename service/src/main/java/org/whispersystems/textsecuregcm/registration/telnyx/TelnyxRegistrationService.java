@@ -269,7 +269,7 @@ public final class TelnyxRegistrationService implements RegistrationService {
       }
       final String mutation = reservation.send
           ? "provider_verification_id=?, code_expires_ms=LEAST(expires_ms, ?)"
-          : "verified=?";
+          : "verified=?, verified_at_ms=CASE WHEN ? THEN COALESCE(verified_at_ms,?) ELSE verified_at_ms END";
       try (var statement = connection.prepareStatement("UPDATE signal.registration_sessions SET " + mutation + """
           , operation_id=NULL, operation_expires_ms=NULL
           WHERE id=? AND operation_id=? AND retired_ms IS NULL AND expires_ms>? AND operation_expires_ms>?
@@ -280,6 +280,8 @@ public final class TelnyxRegistrationService implements RegistrationService {
           statement.setLong(parameter++, codeExpires);
         } else {
           statement.setBoolean(parameter++, accepted);
+          statement.setBoolean(parameter++, accepted);
+          statement.setLong(parameter++, now);
         }
         statement.setBytes(parameter++, reservation.id);
         statement.setObject(parameter++, reservation.operationId);

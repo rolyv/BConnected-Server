@@ -51,6 +51,7 @@ class InitialPreKeyPublicationPostgresTest {
     base=new AdmissionKeysPostgresTest();base.setup();operation=UUID.randomUUID();
     try(var c=base.fixture.flow.ds.getConnection();var s=c.createStatement()) {
       s.execute(Files.readString(Path.of("../bconnected/migrations/015-initial-prekey-publications.sql")));
+      s.execute(Files.readString(Path.of("../bconnected/migrations/019-account-recovery.sql")));
       s.execute("TRUNCATE signal.initial_prekey_publications");
     }
     dataSource=mock(DataSource.class);
@@ -131,6 +132,13 @@ class InitialPreKeyPublicationPostgresTest {
     assertThat(put(operation,IdentityType.ACI,changed).getStatus()).isEqualTo(409);
     assertThat(put(UUID.randomUUID(),IdentityType.ACI,body(IdentityType.ACI)).getStatus()).isEqualTo(409);
     counts(IdentityType.ACI,0);assertThat(ledger()).isEqualTo(1);assertThat(keyWrites.get()).isEqualTo(2);
+  }
+  @Test void newDeviceGenerationHasSeparateSlotAndCannotReplayOldOperation() throws Exception {
+    assertThat(put()).isEqualTo(204);consume(IdentityType.ACI);
+    base.fixture.sql("UPDATE signal.accounts SET data=jsonb_set(data,'{devices,0,created}',to_jsonb((data#>>'{devices,0,created}')::bigint+128)),version=version+1");
+    assertThat(put()).isEqualTo(409);counts(IdentityType.ACI,0);
+    assertThat(put(UUID.randomUUID(),IdentityType.ACI,body(IdentityType.ACI)).getStatus()).isEqualTo(204);
+    counts(IdentityType.ACI,1);assertThat(ledger()).isEqualTo(2);
   }
   @Test void canonicalDigestIgnoresJsonFieldAndArrayOrder() throws Exception {
     var payload=body(IdentityType.ACI);var ec2=payload.path("preKeys").get(0).deepCopy();((ObjectNode)ec2).put("keyId",102);

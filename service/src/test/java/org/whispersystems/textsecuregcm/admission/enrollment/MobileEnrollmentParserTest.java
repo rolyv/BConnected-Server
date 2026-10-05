@@ -42,6 +42,23 @@ class MobileEnrollmentParserTest {
   }
 
   @Test
+  void recoveryStrictlyExcludesOrdinarySignupCapabilitiesAndRequiresItsFrozenAttempt() throws Exception {
+    var body=fixture();body.set("recoveryAttemptId",body.remove("registrationAttemptId"));
+    body.remove("memberId");body.remove("bindingChallenge");
+    var parsed=MobileEnrollmentParser.parseRecovery(new ByteArrayInputStream(JSON.writeValueAsBytes(body)),Operation.BEGIN,NUMBER);
+    assertThat(parsed.memberId()).isNull();assertThat(parsed.bindingChallenge()).isNull();
+    assertThat(parsed.registrationAttemptId()).isEqualTo(body.get("recoveryAttemptId").asText());
+    for(String extra:List.of("memberId","bindingChallenge","applicationId","recoveryId","code")) {
+      var changed=body.deepCopy().put(extra,"untrusted");
+      assertThrows(MobileEnrollmentParser.InvalidRequestException.class,()->
+          MobileEnrollmentParser.parseRecovery(new ByteArrayInputStream(JSON.writeValueAsBytes(changed)),Operation.BEGIN,NUMBER));
+    }
+    String duplicate=JSON.writeValueAsString(body).replaceFirst("\\{","{\"recoveryAttemptId\":\"duplicate\",");
+    assertThrows(MobileEnrollmentParser.InvalidRequestException.class,()->MobileEnrollmentParser.parseRecovery(
+        new ByteArrayInputStream(duplicate.getBytes(StandardCharsets.UTF_8)),Operation.BEGIN,NUMBER));
+  }
+
+  @Test
   void sharedPublicFixtureMapsToActualSignedRegistrationKeysAndFrozenMetadata() throws Exception {
     for (Operation operation : List.of(Operation.BEGIN, Operation.SEND_CODE, Operation.COMPLETE, Operation.STATUS)) {
       var parsed = parse(fixture(), operation);

@@ -15,17 +15,17 @@ final class InitialPreKeyPublicationsPostgres {
   private InitialPreKeyPublicationsPostgres() {}
 
   static Decision reserve(Connection connection, AdmissionServiceClient.Binding binding, UUID operation,
-      IdentityType identity, UUID identifier, byte[] digest) throws SQLException {
+      IdentityType identity, UUID identifier, byte[] digest, long generation) throws SQLException {
     byte[] permit = Base64.getUrlDecoder().decode(binding.permitId());
     try (var statement = connection.prepareStatement("""
         INSERT INTO signal.initial_prekey_publications
-        (aci,device_id,operation_id,identity_type,service_identifier,member_id,approval_epoch,signal_operation_id,permit_id,payload_digest)
-        VALUES (?,1,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING
+        (aci,device_id,operation_id,identity_type,service_identifier,member_id,approval_epoch,signal_operation_id,permit_id,payload_digest,device_generation)
+        VALUES (?,1,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING
         """)) {
       statement.setObject(1, binding.aci()); statement.setObject(2, operation);
       statement.setString(3, identity.name().toLowerCase(java.util.Locale.ROOT)); statement.setObject(4, identifier);
       statement.setObject(5, binding.memberId()); statement.setLong(6, binding.approvalEpoch());
-      statement.setObject(7, binding.signalOperationId()); statement.setBytes(8, permit); statement.setBytes(9, digest);
+      statement.setObject(7, binding.signalOperationId()); statement.setBytes(8, permit); statement.setBytes(9, digest); statement.setLong(10, generation);
       if (statement.executeUpdate() == 1) return Decision.APPLY;
     }
     // A conflicting initial slot under another operation also returns CONFLICT. No pool write is allowed.
@@ -34,7 +34,7 @@ final class InitialPreKeyPublicationsPostgres {
         """)) {
       statement.setObject(1, binding.aci()); statement.setObject(2, operation);
       try (var row = statement.executeQuery()) {
-        return row.next() && row.getString("identity_type").equals(identity.name().toLowerCase(java.util.Locale.ROOT))
+        return row.next() && row.getLong("device_generation") == generation && row.getString("identity_type").equals(identity.name().toLowerCase(java.util.Locale.ROOT))
             && identifier.equals(row.getObject("service_identifier", UUID.class))
             && binding.memberId().equals(row.getObject("member_id", UUID.class))
             && binding.approvalEpoch() == row.getLong("approval_epoch")

@@ -53,6 +53,15 @@ public final class MobileEnrollmentParser {
 
   /** Reads at most 64 KiB plus one sentinel byte before parsing; caller owns stream/deadline. */
   public static MobileEnrollmentRequest parse(InputStream input, Operation operation, String number) {
+    return parse(input, operation, number, false);
+  }
+
+  /** Dedicated recovery has no client-selected member or ordinary signup capability. */
+  public static MobileEnrollmentRequest parseRecovery(InputStream input, Operation operation, String number) {
+    return parse(input, operation, number, true);
+  }
+
+  private static MobileEnrollmentRequest parse(InputStream input, Operation operation, String number, boolean recovery) {
     byte[] body = null;
     try {
       if (operation == null) throw new InvalidRequestException();
@@ -61,19 +70,22 @@ public final class MobileEnrollmentParser {
       // Reject malformed UTF-8, including overlong encodings, before Jackson can accept alternatives.
       String decoded = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(body)).toString();
       JsonNode root = MAPPER.readTree(decoded);
-      fields(root, ENVELOPE, operation == Operation.CHECK_CODE ? Set.of("code") : Set.of());
+      fields(root, recovery ? Set.of("recoveryAttemptId", "registrationRequest", "originalSignalAgent", "originalUserAgent")
+          : ENVELOPE, operation == Operation.CHECK_CODE ? Set.of("code") : Set.of());
       String code = null;
       if (operation == Operation.CHECK_CODE) {
         code = text(root.get("code"));
         if (!code.matches("[0-9]{4,10}")) throw new InvalidRequestException();
       }
-      String member = text(root.get("memberId"));
-      UUID memberId = UUID.fromString(member);
-      if (!memberId.toString().equals(member)
-          || (memberId.getMostSignificantBits() == 0 && memberId.getLeastSignificantBits() == 0))
-        throw new InvalidRequestException();
-      String attempt = nonce(root.get("registrationAttemptId"));
-      String challenge = nonce(root.get("bindingChallenge"));
+      UUID memberId = null;
+      if (!recovery) {
+        String member = text(root.get("memberId"));
+        memberId = UUID.fromString(member);
+        if (!memberId.toString().equals(member) || memberId.equals(new UUID(0, 0)))
+          throw new InvalidRequestException();
+      }
+      String attempt = nonce(root.get(recovery ? "recoveryAttemptId" : "registrationAttemptId"));
+      String challenge = recovery ? null : nonce(root.get("bindingChallenge"));
       String signalAgent = metadata(root.get("originalSignalAgent"), 256);
       String userAgent = metadata(root.get("originalUserAgent"), 512);
       JsonNode registration = root.get("registrationRequest");
@@ -114,7 +126,7 @@ public final class MobileEnrollmentParser {
       RegistrationRequest request = ENTITY_MAPPER.treeToValue(registration, RegistrationRequest.class);
       // Validates both identity keys, signed EC/KEM keys, registration IDs and channel semantics.
       try (var ignored = CanonicalRegistrationRequest.beforeVerification(request, number, signalAgent, userAgent)) {
-        return new MobileEnrollmentRequest(memberId, attempt, challenge, request, signalAgent, userAgent, code);
+        return new MobileEnrollmentRequest(recovery ? null : memberId, attempt, challenge, request, signalAgent, userAgent, code);
       }
     } catch (Exception ignored) {
       // No parser/source/input fragments in exceptions or chained causes.

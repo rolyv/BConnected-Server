@@ -65,6 +65,19 @@ class DmAlphaRequestPolicyTest {
   }
 
   @Test
+  void recoveryIsExplicitRestOnlyAndHasNoGrantOrExpandedRoutes() throws Exception {
+    String base="/v1/bconnected/recovery/";
+    for(String action:new String[]{"begin",OPERATION+"/send-code",OPERATION+"/check-code",OPERATION+"/status",OPERATION+"/complete"}) {
+      assertAllowed(new DmAlphaRequestPolicy(true),new Request("POST",base+action));
+      assertDenied(new DmAlphaRequestPolicy(false),new Request("POST",base+action));
+      assertDenied(new DmAlphaRequestPolicy(true),new Request("GET",base+action));
+      assertDenied(new DmAlphaRequestPolicy(true),new Request("POST",base+action+"?x=1"));
+    }
+    for(String action:new String[]{"authorize",OPERATION+"/grant",OPERATION+"/activate",OPERATION+"/complete/extra"})
+      assertDenied(new DmAlphaRequestPolicy(true),new Request("POST",base+action));
+  }
+
+  @Test
   void signupIsExplicitRestOnlyAndHasNoAccountCreationAction() throws Exception {
     String base = "/v1/bconnected/signup/";
     for (String action : new String[] {"begin", OPERATION + "/send-code", OPERATION + "/check-code", OPERATION + "/status",

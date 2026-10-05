@@ -20,10 +20,19 @@ public final class DmAlphaEnrollment implements Managed {
   private final AdmissionConfirmationWorker confirmation;
   private final MobileEnrollmentController controller;
   private final PhoneSignupController signupController;
+  private final AccountRecoveryController recoveryController;
+  private final AccountRecoveryTask recoveryTask;
 
   public DmAlphaEnrollment(DmAlphaConfiguration configuration, DataSource dataSource, Clock clock,
       Duration recoveryRetention, AdmissionServiceClient admission, AdmissionEntitlementGate gate,
       RegistrationService registration) {
+    this(configuration,dataSource,clock,recoveryRetention,admission,gate,registration,
+        account -> { throw new IllegalStateException("Recovery cleanup is not configured"); });
+  }
+
+  public DmAlphaEnrollment(DmAlphaConfiguration configuration, DataSource dataSource, Clock clock,
+      Duration recoveryRetention, AdmissionServiceClient admission, AdmissionEntitlementGate gate,
+      RegistrationService registration, AccountRecoveryService.Cleanup cleanup) {
     Objects.requireNonNull(configuration);
     if (!(registration instanceof TelnyxRegistrationService nativeRegistration))
       throw new IllegalArgumentException("Owned native registration required for alpha");
@@ -40,6 +49,10 @@ public final class DmAlphaEnrollment implements Managed {
     signupController = new PhoneSignupController(new PhoneSignupService(dataSource, clock, nativeRegistration,
         admission, configuration.phoneBindingKey().value()), bodies, request ->
         trustedSource(request.getProperty(RemoteAddressFilter.REMOTE_ADDRESS_ATTRIBUTE_NAME)));
+    var recovery = new AccountRecoveryService(dataSource,clock,nativeRegistration,admission,configuration,cleanup);
+    recoveryController = new AccountRecoveryController(recovery,bodies,request ->
+        trustedSource(request.getProperty(RemoteAddressFilter.REMOTE_ADDRESS_ATTRIBUTE_NAME)));
+    recoveryTask = new AccountRecoveryTask(recovery);
     confirmation = new AdmissionConfirmationWorker(new AdmissionConfirmationOutbox(
         dataSource, admission, Set.copyOf(configuration.memberIds())));
   }
@@ -54,6 +67,8 @@ public final class DmAlphaEnrollment implements Managed {
 
   public MobileEnrollmentController controller() { return controller; }
   public PhoneSignupController signupController() { return signupController; }
+  public AccountRecoveryController recoveryController() { return recoveryController; }
+  public AccountRecoveryTask recoveryTask() { return recoveryTask; }
   @Override public void start() { confirmation.start(); }
   @Override public void stop() {
     try { confirmation.stop(); } finally { bodies.close(); }

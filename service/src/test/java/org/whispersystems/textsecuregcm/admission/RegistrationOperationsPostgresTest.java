@@ -55,6 +55,7 @@ class RegistrationOperationsPostgresTest {
         var s = c.createStatement()) {
       s.execute(Files.readString(Path.of("../bconnected/migrations/003-accounts.sql")));
       s.execute(Files.readString(Path.of("../bconnected/migrations/011-telnyx-registration.sql")));
+      s.execute(Files.readString(Path.of("../bconnected/migrations/018-verification-time.sql")));
       s.execute(
           Files.readString(Path.of("../bconnected/migrations/013-registration-operations.sql")));
       s.execute(Files.readString(Path.of("../bconnected/migrations/014-registration-claims.sql")));

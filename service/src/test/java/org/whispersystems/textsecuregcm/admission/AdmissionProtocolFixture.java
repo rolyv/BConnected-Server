@@ -30,6 +30,9 @@ final class AdmissionProtocolFixture implements AutoCloseable {
   final AdmissionServiceClient client;
   long epoch = 7, expires = clock.millis() + 120000;
   int claimStatus = 200, attestStatus = 200;
+  String recoveryStatus="requested";
+  Runnable beforeRecovery=()->{}, afterRecovery=()->{};
+  Consumer<Map<String,Object>> mutateRecovery=b->{};
   Consumer<Map<String, Object>> mutateClaim = b -> {}, mutateAttest = b -> {};
   Runnable beforeClaim = () -> {}, afterClaim = () -> {};
   final Map<String, Map<String, Object>> issued = new ConcurrentHashMap<>();
@@ -54,7 +57,17 @@ final class AdmissionProtocolFixture implements AutoCloseable {
               JsonNode body = body(request);
               boolean claim = request.uri().getPath().endsWith("/claims");
               Map<String, Object> result = new LinkedHashMap<>();
-              if (claim) {
+              if (request.uri().getPath().contains("/recovery-")) {
+                beforeRecovery.run();
+                if(request.uri().getPath().endsWith("/recovery-confirmations") && recoveryStatus.equals("authorized")) recoveryStatus="confirmed";
+                String state=request.uri().getPath().endsWith("/recovery-entitlements")?"confirmed":recoveryStatus;
+                result.put("recovery",body.get("recovery")); result.put("requestNonce",body.get("requestNonce").textValue());
+                result.put("status",state); result.put("authorizedUntil",state.equals("requested")?null:body.get("recovery").get("phoneProofExpiresAt").longValue());
+                result.put("confirmedAt",state.equals("confirmed")?Math.min(clock.millis(),body.get("recovery").get("phoneProofExpiresAt").longValue()-1):null);
+                result.put("fullName","Synthetic Alumni"); result.put("graduationYear",2003);
+                result.put("checkedAt",clock.millis()); result.put("validUntil",clock.millis()+4000);
+                mutateRecovery.accept(result); afterRecovery.run();
+              } else if (claim) {
                 beforeClaim.run();
                 claims.add(body);
                 result.put("signalOperationId", body.get("signalOperationId").textValue());

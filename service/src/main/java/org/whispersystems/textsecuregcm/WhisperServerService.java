@@ -855,7 +855,14 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
       dmAlphaEnrollment = config.getDmAlpha() == null ? null :
           new org.whispersystems.textsecuregcm.admission.enrollment.DmAlphaEnrollment(config.getDmAlpha(),
               postgres.dataSource(), clock, config.getRecoveryRetention(), admissionClient, admissionGate,
-              registrationServiceClient);
+              registrationServiceClient, account -> {
+                // SQL pools/profiles/queues were cleared atomically with the recovery fence.
+                // Await every external cleanup before releasing it; retries retain the same fence.
+                disconnectionRequestManager.requestDisconnection(account).toCompletableFuture().join();
+                messagesManager.clear(account.getAccountIdentifier()).join();
+                profilesManager.invalidateCacheAfterAdmittedUpdate(account.getAccountIdentifier());
+                accountsManager.invalidateCacheAfterAdmittedUpdate(account);
+              });
       if (dmAlphaEnrollment != null) environment.lifecycle().manage(dmAlphaEnrollment);
     } else {
       admissionGate = null;
@@ -1378,6 +1385,8 @@ public class WhisperServerService extends Application<WhisperServerConfiguration
     if (dmAlphaEnrollment != null) {
       environment.jersey().register(dmAlphaEnrollment.controller());
       environment.jersey().register(dmAlphaEnrollment.signupController());
+      environment.jersey().register(dmAlphaEnrollment.recoveryController());
+      environment.admin().addTask(dmAlphaEnrollment.recoveryTask());
       environment.jersey().register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(true));
       webSocketEnvironment.jersey().register(new org.whispersystems.textsecuregcm.filters.DmAlphaRequestPolicy(false));
     }

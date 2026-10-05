@@ -67,6 +67,7 @@ class PhoneSignupServicePostgresTest {
     try (var connection = ds.getConnection(); var statement = connection.createStatement()) {
       statement.execute(Files.readString(Path.of("../bconnected/migrations/003-accounts.sql")));
       statement.execute(Files.readString(Path.of("../bconnected/migrations/011-telnyx-registration.sql")));
+      statement.execute(Files.readString(Path.of("../bconnected/migrations/018-verification-time.sql")));
       statement.execute(Files.readString(Path.of("../bconnected/migrations/013-registration-operations.sql")));
       statement.execute(Files.readString(Path.of("../bconnected/migrations/016-phone-signup.sql")));
       statement.execute(Files.readString(Path.of("../bconnected/migrations/017-signup-supersession.sql")));

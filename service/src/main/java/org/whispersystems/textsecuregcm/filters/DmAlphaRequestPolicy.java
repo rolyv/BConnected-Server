@@ -61,6 +61,8 @@ public final class DmAlphaRequestPolicy implements ContainerRequestFilter {
     if (allowEnrollment && "POST".equals(method)
         && ("/v1/bconnected/enrollment/begin".equals(path)
             || "/v1/bconnected/signup/begin".equals(path)
+            || "/v1/bconnected/recovery/begin".equals(path)
+            || path.matches("/v1/bconnected/recovery/" + OPERATION + "/(?:send-code|check-code|complete|status)")
             || path.matches("/v1/bconnected/signup/" + OPERATION + "/(?:send-code|check-code|status|supersede|supersession-status)")
             || path.matches("/v1/bconnected/enrollment/" + OPERATION
                 + "/(?:send-code|check-code|complete|status)"))) {

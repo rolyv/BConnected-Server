@@ -643,6 +643,81 @@ public final class AdmissionServiceClient implements AutoCloseable {
     return page;
   }
 
+  /** Frozen recovery authorization transcript. Original admission lineage is never replaced. */
+  public record RecoveryBinding(UUID recoveryId, UUID memberId, long approvalEpoch,
+      UUID signalOperationId, String jti, String phoneBinding, UUID aci, String recoveryAttemptHash,
+      String deviceKeyHash, String requestHash, int expectedAccountVersion,
+      long phoneVerifiedAt, long phoneProofExpiresAt) {
+    public RecoveryBinding {
+      uuid(recoveryId); new Binding(memberId, approvalEpoch, signalOperationId, jti, aci);
+      for (var hash : List.of(phoneBinding, recoveryAttemptHash, deviceKeyHash, requestHash))
+        if (hash == null || !hash.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("Invalid recovery binding");
+      if (expectedAccountVersion < 0 || phoneVerifiedAt < 0 || phoneProofExpiresAt > MAX_SAFE_INTEGER
+          || phoneProofExpiresAt - phoneVerifiedAt != 300000) throw new IllegalArgumentException("Invalid recovery time");
+    }
+    public Binding originalBinding() { return new Binding(memberId, approvalEpoch, signalOperationId, jti, aci); }
+    @Override public String toString() { return "RecoveryBinding[redacted]"; }
+  }
+
+  public final class RecoveryReceipt {
+    private final RecoveryBinding binding;
+    private final String status, fullName;
+    private final int graduationYear;
+    private final Long authorizedUntil, confirmedAt;
+    private final long startNanos, budgetNanos, validUntil;
+    private RecoveryReceipt(RecoveryBinding binding, String status, String fullName, int graduationYear,
+        Long authorizedUntil, Long confirmedAt, Exchange exchange, long budget, long validUntil) {
+      this.binding=binding; this.status=status; this.fullName=fullName; this.graduationYear=graduationYear;
+      this.authorizedUntil=authorizedUntil; this.confirmedAt=confirmedAt;
+      this.startNanos=exchange.startNanos(); this.budgetNanos=budget; this.validUntil=validUntil;
+    }
+    public RecoveryBinding binding() { return binding; }
+    public String status() { return status; }
+    public String fullName() { return fullName; }
+    public int graduationYear() { return graduationYear; }
+    public Long authorizedUntil() { return authorizedUntil; }
+    public Long confirmedAt() { return confirmedAt; }
+    public void requireFresh() {
+      long elapsed=monotonic.getAsLong()-startNanos;
+      if(elapsed<0 || elapsed>=budgetNanos || clock.millis()>=validUntil) throw failure(Failure.EXPIRED);
+    }
+    @Override public String toString() { return "RecoveryReceipt[redacted]"; }
+  }
+
+  public RecoveryReceipt recovery(String action, RecoveryBinding binding) {
+    if (!Set.of("requests","authorizations","confirmations","entitlements").contains(action))
+      throw new IllegalArgumentException("Invalid recovery action");
+    byte[] nonceBytes=new byte[32]; random.nextBytes(nonceBytes);
+    String nonce=Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
+    JsonNode expected=JSON.valueToTree(binding);
+    var response=exchange("recovery-"+action, Map.of("recovery",binding,"requestNonce",nonce));
+    var json=response.json();
+    exact(json,Set.of("recovery","status","authorizedUntil","confirmedAt","fullName","graduationYear",
+        "requestNonce","checkedAt","validUntil"));
+    try {
+      var fields=new HashSet<String>(); expected.fieldNames().forEachRemaining(fields::add);
+      exact(json.get("recovery"),fields);
+      if(!binding.equals(JSON.treeToValue(json.get("recovery"),RecoveryBinding.class)) || !nonce.equals(text(json,"requestNonce")))
+        throw failure(Failure.INVALID_RESPONSE);
+    } catch(java.io.IOException | IllegalArgumentException malformed) { throw failure(Failure.INVALID_RESPONSE); }
+    String status=text(json,"status");
+    if(!Set.of("requested","authorized","confirmed").contains(status)
+        || Set.of("confirmations","entitlements").contains(action) && !status.equals("confirmed"))
+      throw failure(Failure.INVALID_RESPONSE);
+    long checked=integer(json,"checkedAt"), valid=integer(json,"validUntil");
+    Long authorized=json.get("authorizedUntil").isNull()?null:integer(json,"authorizedUntil");
+    Long confirmed=json.get("confirmedAt").isNull()?null:integer(json,"confirmedAt");
+    if(status.equals("requested") ? authorized!=null || confirmed!=null
+        : authorized==null || (status.equals("confirmed") ? confirmed==null || confirmed>=valid || confirmed>authorized : confirmed!=null))
+      throw failure(Failure.INVALID_RESPONSE);
+    String name=text(json,"fullName"); long year=integer(json,"graduationYear");
+    if(name.isBlank() || name.length()>100 || name.codePoints().anyMatch(c->Character.isISOControl(c)||(c>=0xd800&&c<=0xdfff))
+        || year<1940 || year>clock.instant().atZone(java.time.ZoneOffset.UTC).getYear()) throw failure(Failure.INVALID_RESPONSE);
+    var receipt=new RecoveryReceipt(binding,status,name,(int)year,authorized,confirmed,response,
+        freshnessBudget(response,checked,valid),valid);
+    receipt.requireFresh(); return receipt;
+  }
+
   private static Map<String, Object> bindingFields(Binding binding) {
     return Map.of("memberId", binding.memberId().toString(), "approvalEpoch", binding.approvalEpoch(),
         "signalOperationId", binding.signalOperationId().toString(), "jti", binding.permitId(), "aci", binding.aci().toString());
